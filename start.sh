@@ -49,9 +49,9 @@ fi
 echo ""
 echo "--- Launching editor ---"
 if [ $IS_ROOT -eq 1 ]; then
-    sudo -u "$REAL_USER" "$EDITOR_BIN" "$PROJECT_FILE" -nosplash -nocrashreporter &
+    sudo -u "$REAL_USER" "$EDITOR_BIN" "$PROJECT_FILE" -nocrashreporter &
 else
-    "$EDITOR_BIN" "$PROJECT_FILE" -nosplash -nocrashreporter &
+    "$EDITOR_BIN" "$PROJECT_FILE" -nocrashreporter &
 fi
 
 echo ""
