@@ -1,0 +1,43 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group packetsonde >/dev/null; then
+            addgroup --system packetsonde
+        fi
+        if ! getent passwd packetsonde >/dev/null; then
+            adduser --system --ingroup packetsonde \
+                    --home /var/lib/packetsonde \
+                    --no-create-home \
+                    --shell /usr/sbin/nologin \
+                    packetsonde
+        fi
+
+        install -d -o packetsonde -g packetsonde -m 0750 /var/lib/packetsonde
+
+        if [ ! -f /etc/packetsonde/packetsonde.conf ]; then
+            install -m 0640 -g packetsonde \
+                /etc/packetsonde/packetsonde.conf.example \
+                /etc/packetsonde/packetsonde.conf
+        fi
+
+        if command -v setcap >/dev/null 2>&1; then
+            setcap cap_net_raw,cap_net_admin+ep /usr/sbin/packetsonde-priv || true
+        fi
+
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable packetsonde-agent.service
+            systemctl start packetsonde-agent.service || true
+        fi
+
+        echo ""
+        echo "packetsonde-agent installed."
+        echo "Edit /etc/packetsonde/packetsonde.conf to configure."
+        echo "For bridge deployments: packetsonde-bridge-setup --help"
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

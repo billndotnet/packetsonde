@@ -1,0 +1,72 @@
+{
+  "Meta": {
+    "asns": [32934, 63293, 14745, 63949],
+    "patterns": ["FACEBOOK", "META PLATFORMS"],
+    "color": [0.23, 0.47, 0.85]
+  },
+  "Amazon": {
+    "asns": [16509, 14618, 7224, 8987],
+    "patterns": ["AMAZON", "AWS"],
+    "color": [1.0, 0.60, 0.15]
+  },
+  "Google": {
+    "asns": [15169, 36040, 396982, 36384, 19527],
+    "patterns": ["GOOGLE"],
+    "color": [0.20, 0.66, 0.33]
+  },
+  "Microsoft": {
+    "asns": [8075, 8069, 12076, 13399],
+    "patterns": ["MICROSOFT"],
+    "color": [0.10, 0.60, 0.85]
+  },
+  "Cloudflare": {
+    "asns": [13335, 209242],
+    "patterns": ["CLOUDFLARE"],
+    "color": [0.95, 0.55, 0.10]
+  },
+  "Akamai": {
+    "asns": [20940, 16625, 32787],
+    "patterns": ["AKAMAI"],
+    "color": [0.15, 0.55, 0.75]
+  },
+  "Apple": {
+    "asns": [714, 6185],
+    "patterns": ["APPLE"],
+    "color": [0.60, 0.60, 0.65]
+  },
+  "Netflix": {
+    "asns": [2906, 40027],
+    "patterns": ["NETFLIX"],
+    "color": [0.89, 0.12, 0.15]
+  },
+  "Lumen": {
+    "asns": [3356, 3549, 209],
+    "patterns": ["LEVEL3", "LUMEN", "CENTURYLINK"],
+    "color": [0.50, 0.50, 0.60]
+  },
+  "Cogent": {
+    "asns": [174],
+    "patterns": ["COGENT"],
+    "color": [0.45, 0.55, 0.50]
+  },
+  "NTT": {
+    "asns": [2914],
+    "patterns": ["NTT"],
+    "color": [0.35, 0.45, 0.65]
+  },
+  "Comcast": {
+    "asns": [7922, 33491, 33650, 33662, 33668],
+    "patterns": ["COMCAST"],
+    "color": [0.30, 0.50, 0.70]
+  },
+  "Fastly": {
+    "asns": [54113],
+    "patterns": ["FASTLY"],
+    "color": [0.90, 0.25, 0.35]
+  },
+  "DigitalOcean": {
+    "asns": [14061, 393406],
+    "patterns": ["DIGITALOCEAN"],
+    "color": [0.10, 0.47, 0.85]
+  }
+}
