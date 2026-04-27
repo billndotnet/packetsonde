@@ -1,0 +1,7 @@
+sbin/packetsonde-agent
+sbin/packetsonde-priv
+bin/psctl
+bin/packetsonde-bridge-setup
+etc/packetsonde/packetsonde.conf.example
+etc/packetsonde/honeypot.conf.example
+etc/rc.d/packetsonde-agent

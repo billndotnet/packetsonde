@@ -1,0 +1,18 @@
+Source: packetsonde-agent
+Section: net
+Priority: optional
+Maintainer: Bill Nash <bill@billn.net>
+Build-Depends: debhelper-compat (= 13), cmake (>= 3.20),
+ libpcap-dev, libhiredis-dev, libssl-dev, pkg-config
+Standards-Version: 4.6.0
+
+Package: packetsonde-agent
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libpcap0.8
+Recommends: libhiredis0.14, libssl3
+Suggests: redis-server
+Description: Passive network sensor with honeypot and flow generation
+ PacketSonde is a privilege-separated network agent that discovers
+ hosts via ARP/NDP/DHCP/mDNS/LLDP, generates NetFlow-style traffic
+ summaries, runs traceroutes, and operates honeypot trap ports.
+ Designed for inline bridge deployment as a passive network tap.

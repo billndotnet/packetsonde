@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DSYSCONFDIR=/etc
+
+override_dh_auto_install:
+	dh_auto_install
+	rm -f debian/packetsonde-agent/etc/rc.d/packetsonde-agent

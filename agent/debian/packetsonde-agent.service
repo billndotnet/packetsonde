@@ -1,0 +1,20 @@
+[Unit]
+Description=PacketSonde Network Agent
+Documentation=https://github.com/billndotnet/Netrunner
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/packetsonde-agent -c /etc/packetsonde/packetsonde.conf
+User=packetsonde
+Group=packetsonde
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=no
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=packetsonde
+StateDirectory=packetsonde
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,85 @@
+# honeypot.conf.example — PacketSonde Honeypot Listener Configuration
+#
+# The [honeypot] section configures the passive honeypot trap listener.
+# Numeric keys are TCP port numbers; their values are the banner strings
+# sent to any probe that connects. Use \r\n in banner values where a CRLF
+# line ending is required (e.g. SSH, SMTP, FTP greeting lines).
+#
+# Copy this file to honeypot.conf and uncomment + adjust the entries you want.
+#
+# ── Deployment Notes ────────────────────────────────────────────────────────
+#
+# PRIVILEGE: Half-open SYN detection requires a raw socket (CAP_NET_RAW on
+# Linux, root on macOS). Run the agent with appropriate privileges, or
+# accept that half-open detection (SYN/XMAS/NULL scans) will be disabled.
+# In Docker: use --cap-add=NET_RAW or --privileged.
+#
+# PORT CONFLICTS: Trap ports must not conflict with real services on the
+# host. If SSH is on port 22, use an alternate (e.g. 2222). Traps are for
+# ports the host does NOT legitimately use — that's what makes any connection
+# to them suspicious.
+#
+# LEGAL: Only run honeypots on networks you own or have explicit written
+# authorization to monitor. For MSP deployments, customer consent is required
+# as it changes the legal posture of the network. Banner responses are kept
+# minimal partly to avoid triggering ISP abuse detection on outbound traffic.
+#
+# ────────────────────────────────────────────────────────────────────────────
+
+[honeypot]
+
+# enabled = true
+
+# How long (seconds) to hold a connection open while collecting payload.
+# timeout = 10
+
+# Maximum bytes of inbound payload to capture per connection.
+# max_payload = 4096
+
+# Maximum probe events retained in the Redis list. Oldest trimmed on insert.
+# Set to 0 for unlimited (not recommended on heavily probed hosts).
+# max_events = 10000
+
+# Redis key under which captured probes are stored (list, RPUSH + LTRIM).
+# redis_key = packetsonde:honeypot:probes
+
+# Redis pub/sub channel for real-time probe events.
+# redis_channel = honeypot.probe
+
+# ── Trap port definitions ───────────────────────────────────────────────────
+# Format:  <port> = <banner text>
+# Banners support \r\n escape sequences for CRLF line endings.
+# Leave a port line empty (no banner) to accept the connection silently.
+
+# SSH — OpenSSH-style version banner
+# 22 = SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6\r\n
+
+# HTTP — minimal HTTP/1.1 response that looks like a real server
+# 80 = HTTP/1.1 200 OK\r\nServer: Apache/2.4.57\r\nContent-Length: 0\r\n\r\n
+
+# HTTPS — TLS handshake is handled by the probe; banner sent post-accept
+# 443 = HTTP/1.1 200 OK\r\nServer: nginx/1.25.3\r\nContent-Length: 0\r\n\r\n
+
+# Telnet — minimal negotiation (won't offer options, just greet)
+# 23 = \r\nDebian GNU/Linux 12\r\nlogin:
+
+# FTP — RFC 959 service-ready greeting
+# 21 = 220 FTP server ready.\r\n
+
+# MySQL — fake 5.x handshake greeting (binary, keep minimal for testing)
+# 3306 = \x4a\x00\x00\x00\x0a5.7.42-log\x00
+
+# PostgreSQL — startup message; real PG speaks binary; leave banner blank
+# 5432 =
+
+# RDP — Microsoft Terminal Services greeting stub
+# 3389 =
+
+# SMB — NetBIOS Session Service; leave blank to capture raw negotiation
+# 445 =
+
+# Redis — RESP inline response mimicking real Redis
+# 6379 = -NOAUTH Authentication required.\r\n
+
+# SMTP — RFC 5321 greeting banner
+# 25 = 220 mail.example.com ESMTP Postfix\r\n

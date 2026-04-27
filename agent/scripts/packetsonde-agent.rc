@@ -1,0 +1,18 @@
+#!/bin/sh
+
+# PROVIDE: packetsonde_agent
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="packetsonde_agent"
+rcvar="packetsonde_agent_enable"
+command="/usr/local/sbin/packetsonde-agent"
+command_args="-c /usr/local/etc/packetsonde/packetsonde.conf"
+pidfile="/var/run/packetsonde-agent.pid"
+
+load_rc_config $name
+: ${packetsonde_agent_enable:="NO"}
+
+run_rc_command "$1"
