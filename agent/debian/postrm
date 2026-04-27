@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        rm -rf /var/lib/packetsonde
+        rm -rf /etc/packetsonde
+        deluser --system packetsonde 2>/dev/null || true
+        delgroup --system packetsonde 2>/dev/null || true
+        ;;
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl stop packetsonde-agent.service || true
+            systemctl disable packetsonde-agent.service || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

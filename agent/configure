@@ -1,0 +1,210 @@
+#!/bin/sh
+# configure — wrapper around cmake for packetsonde-agent
+#
+# Usage: ./configure [OPTIONS]
+# Run './configure --help' for available options.
+
+set -e
+
+# Defaults
+PREFIX="/usr"
+SYSCONFDIR="/etc"
+LOCALSTATEDIR="/var"
+BUILDDIR="build"
+STATIC="OFF"
+WITH_PCAP="ON"
+WITH_REDIS="ON"
+WITH_SSL="ON"
+PCAP_ROOT=""
+REDIS_ROOT=""
+SSL_ROOT=""
+
+usage() {
+    cat <<'USAGE'
+Usage: ./configure [OPTIONS]
+
+Installation directories:
+  --prefix=DIR          Install prefix [/usr]
+  --sysconfdir=DIR      Config directory [/etc]
+  --localstatedir=DIR   State directory [/var]
+
+Optional dependencies:
+  --with-pcap[=DIR]     Path to libpcap [auto-detected]
+  --without-pcap        Disable libpcap
+  --with-redis[=DIR]    Path to hiredis [auto-detected]
+  --without-redis       Disable Redis bridge
+  --with-ssl[=DIR]      Path to OpenSSL [auto-detected]
+  --without-ssl         Disable TLS probe module
+
+Build options:
+  --static              Build statically linked binaries
+  --builddir=DIR        Build directory [build]
+
+  -h, --help            Show this help
+USAGE
+    exit 0
+}
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --prefix=*)        PREFIX="${1#*=}" ;;
+        --prefix)          PREFIX="$2"; shift ;;
+        --sysconfdir=*)    SYSCONFDIR="${1#*=}" ;;
+        --sysconfdir)      SYSCONFDIR="$2"; shift ;;
+        --localstatedir=*) LOCALSTATEDIR="${1#*=}" ;;
+        --localstatedir)   LOCALSTATEDIR="$2"; shift ;;
+        --builddir=*)      BUILDDIR="${1#*=}" ;;
+        --builddir)        BUILDDIR="$2"; shift ;;
+        --with-pcap=*)     PCAP_ROOT="${1#*=}"; WITH_PCAP="ON" ;;
+        --with-pcap)       WITH_PCAP="ON" ;;
+        --without-pcap)    WITH_PCAP="OFF" ;;
+        --with-redis=*)    REDIS_ROOT="${1#*=}"; WITH_REDIS="ON" ;;
+        --with-redis)      WITH_REDIS="ON" ;;
+        --without-redis)   WITH_REDIS="OFF" ;;
+        --with-ssl=*)      SSL_ROOT="${1#*=}"; WITH_SSL="ON" ;;
+        --with-ssl)        WITH_SSL="ON" ;;
+        --without-ssl)     WITH_SSL="OFF" ;;
+        --static)          STATIC="ON" ;;
+        -h|--help)         usage ;;
+        *)                 echo "Unknown option: $1"; echo "Try './configure --help'"; exit 1 ;;
+    esac
+    shift
+done
+
+# Platform detection
+PLATFORM=$(uname -s)
+ARCH=$(uname -m)
+
+echo "Configuring packetsonde-agent..."
+echo ""
+
+# probe_dep name pkg-config-name header libname [root]
+# Prints status line, returns 0 if found, 1 if not.
+probe_dep() {
+    _name="$1"
+    _pkg="$2"
+    _header="$3"
+    _lib="$4"
+    _root="$5"
+    _found="no"
+    _path=""
+
+    if [ -n "$_root" ]; then
+        if [ -f "$_root/include/$_header" ] || [ -f "$_root/$_header" ]; then
+            _found="yes"
+            _path="$_root"
+        fi
+    elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists "$_pkg" 2>/dev/null; then
+        _found="yes"
+        _path=$(pkg-config --libs-only-L "$_pkg" 2>/dev/null | sed 's/-L//' | tr -d ' ')
+        [ -z "$_path" ] && _path="system"
+    elif [ -f "/usr/include/$_header" ] || [ -f "/usr/local/include/$_header" ]; then
+        _found="yes"
+        _path="system"
+    fi
+
+    if [ "$_found" = "yes" ]; then
+        echo "  $_name: found ($_path)"
+    else
+        echo "  $_name: not found"
+    fi
+    [ "$_found" = "yes" ] && return 0 || return 1
+}
+
+echo "Dependencies:"
+PCAP_FOUND="no"
+REDIS_FOUND="no"
+SSL_FOUND="no"
+
+if [ "$WITH_PCAP" = "ON" ]; then
+    if probe_dep "libpcap" "libpcap" "pcap.h" "libpcap" "$PCAP_ROOT"; then
+        PCAP_FOUND="yes"
+    fi
+else
+    echo "  libpcap: disabled"
+fi
+
+if [ "$WITH_REDIS" = "ON" ]; then
+    if probe_dep "hiredis" "hiredis" "hiredis/hiredis.h" "libhiredis" "$REDIS_ROOT"; then
+        REDIS_FOUND="yes"
+    fi
+else
+    echo "  hiredis: disabled"
+fi
+
+if [ "$WITH_SSL" = "ON" ]; then
+    if probe_dep "OpenSSL" "openssl" "openssl/ssl.h" "libssl" "$SSL_ROOT"; then
+        SSL_FOUND="yes"
+    fi
+else
+    echo "  OpenSSL: disabled"
+fi
+
+echo ""
+
+# Build cmake argument list
+CMAKE_ARGS="-DCMAKE_INSTALL_PREFIX=$PREFIX"
+CMAKE_ARGS="$CMAKE_ARGS -DSYSCONFDIR=$SYSCONFDIR"
+CMAKE_ARGS="$CMAKE_ARGS -DWITH_PCAP=$WITH_PCAP"
+CMAKE_ARGS="$CMAKE_ARGS -DWITH_REDIS=$WITH_REDIS"
+CMAKE_ARGS="$CMAKE_ARGS -DWITH_SSL=$WITH_SSL"
+CMAKE_ARGS="$CMAKE_ARGS -DBUILD_STATIC=$STATIC"
+
+[ -n "$PCAP_ROOT" ]  && CMAKE_ARGS="$CMAKE_ARGS -DPCAP_ROOT=$PCAP_ROOT"
+[ -n "$REDIS_ROOT" ] && CMAKE_ARGS="$CMAKE_ARGS -DHIREDIS_ROOT=$REDIS_ROOT"
+[ -n "$SSL_ROOT" ]   && CMAKE_ARGS="$CMAKE_ARGS -DOPENSSL_ROOT_DIR=$SSL_ROOT"
+
+# Resolve source directory (where this script lives)
+SRCDIR="$(cd "$(dirname "$0")" && pwd)"
+
+mkdir -p "$BUILDDIR"
+
+echo "Running: cmake -B $BUILDDIR -S $SRCDIR $CMAKE_ARGS"
+echo ""
+# shellcheck disable=SC2086
+cmake -B "$BUILDDIR" -S "$SRCDIR" $CMAKE_ARGS
+
+# Write config.status (re-runnable)
+EXTRA_FLAGS=""
+[ "$WITH_PCAP"  = "OFF" ] && EXTRA_FLAGS="$EXTRA_FLAGS --without-pcap"
+[ "$WITH_REDIS" = "OFF" ] && EXTRA_FLAGS="$EXTRA_FLAGS --without-redis"
+[ "$WITH_SSL"   = "OFF" ] && EXTRA_FLAGS="$EXTRA_FLAGS --without-ssl"
+[ "$STATIC"     = "ON"  ] && EXTRA_FLAGS="$EXTRA_FLAGS --static"
+[ -n "$PCAP_ROOT"  ] && EXTRA_FLAGS="$EXTRA_FLAGS --with-pcap=$PCAP_ROOT"
+[ -n "$REDIS_ROOT" ] && EXTRA_FLAGS="$EXTRA_FLAGS --with-redis=$REDIS_ROOT"
+[ -n "$SSL_ROOT"   ] && EXTRA_FLAGS="$EXTRA_FLAGS --with-ssl=$SSL_ROOT"
+
+cat > "$BUILDDIR/config.status" <<CFGEOF
+#!/bin/sh
+# Re-run configure with the same arguments.
+# Generated by: $SRCDIR/configure
+exec "$SRCDIR/configure" \
+  --prefix="$PREFIX" \
+  --sysconfdir="$SYSCONFDIR" \
+  --localstatedir="$LOCALSTATEDIR" \
+  --builddir="$BUILDDIR" \
+  $EXTRA_FLAGS
+CFGEOF
+chmod +x "$BUILDDIR/config.status"
+
+# Determine version from CMakeLists.txt
+VERSION=$(grep -m1 'project(' "$SRCDIR/CMakeLists.txt" 2>/dev/null \
+          | sed 's/.*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/' || true)
+[ -z "$VERSION" ] && VERSION="0.1.0"
+
+# Summary
+echo ""
+echo "packetsonde-agent $VERSION configuration:"
+echo "  Platform:      $PLATFORM $ARCH"
+echo "  Prefix:        $PREFIX"
+echo "  Sysconfdir:    $SYSCONFDIR"
+echo "  Localstatedir: $LOCALSTATEDIR"
+echo "  Build dir:     $BUILDDIR"
+echo "  libpcap:       $([ "$PCAP_FOUND"  = "yes" ] && echo "yes" || echo "no")"
+echo "  hiredis:       $([ "$REDIS_FOUND" = "yes" ] && echo "yes" || echo "no")"
+echo "  OpenSSL:       $([ "$SSL_FOUND"   = "yes" ] && echo "yes" || echo "no")"
+echo "  Static:        $([ "$STATIC" = "ON" ] && echo "yes" || echo "no")"
+echo ""
+echo "Run 'make -C $BUILDDIR' to build."
+echo "Run 'sudo make -C $BUILDDIR install' to install."

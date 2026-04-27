@@ -1,0 +1,5 @@
+[
+{
+  "message": "To enable packetsonde-agent:\n\n  sysrc packetsonde_agent_enable=YES\n  service packetsonde-agent start\n\nEdit /usr/local/etc/packetsonde/packetsonde.conf to configure.\nFor bridge deployments: packetsonde-bridge-setup --help\n"
+}
+]

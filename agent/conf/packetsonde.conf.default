@@ -1,0 +1,57 @@
+# PacketSonde Agent Configuration
+#
+# This file is installed as packetsonde.conf.example and copied to
+# packetsonde.conf on first install. Edit this file to configure the agent.
+#
+# Environment variable overrides:
+#   PS_CAPTURE_INTERFACE  — capture interface (overrides [agent] interface)
+
+[agent]
+# Log level: debug, info, warn, error
+# log_level = info
+
+# Unix socket path for IPC (psctl connects here)
+# socket = /tmp/packetsonde-agent.sock
+
+# Drop privileges to this user after startup
+# user = packetsonde
+
+# Capture interface — set to br0 for bridge deployments
+# Priority: config file > PS_CAPTURE_INTERFACE env var > platform default
+# interface = en0
+
+[modules]
+# ── Passive discovery (safe defaults) ──
+neighbor_listener = true
+# flow_tracker = true
+
+# ── Other passive listeners ──
+# dhcp_listener = true
+# dns_listener = true
+# lldp_listener = true
+# cdp_listener = true
+# stp_listener = true
+# ospf_listener = true
+# vrrp_listener = true
+# ssdp_listener = true
+# mld_listener = true
+# netbios_listener = true
+# broadcast_listener = true
+
+# ── Active probing (disabled by default) ──
+# tcp_traceroute = true
+# udp_traceroute = true
+# icmp_traceroute = true
+# dublin_traceroute = true
+# tcp_probe = true
+# udp_probe = true
+# tls_probe = true
+
+# ── Honeypot (requires separate honeypot.conf) ──
+# honeypot_listener = true
+
+# ── Redis bridge (for remote Netrunner connection) ──
+# [redis]
+# host = 127.0.0.1
+# port = 6379
+# prefix = packetsonde:

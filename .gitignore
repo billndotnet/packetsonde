@@ -1,0 +1,23 @@
+# Build outputs
+agent/build/
+agent/.cache/
+*.dSYM/
+
+# UE5 project artifacts (if/when we add a uproject)
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+*.sln
+*.xcodeproj/
+*.workspace/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

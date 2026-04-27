@@ -1,0 +1,4 @@
+PacketSonde is a privilege-separated network agent that passively
+discovers hosts via ARP/NDP/DHCP/mDNS/LLDP, generates NetFlow-style
+traffic summaries, runs traceroutes, and operates honeypot trap ports.
+Designed for inline bridge deployment and OPNsense integration.
