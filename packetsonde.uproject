@@ -1,0 +1,42 @@
+{
+    "FileVersion": 3,
+    "EngineAssociation": "5.7",
+    "Category": "",
+    "Description": "packetsonde — a navigable spatial view of your Internet",
+    "Modules": [
+        {
+            "Name": "packetsonde",
+            "Type": "Runtime",
+            "LoadingPhase": "Default",
+            "AdditionalDependencies": [
+                "Engine",
+                "CoreUObject",
+                "GameplayTags"
+            ]
+        },
+        {
+            "Name": "packetsondeAdapters",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "packetsondeViz",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "packetsondeUI",
+            "Type": "Runtime",
+            "LoadingPhase": "Default"
+        }
+    ],
+    "Plugins": [
+        { "Name": "EnhancedInput", "Enabled": true },
+        { "Name": "CommonUI", "Enabled": true },
+        { "Name": "GameplayTagsEditor", "Enabled": true },
+        { "Name": "Niagara", "Enabled": true },
+        { "Name": "GeometryScripting", "Enabled": true },
+        { "Name": "ModelingToolsEditorMode", "Enabled": true }
+    ],
+    "TargetPlatforms": [ "Mac" ]
+}
