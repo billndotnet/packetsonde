@@ -7,6 +7,7 @@ set(CLI_SOURCES
     output/output.c
     workers/limiter.c
     workers/workers.c
+    signals.c
     psctl/psctl_commands.c
     psctl/psctl_connection.c
     psctl/psctl_format.c
