@@ -4,6 +4,8 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [v1.4] — 2026-05-20
+
 ### Added
 - **`probe traceroute --proto tcp`** — TCP-connect traceroute. Non-blocking `connect()` per TTL, `select()` over both the TCP fd and the ICMP listener — whichever fires first decides the hop. Intermediate routers appear via ICMP TTL exceeded; destination is reached when SO_ERROR comes back as 0 (open) or ECONNREFUSED (closed). Default target port 80 (override with `--port`). All three modes wired up (classic / paris / dublin); Paris binds src_port for a stable ECMP tuple, Dublin walks N flows with different src_ports. Cuts through stateful firewalls that drop UDP-traceroute payloads.
 - **`probe traceroute --proto icmp`** — ICMP-echo traceroute. SOCK_DGRAM/IPPROTO_ICMP (unprivileged on macOS and on Linux when `ping_group_range` admits the user). Hand-built ICMP echo request, walks TTLs, reads TTL-exceeded (type 11) and echo-reply (type 0) responses on the same socket. The `--mode` flag is accepted for grammar parity but ICMP has only one flow tuple in practice.
@@ -14,6 +16,15 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 - **`scan udp <target|cidr> [-p PORTS]`** — UDP scanner. Uses connected-UDP sockets so closed ports surface as `ECONNREFUSED` via kernel-handled ICMP port-unreachable (no raw socket required). Per-port protocol-aware probes elicit responses from common UDP services: DNS (port 53, mDNS 5353), NTP (123), SNMP (161, community "public"), SSDP (1900), NetBIOS Name Service (137). Unknown ports get a single null byte. Default port list covers 53/67/69/123/137/161/500/514/1900/5353/11211. Emits `scan.udp.open` (info, with `response_bytes` and `preview_hex` in evidence) for ports that respond with payload. Silent ports (open|filtered) and closed ports do not emit — keeps the JSONL stream signal-dense.
 
 Read the local-vs-remote behavior carefully: a kernel that doesn't return ICMP unreachable to the scanner (most cloud/firewalled setups) makes closed and silent indistinguishable, which is inherent to unprivileged UDP scanning. Raw-socket UDP scanning (Paris-style with manual ICMP receive) is a follow-on.
+
+### Integration test coverage
+Mock servers via Python + FIFO readiness sync are now the template for audit integration tests. New: `test_audit_ssh`, `test_audit_imap`, `test_audit_pop3`, `test_audit_snmp`. 29/29 tests pass.
+
+### License
+PolyForm Noncommercial 1.0.0 is now modified to exclude government use. Government / state-affiliated use is treated as commercial use; charitable, educational, research, and personal use remain permitted.
+
+### Tags
+- `v1.4`
 
 ## [v1.3] — 2026-05-20
 
