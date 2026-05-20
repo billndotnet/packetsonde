@@ -3,8 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts);
-int ps_audit_dns_run(int argc, char **argv, const struct ps_args *opts);
+int ps_audit_tls_run (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_dns_run (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts);
 
 struct audit_kind {
     const char *name;
@@ -13,8 +14,9 @@ struct audit_kind {
 };
 
 static const struct audit_kind KINDS[] = {
-    { "tls", ps_audit_tls_run, "Audit TLS server: protocol, cipher, cert hygiene" },
-    { "dns", ps_audit_dns_run, "Audit DNS resolver: version leak, open recursion" },
+    { "tls",  ps_audit_tls_run,  "Audit TLS server: protocol, cipher, cert hygiene" },
+    { "dns",  ps_audit_dns_run,  "Audit DNS resolver: version leak, open recursion" },
+    { "http", ps_audit_http_run, "Audit HTTP server: security headers, version leaks" },
     { NULL, NULL, NULL }
 };
 
