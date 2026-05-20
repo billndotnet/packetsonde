@@ -6,6 +6,8 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ### Added
 - **`audit ldap`** — anonymous-bind detection. Sends a v3 LDAP BindRequest with empty credentials, parses the BindResponse resultCode. Emits `ldap.metadata` (info), `ldap.anonymous_bind` (medium, server accepts anon bind), `ldap.plaintext` (low, port 389 not 636/LDAPS).
+- **`audit imap`** — IMAP banner + CAPABILITY parse. Emits `imap.metadata` (info, with `starttls` and `logindisabled` flags), `imap.no_starttls` (medium, port 143 without STARTTLS), `imap.plaintext_login` (high, port 143 allows LOGIN without STARTTLS + no LOGINDISABLED).
+- **`audit pop3`** — POP3 banner + CAPA parse. Emits `pop3.metadata` (info), `pop3.no_stls` (medium, port 110 without STLS).
 - **`scan udp <target|cidr> [-p PORTS]`** — UDP scanner. Uses connected-UDP sockets so closed ports surface as `ECONNREFUSED` via kernel-handled ICMP port-unreachable (no raw socket required). Per-port protocol-aware probes elicit responses from common UDP services: DNS (port 53, mDNS 5353), NTP (123), SNMP (161, community "public"), SSDP (1900), NetBIOS Name Service (137). Unknown ports get a single null byte. Default port list covers 53/67/69/123/137/161/500/514/1900/5353/11211. Emits `scan.udp.open` (info, with `response_bytes` and `preview_hex` in evidence) for ports that respond with payload. Silent ports (open|filtered) and closed ports do not emit — keeps the JSONL stream signal-dense.
 
 Read the local-vs-remote behavior carefully: a kernel that doesn't return ICMP unreachable to the scanner (most cloud/firewalled setups) makes closed and silent indistinguishable, which is inherent to unprivileged UDP scanning. Raw-socket UDP scanning (Paris-style with manual ICMP receive) is a follow-on.
