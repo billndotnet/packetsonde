@@ -147,4 +147,4 @@ See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on
 
 ## Not a 3D visualizer (anymore)
 
-The repo briefly included a UE5-based visualization frontend (per the original whitepaper in `docs/specs/whitepaper.md`). That work is archived locally and paused; the project's focus is the CLI toolkit until the data and operational story are mature enough to inform a better visualization design.
+The repo briefly included a UE5-based visualization frontend driven by an architecture whitepaper. Both are archived locally and paused; the project's focus is the CLI toolkit until the data and operational story are mature enough to inform a better visualization design. See `docs/specs/viz-notes.md` for the gap-year discipline.
