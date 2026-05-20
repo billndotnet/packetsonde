@@ -15,6 +15,8 @@ int ps_audit_ntp_run    (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_memcached_run(int argc, char **argv, const struct ps_args *opts);
 int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts);
 int ps_audit_smtp_run         (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_mysql_run        (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_postgresql_run   (int argc, char **argv, const struct ps_args *opts);
 
 struct audit_kind {
     const char *name;
@@ -35,6 +37,8 @@ static const struct audit_kind KINDS[] = {
     { "memcached", ps_audit_memcached_run, "Audit Memcached: no-auth exposure" },
     { "elasticsearch", ps_audit_elasticsearch_run, "Audit Elasticsearch: unauthenticated cluster API" },
     { "smtp",   ps_audit_smtp_run,   "Audit SMTP: STARTTLS support, banner, AUTH advertisement" },
+    { "mysql",  ps_audit_mysql_run,  "Audit MySQL/MariaDB: version banner, EOL versions" },
+    { "postgresql", ps_audit_postgresql_run, "Audit PostgreSQL: SSL support" },
     { NULL, NULL, NULL }
 };
 

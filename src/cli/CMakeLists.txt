@@ -21,6 +21,8 @@ set(CLI_SOURCES
     audit/memcached.c
     audit/elasticsearch.c
     audit/smtp.c
+    audit/mysql.c
+    audit/postgresql.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
