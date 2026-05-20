@@ -25,6 +25,7 @@ set(CLI_SOURCES
     audit/smtp.c
     audit/mysql.c
     audit/postgresql.c
+    audit/ldap.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
@@ -164,6 +165,6 @@ endfunction()
 # packetsonde too; the loader dedupes by name, so a user-supplied .dylib
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
-        elasticsearch smtp mysql postgresql)
+        elasticsearch smtp mysql postgresql ldap)
     ps_add_audit_plugin(${_a})
 endforeach()
