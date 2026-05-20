@@ -5,6 +5,7 @@ set(CLI_SOURCES
     verbs/version.c
     verbs/agent.c
     verbs/audit.c
+    verbs/findings.c
     audit/tls.c
     output/output.c
     workers/limiter.c
