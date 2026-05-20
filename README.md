@@ -28,7 +28,7 @@ v1.1.
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
-| `findings` | `tail` / `filter` — read JSONL records from a file or stdin |
+| `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
 | `version`, `help` | Standard |
