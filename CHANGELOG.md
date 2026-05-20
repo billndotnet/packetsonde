@@ -2,14 +2,21 @@
 
 All notable changes to packetsonde. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [v1.1] — 2026-05-20
 
 ### Fixed
-- `audit tls` now reliably detects TLS 1.0/1.1 servers and weak ciphers on hosts where the system OpenSSL policy would otherwise prevent the probe handshakes (`OPENSSL_INIT_NO_LOAD_CONFIG` + `SECLEVEL=0` + permissive cipher list on probe contexts). Integration test now exercises all 7 finding kinds.
+- `audit tls` now reliably detects TLS 1.0/1.1 servers and weak ciphers on hosts where the system OpenSSL policy would otherwise prevent the probe handshakes (`OPENSSL_INIT_NO_LOAD_CONFIG` + `SECLEVEL=0` + permissive cipher list on probe contexts). Integration test re-enabled assertions for `tls.weak_protocol` and `tls.weak_cipher` (now 7 kinds asserted, was 5).
 
 ### Added
-- `docs/specs/agent-network-protocol-brainstorm.md` — pre-brainstorm design questions for follow-on #1.
+- **`audit http`** — security-header hygiene against HTTP/HTTPS targets. Emits: `http.metadata`, `http.missing_hsts` / `http.weak_hsts` (HTTPS), `http.missing_xcto`, `http.missing_frame_protection`, `http.missing_csp`, `http.missing_referrer_policy`, `http.server_version_leak`.
+- **`audit ssh`** — SSH server banner audit. Emits: `ssh.metadata`, `ssh.old_version` (OpenSSH < 7.4).
+- **`tls.metadata`** info finding emitted by `audit tls`. Captures full TLS posture as evidence: protocol, cipher, subject CN, issuer CN, notBefore, notAfter, cert SHA-256, SANs (DNS + IP). Gives auditors "what does this server look like" alongside "what's wrong."
+- `docs/specs/agent-network-protocol-brainstorm.md` — pre-brainstorm design questions for follow-on #1 (10 questions across transport, identity, wire format, session model, with leans and tradeoffs).
 - `README.md`, `docs/specs/viz-notes.md`, this changelog.
+
+### Notes
+- Audit verb now covers 4 kinds: `tls`, `dns`, `http`, `ssh`.
+- 25/25 tests pass.
 
 ## [v1.0] — 2026-05-20
 
@@ -48,4 +55,4 @@ Initial release of the CLI toolkit. Three phased plans landed:
 - UE5 3D visualization frontend (`Source/`, `Content/`, `Config/`, `assets/`, `packetsonde.uproject`, `start.sh`) and the UE-era plan docs. Archived locally; paused until toolkit maturity informs a better visualization design.
 
 ### Tags
-- `plan-1-foundation`, `plan-2-findings-and-tls`, `plan-3-verb-breadth`
+- `plan-1-foundation`, `plan-2-findings-and-tls`, `plan-3-verb-breadth`, `v1.0`
