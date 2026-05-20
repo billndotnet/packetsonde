@@ -92,6 +92,8 @@ static int do_handshake(const char *host, uint16_t port,
 
     SSL_CTX *ctx = SSL_CTX_new(a->method ? a->method : TLS_client_method());
     if (!ctx) { close(fd); return -1; }
+    /* Permit ancient protocols / weak ciphers — this is an *audit* client. */
+    SSL_CTX_set_security_level(ctx, 0);
     if (a->min_proto) SSL_CTX_set_min_proto_version(ctx, a->min_proto);
     if (a->max_proto) SSL_CTX_set_max_proto_version(ctx, a->max_proto);
     if (a->cipher_list) SSL_CTX_set_cipher_list(ctx, a->cipher_list);
@@ -137,7 +139,11 @@ static void emit(struct emit_ctx *e,
 }
 
 static void check_protocol(struct emit_ctx *e, const char *target_host) {
-    struct tls_attempt a10 = { TLS_client_method(), TLS1_VERSION, TLS1_VERSION, NULL };
+    /* Permissive cipher list so we can negotiate against servers that only
+     * offer legacy ciphers (the audit is precisely about finding those). */
+    const char *cipher = "ALL:eNULL:@SECLEVEL=0";
+
+    struct tls_attempt a10 = { TLS_client_method(), TLS1_VERSION, TLS1_VERSION, cipher };
     struct tls_result  r10;
     if (do_handshake(target_host, e->target_port, &a10, &r10) == 0) {
         emit(e, "tls.weak_protocol", PS_SEV_HIGH, PS_CONF_FIRM,
@@ -145,7 +151,7 @@ static void check_protocol(struct emit_ctx *e, const char *target_host) {
     }
     tls_result_free(&r10);
 
-    struct tls_attempt a11 = { TLS_client_method(), TLS1_1_VERSION, TLS1_1_VERSION, NULL };
+    struct tls_attempt a11 = { TLS_client_method(), TLS1_1_VERSION, TLS1_1_VERSION, cipher };
     struct tls_result  r11;
     if (do_handshake(target_host, e->target_port, &a11, &r11) == 0) {
         emit(e, "tls.weak_protocol", PS_SEV_HIGH, PS_CONF_FIRM,
@@ -155,9 +161,11 @@ static void check_protocol(struct emit_ctx *e, const char *target_host) {
 }
 
 static void check_ciphers(struct emit_ctx *e, const char *target_host) {
+    /* Offer only weak families and require SECLEVEL=0 so OpenSSL parses them.
+     * If the server negotiates any of these, the cipher really is weak. */
     struct tls_attempt aw = {
         TLS_client_method(), TLS1_VERSION, TLS1_2_VERSION,
-        "DES:3DES:RC4:NULL:EXP:MD5"
+        "DES:3DES:RC4:eNULL:EXP:MD5:@SECLEVEL=0"
     };
     struct tls_result  rw;
     if (do_handshake(target_host, e->target_port, &aw, &rw) == 0 && rw.cipher[0]) {
@@ -194,12 +202,164 @@ static int weak_signature_alg(X509 *cert, char *out, size_t outsz) {
     return 0;
 }
 
+/* JSON-escape src into dst; returns 0 on success, -1 on overflow. */
+static int json_str_escape(const char *src, char *dst, size_t dst_sz) {
+    size_t o = 0;
+    for (size_t i = 0; src[i]; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            if (o + 2 >= dst_sz) return -1;
+            dst[o++] = '\\'; dst[o++] = (char)c;
+        } else if (c < 0x20) {
+            if (o + 6 >= dst_sz) return -1;
+            o += (size_t)snprintf(dst + o, dst_sz - o, "\\u%04x", c);
+        } else {
+            if (o + 1 >= dst_sz) return -1;
+            dst[o++] = (char)c;
+        }
+    }
+    dst[o] = '\0';
+    return 0;
+}
+
+static void cert_sha256_hex(X509 *cert, char *out, size_t outsz) {
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int  mdlen = 0;
+    if (!X509_digest(cert, EVP_sha256(), md, &mdlen)) { out[0] = '\0'; return; }
+    if (outsz < (size_t)mdlen * 2 + 1) { out[0] = '\0'; return; }
+    static const char H[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < mdlen; i++) {
+        out[i * 2]     = H[md[i] >> 4];
+        out[i * 2 + 1] = H[md[i] & 0xf];
+    }
+    out[mdlen * 2] = '\0';
+}
+
+static void x509_name_cn(X509_NAME *n, char *out, size_t outsz) {
+    out[0] = '\0';
+    int idx = X509_NAME_get_index_by_NID(n, NID_commonName, -1);
+    if (idx < 0) return;
+    X509_NAME_ENTRY *e = X509_NAME_get_entry(n, idx);
+    if (!e) return;
+    ASN1_STRING *s = X509_NAME_ENTRY_get_data(e);
+    if (!s) return;
+    unsigned char *utf8 = NULL;
+    int len = ASN1_STRING_to_UTF8(&utf8, s);
+    if (len > 0 && utf8) {
+        size_t k = (size_t)len < outsz - 1 ? (size_t)len : outsz - 1;
+        memcpy(out, utf8, k);
+        out[k] = '\0';
+    }
+    if (utf8) OPENSSL_free(utf8);
+}
+
+static void asn1_time_iso(const ASN1_TIME *t, char *out, size_t outsz) {
+    out[0] = '\0';
+    if (!t) return;
+    BIO *b = BIO_new(BIO_s_mem());
+    if (!b) return;
+    if (ASN1_TIME_print(b, t)) {
+        char buf[64] = "";
+        int n = BIO_read(b, buf, sizeof(buf) - 1);
+        if (n > 0) { buf[n] = '\0'; snprintf(out, outsz, "%s", buf); }
+    }
+    BIO_free(b);
+}
+
+/* Append up to N SANs as a JSON array fragment "[\"a\",\"b\"]". */
+static void cert_sans_json(X509 *cert, char *out, size_t outsz) {
+    out[0] = '\0';
+    GENERAL_NAMES *gens = X509_get_ext_d2i(cert, NID_subject_alt_name, NULL, NULL);
+    if (!gens) { snprintf(out, outsz, "[]"); return; }
+    size_t o = 0;
+    if (o + 1 >= outsz) goto done;
+    out[o++] = '[';
+    int first = 1;
+    int count = sk_GENERAL_NAME_num(gens);
+    for (int i = 0; i < count && i < 16; i++) {
+        GENERAL_NAME *gn = sk_GENERAL_NAME_value(gens, i);
+        if (gn->type != GEN_DNS && gn->type != GEN_IPADD) continue;
+        char buf[256] = "";
+        if (gn->type == GEN_DNS) {
+            unsigned char *utf8 = NULL;
+            int L = ASN1_STRING_to_UTF8(&utf8, gn->d.dNSName);
+            if (L > 0 && utf8) {
+                size_t k = (size_t)L < sizeof(buf) - 1 ? (size_t)L : sizeof(buf) - 1;
+                memcpy(buf, utf8, k); buf[k] = '\0';
+            }
+            if (utf8) OPENSSL_free(utf8);
+        } else if (gn->type == GEN_IPADD) {
+            const unsigned char *ip = ASN1_STRING_get0_data(gn->d.iPAddress);
+            int iplen = ASN1_STRING_length(gn->d.iPAddress);
+            if (iplen == 4) snprintf(buf, sizeof(buf), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+        }
+        if (!buf[0]) continue;
+        char esc[512];
+        if (json_str_escape(buf, esc, sizeof(esc)) != 0) continue;
+        size_t need = strlen(esc) + 3 + (first ? 0 : 1);
+        if (o + need >= outsz) break;
+        if (!first) out[o++] = ',';
+        out[o++] = '"';
+        memcpy(out + o, esc, strlen(esc)); o += strlen(esc);
+        out[o++] = '"';
+        first = 0;
+    }
+    if (o + 1 < outsz) out[o++] = ']';
+    out[o] = '\0';
+done:
+    GENERAL_NAMES_free(gens);
+}
+
+static const char *proto_str(int v) {
+    switch (v) {
+        case TLS1_VERSION:   return "TLSv1";
+        case TLS1_1_VERSION: return "TLSv1.1";
+        case TLS1_2_VERSION: return "TLSv1.2";
+        case TLS1_3_VERSION: return "TLSv1.3";
+        default: return "unknown";
+    }
+}
+
 static void check_certificate(struct emit_ctx *e, const char *target_host) {
-    struct tls_attempt a = { TLS_client_method(), 0, 0, NULL };
+    struct tls_attempt a = { TLS_client_method(), 0, 0, "ALL:eNULL:@SECLEVEL=0" };
     struct tls_result  r;
     if (do_handshake(target_host, e->target_port, &a, &r) != 0 || !r.peer) {
         tls_result_free(&r);
         return;
+    }
+
+    /* Emit an info-severity tls.metadata finding with the full TLS posture.
+     * Auditors get "what does this server look like" alongside any issues. */
+    {
+        char subj_cn[256] = "", issu_cn[256] = "";
+        char not_before[64] = "", not_after[64] = "";
+        char sha256[80] = "", sans[2048] = "";
+        x509_name_cn(X509_get_subject_name(r.peer), subj_cn, sizeof(subj_cn));
+        x509_name_cn(X509_get_issuer_name(r.peer),  issu_cn, sizeof(issu_cn));
+        asn1_time_iso(X509_get0_notBefore(r.peer), not_before, sizeof(not_before));
+        asn1_time_iso(X509_get0_notAfter(r.peer),  not_after,  sizeof(not_after));
+        cert_sha256_hex(r.peer, sha256, sizeof(sha256));
+        cert_sans_json(r.peer, sans, sizeof(sans));
+
+        char subj_e[512], issu_e[512], nb_e[128], na_e[128];
+        json_str_escape(subj_cn,    subj_e, sizeof(subj_e));
+        json_str_escape(issu_cn,    issu_e, sizeof(issu_e));
+        json_str_escape(not_before, nb_e,   sizeof(nb_e));
+        json_str_escape(not_after,  na_e,   sizeof(na_e));
+
+        char ev[4096];
+        snprintf(ev, sizeof(ev),
+            "{\"protocol\":\"%s\",\"cipher\":\"%s\","
+            "\"subject_cn\":\"%s\",\"issuer_cn\":\"%s\","
+            "\"not_before\":\"%s\",\"not_after\":\"%s\","
+            "\"cert_sha256\":\"%s\",\"sans\":%s}",
+            proto_str(r.protocol_version), r.cipher,
+            subj_e, issu_e, nb_e, na_e, sha256, sans);
+        char title[320];
+        snprintf(title, sizeof(title), "%s (%s) CN=%s",
+                 proto_str(r.protocol_version), r.cipher,
+                 subj_cn[0] ? subj_cn : "-");
+        emit(e, "tls.metadata", PS_SEV_INFO, PS_CONF_CONFIRMED, title, ev);
     }
 
     int days = cert_days_until_expiry(r.peer);
@@ -259,7 +419,11 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
         return 2;
     }
 
-    OPENSSL_init_ssl(0, NULL);
+    /* Skip loading the system openssl.cnf — modern distributions set
+     * MinProtocol=TLSv1.2 and SECLEVEL=2 there, which would prevent the
+     * audit from probing TLS 1.0/1.1 or weak-cipher servers. We make the
+     * audit's policy explicit per-context instead. */
+    OPENSSL_init_ssl(OPENSSL_INIT_NO_LOAD_CONFIG, NULL);
 
     char self_host[256] = "";
     gethostname(self_host, sizeof(self_host));

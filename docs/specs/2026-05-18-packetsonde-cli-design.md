@@ -44,6 +44,7 @@ C, same as the existing agent. Driven by long-term coherence: the agent will gro
 
 ### 2.2 Repo layout (post-rename)
 
+The current `agent/` directory is renamed `src/agent/` and joined by `src/cli/` and `src/lib/`.
 
 ```
 packetsonde/
@@ -72,7 +73,7 @@ packetsonde/
 │       ├── net.c       # (follow-on) network client for --via + key auth
 │       └── ulid.c      # finding/run id generation
 ├── docs/
-├── build.sh, start.sh  # adjusted for new layout
+├── build.sh
 └── CMakeLists.txt      # top-level; pulls in src/lib, src/agent, src/cli
 ```
 

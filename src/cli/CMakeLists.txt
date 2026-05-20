@@ -11,6 +11,8 @@ set(CLI_SOURCES
     registry/agents.c
     audit/tls.c
     audit/dns.c
+    audit/http.c
+    audit/ssh.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
