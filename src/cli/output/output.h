@@ -27,10 +27,16 @@ struct ps_output {
     int             stdout_fd;
     int             append_fd;
     pthread_mutex_t lock;
+    unsigned int    n_info;
+    unsigned int    n_low;
+    unsigned int    n_medium;
+    unsigned int    n_high;
+    unsigned int    n_critical;
 };
 
-int  ps_output_init (struct ps_output *o, const struct ps_output_opts *opts);
-void ps_output_emit (struct ps_output *o, const struct ps_finding *f);
-void ps_output_close(struct ps_output *o);
+int  ps_output_init   (struct ps_output *o, const struct ps_output_opts *opts);
+void ps_output_emit   (struct ps_output *o, const struct ps_finding *f);
+void ps_output_summary(const struct ps_output *o, const char *run_id, long duration_ms);
+void ps_output_close  (struct ps_output *o);
 
 #endif
