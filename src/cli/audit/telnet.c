@@ -121,9 +121,11 @@ static const struct ps_audit_module MODULE = {
     .run         = telnet_run,
 };
 
+#ifdef PS_AUDIT_PLUGIN_BUILD
 const struct ps_audit_module *ps_audit_module(void) {
     return &MODULE;
 }
+#endif
 
 /* Also expose a stable internal symbol for the static-link path so the
  * dispatcher's BUILTINS table can pick it up without dlopen. */

@@ -1,7 +1,5 @@
-#include "ssh.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -89,7 +87,10 @@ static int openssh_is_old(const char *banner, char *ver_out, size_t ver_sz) {
     return 0;
 }
 
-int ps_audit_ssh_run(int argc, char **argv, const struct ps_args *opts) {
+static int ssh_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit ssh <host[:port]>\n");
         return 2;
@@ -103,29 +104,14 @@ int ps_audit_ssh_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char ip[64] = "", banner[256] = "";
     int rc = read_banner(host, port, 4000, ip, sizeof(ip), banner, sizeof(banner));
     if (rc != 0) {
-        fprintf(stderr, "audit ssh: no banner from %s:%u\n", host, port);
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit ssh: no banner from %s:%u\n", host, port); return 1;
     }
     if (strncmp(banner, "SSH-", 4) != 0) {
         fprintf(stderr, "audit ssh: %s:%u does not speak SSH (got %.80s)\n",
-                host, port, banner);
-        ps_output_close(&out);
-        return 1;
+                host, port, banner); return 1;
     }
 
     /* Banner format: SSH-protoversion-softwareversion[ comments] */
@@ -149,7 +135,7 @@ int ps_audit_ssh_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     /* Version disclosure — SSH banners always disclose software version per RFC,
@@ -171,11 +157,20 @@ int ps_audit_ssh_run(int argc, char **argv, const struct ps_args *opts) {
             ps_finding_set_target_ip(&f, ip, port);
             ps_finding_set_target_hostname(&f, host, port);
             ps_finding_set_evidence_json(&f, ev);
-            ps_output_emit(&out, &f);
+            api->emit(&f);
         }
     }
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "ssh",
+    .summary     = "Audit SSH server: banner, known-old version",
+    .run         = ssh_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_ssh_module(void) { return &MODULE; }

@@ -1,7 +1,5 @@
-#include "http.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -124,8 +122,7 @@ static int find_header(const char *resp, const char *name, char *out, size_t out
             while (*v == ' ' || *v == '\t') v++;
             size_t vlen = (size_t)(eol - v);
             if (vlen >= outsz) vlen = outsz - 1;
-            memcpy(out, v, vlen); out[vlen] = '\0';
-            return 1;
+            memcpy(out, v, vlen); out[vlen] = '\0'; return 1;
         }
         p = eol + 2;
     }
@@ -141,7 +138,7 @@ static int response_status(const char *resp) {
 }
 
 struct emit_ctx {
-    struct ps_output *out;
+    const struct ps_audit_api *api;
     const char       *run_id;
     const char       *self_host;
     const char       *target_host;
@@ -159,7 +156,7 @@ static void emit_h(struct emit_ctx *e, const char *kind,
     if (e->target_ip && e->target_ip[0]) ps_finding_set_target_ip(&f, e->target_ip, e->target_port);
     if (e->target_host && e->target_host[0]) ps_finding_set_target_hostname(&f, e->target_host, e->target_port);
     if (evidence_json) ps_finding_set_evidence_json(&f, evidence_json);
-    ps_output_emit(e->out, &f);
+    e->api->emit(&f);
 }
 
 static void check_security_headers(struct emit_ctx *e, const char *resp, int tls) {
@@ -237,7 +234,10 @@ static void check_security_headers(struct emit_ctx *e, const char *resp, int tls
     }
 }
 
-int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
+static int http_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit http <url|host[:port]>\n");
         return 2;
@@ -251,23 +251,10 @@ int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char ip[64] = "";
     int fd = tcp_connect(u.host, u.port, 4000, ip, sizeof(ip));
     if (fd < 0) {
-        fprintf(stderr, "audit http: cannot connect to %s:%u\n", u.host, u.port);
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit http: cannot connect to %s:%u\n", u.host, u.port); return 1;
     }
 
     SSL_CTX *ctx = NULL; SSL *ssl = NULL;
@@ -279,9 +266,7 @@ int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
         SSL_set_fd(ssl, fd);
         if (SSL_connect(ssl) != 1) {
             fprintf(stderr, "audit http: TLS handshake failed\n");
-            SSL_free(ssl); SSL_CTX_free(ctx); close(fd);
-            ps_output_close(&out);
-            return 1;
+            SSL_free(ssl); SSL_CTX_free(ctx); close(fd); return 1;
         }
     }
 
@@ -297,8 +282,7 @@ int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
     if (send_all(fd, ssl, req, strlen(req)) != 0) {
         fprintf(stderr, "audit http: send failed\n");
         if (ssl) { SSL_free(ssl); SSL_CTX_free(ctx); }
-        close(fd); ps_output_close(&out);
-        return 1;
+        close(fd); return 1;
     }
 
     char resp[16384];
@@ -307,12 +291,10 @@ int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
     close(fd);
 
     if (n <= 0) {
-        fprintf(stderr, "audit http: empty response\n");
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit http: empty response\n"); return 1;
     }
 
-    struct emit_ctx e = { &out, run_id, self_host, u.host, ip, u.port, u.path };
+    struct emit_ctx e = { api, run_id, self_host, u.host, ip, u.port, u.path };
     int status = response_status(resp);
 
     /* Emit metadata finding */
@@ -337,8 +319,17 @@ int ps_audit_http_run(int argc, char **argv, const struct ps_args *opts) {
     }
 
     check_security_headers(&e, resp, u.tls);
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "http",
+    .summary     = "Audit HTTP server: security headers, version leaks",
+    .run         = http_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_http_module(void) { return &MODULE; }

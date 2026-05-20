@@ -139,11 +139,16 @@ set(_audit_plugin_dir ${CMAKE_BINARY_DIR}/src/cli/audit)
 
 function(ps_add_audit_plugin name)
     add_library(audit-${name} MODULE audit/${name}.c)
+    target_compile_definitions(audit-${name} PRIVATE PS_AUDIT_PLUGIN_BUILD=1)
     target_include_directories(audit-${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib
     )
     target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
+    if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch")
+        find_package(OpenSSL REQUIRED)
+        target_link_libraries(audit-${name} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
     set_target_properties(audit-${name} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY ${_audit_plugin_dir}
         PREFIX ""
@@ -154,7 +159,10 @@ function(ps_add_audit_plugin name)
     endif()
 endfunction()
 
-# Plugins available so far. As more audits convert to the new ABI, add
-# them here. Static link into packetsonde stays during the transition
-# period; loader dedupes.
-ps_add_audit_plugin(telnet)
+# All audit kinds, also built as loadable plugins. Static-linked into
+# packetsonde too; the loader dedupes by name, so a user-supplied .dylib
+# at a higher-priority path overrides a built-in.
+foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
+        elasticsearch smtp mysql postgresql)
+    ps_add_audit_plugin(${_a})
+endforeach()

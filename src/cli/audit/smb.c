@@ -1,7 +1,5 @@
-#include "smb.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -81,7 +79,10 @@ static const unsigned char SMB1_NEGOTIATE[] = {
     0x02, 'N','T',' ','L','M',' ','0','.','1','2', 0x00
 };
 
-int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
+static int smb_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit smb <host[:port]>\n");
         return 2;
@@ -95,27 +96,14 @@ int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char ip[64] = "";
     int fd = tcp_connect(host, port, 4000, ip, sizeof(ip));
     if (fd < 0) {
-        fprintf(stderr, "audit smb: cannot connect to %s:%u\n", host, port);
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit smb: cannot connect to %s:%u\n", host, port); return 1;
     }
 
     if (send(fd, SMB1_NEGOTIATE, sizeof(SMB1_NEGOTIATE), 0) != (ssize_t)sizeof(SMB1_NEGOTIATE)) {
-        close(fd); ps_output_close(&out); return 1;
+        close(fd); return 1;
     }
 
     unsigned char resp[1024];
@@ -123,9 +111,7 @@ int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
     close(fd);
 
     if (n < 5) {
-        fprintf(stderr, "audit smb: no usable response from %s:%u\n", host, port);
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit smb: no usable response from %s:%u\n", host, port); return 1;
     }
 
     /* Response framing:
@@ -149,7 +135,7 @@ int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     if (is_smb1) {
@@ -163,10 +149,19 @@ int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, "{\"dialect\":\"NT LM 0.12\"}");
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "smb",
+    .summary     = "Audit SMB server: detect SMB1 (EternalBlue surface)",
+    .run         = smb_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_smb_module(void) { return &MODULE; }

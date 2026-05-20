@@ -1,7 +1,5 @@
-#include "mysql.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -30,7 +28,10 @@ static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *
     return 0;
 }
 
-int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
+static int mysql_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit mysql <host[:port]>\n");
         return 2;
@@ -44,26 +45,14 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
     struct addrinfo hints; memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) {
-        ps_output_close(&out); return 1;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) { return 1;
     }
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); ps_output_close(&out); return 1; }
+    if (fd < 0) { freeaddrinfo(res); return 1; }
     struct timeval tv = { 4, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -72,8 +61,7 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
     inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
     if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
         freeaddrinfo(res); close(fd);
-        fprintf(stderr, "audit mysql: cannot connect to %s:%u\n", host, port);
-        ps_output_close(&out); return 1;
+        fprintf(stderr, "audit mysql: cannot connect to %s:%u\n", host, port); return 1;
     }
     freeaddrinfo(res);
 
@@ -90,8 +78,7 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
     close(fd);
 
     if (n < 6) {
-        fprintf(stderr, "audit mysql: no handshake from %s:%u\n", host, port);
-        ps_output_close(&out); return 1;
+        fprintf(stderr, "audit mysql: no handshake from %s:%u\n", host, port); return 1;
     }
 
     /* Packet header: 4 bytes (len + seq) */
@@ -105,9 +92,7 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
                         "Service does not look like MySQL");
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
-        ps_output_emit(&out, &f);
-        ps_output_snapshot(&out, &g_last_run_counts);
-        ps_output_close(&out);
+        api->emit(&f);
         return 0;
     }
 
@@ -132,7 +117,7 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     /* MySQL 5.x is EOL (5.7 went EOL 2023-10). Flag servers still on 5.x. */
@@ -148,7 +133,7 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     /* MySQL/MariaDB on an externally-reachable port is itself a posture issue:
@@ -163,10 +148,19 @@ int ps_audit_mysql_run(int argc, char **argv, const struct ps_args *opts) {
                         "MySQL/MariaDB is reachable from the auditor's network position");
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "mysql",
+    .summary     = "Audit MySQL/MariaDB: version banner, EOL versions",
+    .run         = mysql_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_mysql_module(void) { return &MODULE; }
