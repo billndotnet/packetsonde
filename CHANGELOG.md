@@ -11,6 +11,7 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 - **`audit telnet`** — Telnet exposure detection. Plaintext + deprecated; reaching the port is itself the finding. Emits `telnet.exposed` (high) with the captured banner.
 - **`audit ftp`** — FTP banner + anonymous-login probe. Emits `ftp.metadata` (info), `ftp.plaintext_exposed` (medium), and `ftp.anonymous_allowed` (high) when `USER anonymous` succeeds.
 - **`audit redis`** — Redis NOAUTH detection. Sends `INFO`; if the server replies with data (instead of `-NOAUTH`), emits `redis.noauth` (critical) and `redis.metadata` (info) with version, mode, OS extracted from the INFO payload.
+- **`findings stats [path]`** — reads JSONL findings from a file or stdin and prints aggregate counts by severity, kind, source, and host. Sorted descending. Useful for "what does today look like" review of an `--auto-append` file.
 
 ## [v1.1] — 2026-05-20
 
