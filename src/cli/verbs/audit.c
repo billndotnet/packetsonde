@@ -14,6 +14,7 @@ int ps_audit_redis_run  (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_ntp_run    (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_memcached_run(int argc, char **argv, const struct ps_args *opts);
 int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts);
+int ps_audit_smtp_run         (int argc, char **argv, const struct ps_args *opts);
 
 struct audit_kind {
     const char *name;
@@ -33,6 +34,7 @@ static const struct audit_kind KINDS[] = {
     { "ntp",    ps_audit_ntp_run,    "Audit NTP: monlist amplification, mode-7 leak" },
     { "memcached", ps_audit_memcached_run, "Audit Memcached: no-auth exposure" },
     { "elasticsearch", ps_audit_elasticsearch_run, "Audit Elasticsearch: unauthenticated cluster API" },
+    { "smtp",   ps_audit_smtp_run,   "Audit SMTP: STARTTLS support, banner, AUTH advertisement" },
     { NULL, NULL, NULL }
 };
 
