@@ -86,6 +86,13 @@ void ps_output_emit(struct ps_output *o, const struct ps_finding *f) {
     if (need_quiet) tn = render_quiet(f, text_buf, sizeof(text_buf));
 
     pthread_mutex_lock(&o->lock);
+    switch (f->severity) {
+        case PS_SEV_INFO:     o->n_info++;     break;
+        case PS_SEV_LOW:      o->n_low++;      break;
+        case PS_SEV_MEDIUM:   o->n_medium++;   break;
+        case PS_SEV_HIGH:     o->n_high++;     break;
+        case PS_SEV_CRITICAL: o->n_critical++; break;
+    }
     if (o->fmt == PS_OFMT_TEXT || o->fmt == PS_OFMT_QUIET || o->fmt == PS_OFMT_AUTO) {
         if (tn > 0) write_all(o->stdout_fd, text_buf, (size_t)tn);
     } else {
@@ -95,6 +102,15 @@ void ps_output_emit(struct ps_output *o, const struct ps_finding *f) {
         write_all(o->append_fd, jsonl_buf, (size_t)jn);
     }
     pthread_mutex_unlock(&o->lock);
+}
+
+void ps_output_summary(const struct ps_output *o, const char *run_id, long duration_ms) {
+    unsigned int total = o->n_info + o->n_low + o->n_medium + o->n_high + o->n_critical;
+    fprintf(stderr,
+            "run %s: %u findings (info=%u low=%u medium=%u high=%u critical=%u) in %ld ms\n",
+            run_id, total,
+            o->n_info, o->n_low, o->n_medium, o->n_high, o->n_critical,
+            duration_ms);
 }
 
 void ps_output_close(struct ps_output *o) {
