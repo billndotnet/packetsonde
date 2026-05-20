@@ -2,7 +2,16 @@
 
 All notable changes to packetsonde. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [v1.3] — 2026-05-20
+
+### Added — pluggable audit ABI
+The `audit` verb is now extensible without recompiling the CLI. Each audit kind is a single C file that exports `struct ps_audit_module` and compiles to a `.so` / `.dylib`. A loader scans `$PS_AUDITS_DIR` / `~/.config/packetsonde/audits/` / system paths at first call, dedupes by name, and lets user plugins shadow built-ins. All 14 existing audit kinds were converted to this ABI; each is statically linked into the binary AND built as a loadable plugin under `build/src/cli/audit/`.
+
+- `src/lib/audit_module.h` — stable ABI (struct ps_audit_module, struct ps_audit_api, PS_AUDIT_ABI_VERSION).
+- `src/cli/audit_loader.{h,c}` — dlopen + directory scan.
+- Dispatcher (`src/cli/verbs/audit.c`) now owns output-emitter setup, format selection, snapshot, and close — was ~25 lines of boilerplate duplicated across every audit module.
+- `docs/guides/writing-audit-plugins.md` — operator guide for shipping custom audits.
+- `examples/audit-plugin/audit-vnc.c` — working ~100-line external plugin example with macOS/Linux build script.
 
 ### Added — new verb
 - **`packetsonde report [path]`** — reads JSONL findings from a file or stdin, sorts by (severity descending, host, kind), and writes a Markdown deliverable grouped under severity headings with per-host subsections. Each finding renders with target, source, timestamp, and evidence. Closes the "compliance reports" follow-on from the v1 spec.
@@ -13,6 +22,9 @@ Three more audit kinds; `audit` verb now covers 14 services total.
 - **`audit smtp`** — reads banner, sends EHLO, parses capability advertisement. Emits `smtp.metadata` (info) and `smtp.no_starttls` (medium, when STARTTLS is missing on port 25 or 587). Open-relay test deferred behind a future opt-in flag.
 - **`audit mysql`** — reads MySQL/MariaDB initial handshake (sent on connect). Emits `mysql.metadata`, `mysql.old_version` (medium, < 8.0 — 5.x is EOL), `mysql.reachable` (low, posture marker).
 - **`audit postgresql`** — sends SSLRequest, reads the single-byte response. Emits `postgresql.metadata`, `postgresql.no_ssl` (high, server refuses SSL), `postgresql.reachable` (low).
+
+### Tags
+- `v1.3`
 
 ## [v1.2] — 2026-05-20
 
