@@ -93,6 +93,7 @@ set(AGENT_CORE_SOURCES
     src/modules/vrrp_listener.c
     src/modules/broadcast_listener.c
     src/modules/honeypot_listener.c
+    src/modules/discovery_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
 )
@@ -217,6 +218,13 @@ target_include_directories(test_udp_probe PRIVATE
 target_link_libraries(test_udp_probe PRIVATE packetsonde_lib)
 target_compile_definitions(test_udp_probe PRIVATE PS_UDP_PROBE_TESTING=1)
 add_test(NAME test_udp_probe COMMAND test_udp_probe)
+
+# Test: discovery_listener -- end-to-end including signed reply on lo.
+add_executable(test_discovery_listener tests/test_discovery_listener.c)
+target_include_directories(test_discovery_listener PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_discovery_listener PRIVATE packetsonde_lib)
+add_test(NAME test_discovery_listener COMMAND test_discovery_listener)
 
 # Test: flow tracker (synthetic packets — no pcap or network needed)
 add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
