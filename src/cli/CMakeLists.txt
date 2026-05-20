@@ -4,6 +4,8 @@ set(CLI_SOURCES
     dispatch.c
     verbs/version.c
     verbs/agent.c
+    verbs/audit.c
+    audit/tls.c
     output/output.c
     workers/limiter.c
     workers/workers.c
@@ -24,6 +26,8 @@ target_include_directories(packetsonde PRIVATE
     ${CMAKE_BINARY_DIR}/src/agent
 )
 target_link_libraries(packetsonde PRIVATE packetsonde_lib)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(packetsonde PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 if(APPLE)
     target_link_libraries(packetsonde PRIVATE edit)
 endif()
