@@ -29,7 +29,7 @@ v1.1.
 | `audit`    | 18 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
-| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
+| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
 | `config`   | `show`, `path` — inspect resolved configuration |
