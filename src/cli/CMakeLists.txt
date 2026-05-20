@@ -6,6 +6,7 @@ set(CLI_SOURCES
     verbs/agent.c
     output/output.c
     workers/limiter.c
+    workers/workers.c
     psctl/psctl_commands.c
     psctl/psctl_connection.c
     psctl/psctl_format.c
@@ -41,6 +42,11 @@ if(BUILD_TESTING)
     target_include_directories(test_limiter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_limiter PRIVATE packetsonde_lib)
     add_test(NAME test_limiter COMMAND test_limiter)
+
+    add_executable(test_workers tests/test_workers.c workers/workers.c workers/limiter.c)
+    target_include_directories(test_workers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_workers PRIVATE packetsonde_lib pthread)
+    add_test(NAME test_workers COMMAND test_workers)
 endif()
 
 include(GNUInstallDirs)
