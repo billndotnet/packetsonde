@@ -28,6 +28,7 @@ set(CLI_SOURCES
     audit/ldap.c
     audit/imap.c
     audit/pop3.c
+    audit/snmp.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
@@ -140,6 +141,12 @@ if(BUILD_TESTING)
     set_tests_properties(test_audit_pop3 PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_audit_snmp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_snmp.sh)
+    set_tests_properties(test_audit_snmp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
 
 include(GNUInstallDirs)
@@ -185,6 +192,6 @@ endfunction()
 # packetsonde too; the loader dedupes by name, so a user-supplied .dylib
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
-        elasticsearch smtp mysql postgresql ldap imap pop3)
+        elasticsearch smtp mysql postgresql ldap imap pop3 snmp)
     ps_add_audit_plugin(${_a})
 endforeach()

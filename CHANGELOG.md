@@ -5,6 +5,7 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 ## [Unreleased]
 
 ### Added
+- **`audit snmp`** — SNMP v1/v2c default-community detection on UDP/161. Hand-built BER GetRequest for sysDescr.0 with candidate communities `public` then `private`, v2c then v1. A valid GetResponse with matching request-id means the community is accepted. Emits `snmp.metadata` (info, with version + sysDescr) and `snmp.default_community` (high). Integration test included (mock SNMP responder).
 - **`audit ldap`** — anonymous-bind detection. Sends a v3 LDAP BindRequest with empty credentials, parses the BindResponse resultCode. Emits `ldap.metadata` (info), `ldap.anonymous_bind` (medium, server accepts anon bind), `ldap.plaintext` (low, port 389 not 636/LDAPS).
 - **`audit imap`** — IMAP banner + CAPABILITY parse. Emits `imap.metadata` (info, with `starttls` and `logindisabled` flags), `imap.no_starttls` (medium, port 143 without STARTTLS), `imap.plaintext_login` (high, port 143 allows LOGIN without STARTTLS + no LOGINDISABLED).
 - **`audit pop3`** — POP3 banner + CAPA parse. Emits `pop3.metadata` (info), `pop3.no_stls` (medium, port 110 without STLS).
