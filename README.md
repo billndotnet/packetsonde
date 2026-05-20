@@ -22,14 +22,14 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 
 ## Status
 
-v1.1.
+v1.4.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql` |
+| `audit`    | 18 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
-| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
+| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
 | `config`   | `show`, `path` — inspect resolved configuration |
@@ -116,7 +116,7 @@ macOS additionally needs libedit for the agent shell.
 
 ## License
 
-PolyForm Noncommercial 1.0.0. See `LICENSE`. Personal, educational, research, charitable, and government use are permitted; commercial use is not granted under this license.
+PolyForm Noncommercial 1.0.0, modified to exclude government use. See `LICENSE`. Personal, educational, research, and charitable use are permitted; commercial and government use are not granted under this license. Contact the licensor for a separate license if you need to use this software for any non-permitted purpose.
 
 ## Project layout
 
