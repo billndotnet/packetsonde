@@ -12,6 +12,7 @@ int ps_audit_telnet_run (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_ftp_run    (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_redis_run  (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_ntp_run    (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_memcached_run(int argc, char **argv, const struct ps_args *opts);
 
 struct audit_kind {
     const char *name;
@@ -29,6 +30,7 @@ static const struct audit_kind KINDS[] = {
     { "ftp",    ps_audit_ftp_run,    "Audit FTP server: anonymous login, plaintext" },
     { "redis",  ps_audit_redis_run,  "Audit Redis: NOAUTH access detection" },
     { "ntp",    ps_audit_ntp_run,    "Audit NTP: monlist amplification, mode-7 leak" },
+    { "memcached", ps_audit_memcached_run, "Audit Memcached: no-auth exposure" },
     { NULL, NULL, NULL }
 };
 

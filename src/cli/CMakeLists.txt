@@ -18,6 +18,7 @@ set(CLI_SOURCES
     audit/ftp.c
     audit/redis.c
     audit/ntp.c
+    audit/memcached.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
