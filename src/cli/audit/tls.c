@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -71,10 +72,219 @@ struct tls_result {
     int          cert_present;
     X509        *peer;
     STACK_OF(X509) *chain;
+    /* JA3 / JA3S fingerprints.
+     * JA3  -- MD5 of "version,ciphers,extensions,curves,point_formats" from
+     *         OUR ClientHello. Useful for defenders to recognise the scanner.
+     * JA3S -- MD5 of "version,cipher,extensions" from the SERVER'S ServerHello.
+     *         Useful for fingerprinting the server's TLS stack. */
+    char         ja3_str  [1024];
+    char         ja3_md5  [33];
+    char         ja3s_str [512];
+    char         ja3s_md5 [33];
+};
+
+/* TLS handshake bytes captured via SSL_CTX_set_msg_callback. We keep the
+ * raw ClientHello + ServerHello around so post-handshake JA3/JA3S parsing
+ * can walk them. */
+struct hs_capture {
+    uint8_t client_hello[4096];
+    size_t  client_hello_len;
+    uint8_t server_hello[4096];
+    size_t  server_hello_len;
 };
 
 static void tls_result_free(struct tls_result *r) {
     if (r->peer) X509_free(r->peer);
+}
+
+/* GREASE values (RFC 8701) — these are sentinel values used to exercise
+ * extensibility; standard JA3/JA3S excludes them so different runs of the
+ * same client produce stable fingerprints. */
+static int is_grease(uint16_t v) {
+    /* GREASE pattern: 0x0a0a, 0x1a1a, ..., 0xfafa (low byte == high byte,
+     * and low nibble == 0xa). */
+    return (v & 0x0f0f) == 0x0a0a && ((v >> 8) & 0xff) == (v & 0xff);
+}
+
+static size_t append_u16_list(char *out, size_t outsz, size_t off,
+                              const uint8_t *src, size_t n, int skip_grease) {
+    int first = (off == 0 || out[off - 1] == ',');
+    for (size_t i = 0; i + 1 < n; i += 2) {
+        uint16_t v = ((uint16_t)src[i] << 8) | src[i + 1];
+        if (skip_grease && is_grease(v)) continue;
+        int w = snprintf(out + off, outsz - off, "%s%u", first ? "" : "-", v);
+        if (w < 0 || (size_t)w >= outsz - off) return off;
+        off += (size_t)w;
+        first = 0;
+    }
+    return off;
+}
+
+static void md5_hex(const char *str, char *hex_out /* 33 bytes */) {
+    unsigned char dig[16];
+    unsigned int  dl = 0;
+    EVP_MD_CTX *m = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(m, EVP_md5(), NULL);
+    EVP_DigestUpdate(m, str, strlen(str));
+    EVP_DigestFinal_ex(m, dig, &dl);
+    EVP_MD_CTX_free(m);
+    static const char *H = "0123456789abcdef";
+    for (int i = 0; i < 16; i++) {
+        hex_out[i * 2]     = H[dig[i] >> 4];
+        hex_out[i * 2 + 1] = H[dig[i] & 0x0f];
+    }
+    hex_out[32] = '\0';
+}
+
+/* Parse a TLS handshake-message body (skipping the 1-byte type + 3-byte
+ * length header that the openssl msg_callback strips on TLS 1.3 but not on
+ * older paths). We accept both shapes and walk past the header if present. */
+static const uint8_t *hs_body(const uint8_t *buf, size_t len, size_t *body_len) {
+    if (len < 4) { *body_len = 0; return NULL; }
+    /* If buf[0] looks like a handshake type (1=ClientHello, 2=ServerHello)
+     * and the length bytes match, skip the header. */
+    if ((buf[0] == 1 || buf[0] == 2) && len >= 4) {
+        size_t l = ((size_t)buf[1] << 16) | ((size_t)buf[2] << 8) | buf[3];
+        if (l + 4 == len) { *body_len = l; return buf + 4; }
+    }
+    *body_len = len;
+    return buf;
+}
+
+static void ja3s_from_server_hello(const uint8_t *hs, size_t hs_len,
+                                   char *out, size_t outsz) {
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) { out[0] = '\0'; return; }
+    /* ServerHello body: version(2) random(32) sid_len(1) sid(sid_len)
+     *                   cipher(2) compression(1) ext_len(2) extensions */
+    uint16_t version = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 3 > blen) { out[0] = '\0'; return; }
+    p += sid_len;
+    uint16_t cipher = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    p += 1; /* compression */
+    /* extensions block */
+    size_t ext_off = 0;
+    int n = snprintf(out, outsz, "%u,%u,", version, cipher);
+    if (n < 0 || (size_t)n >= outsz) return;
+    ext_off = (size_t)n;
+    if (p + 2 <= blen) {
+        uint16_t ext_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+        size_t end = p + ext_len;
+        if (end > blen) end = blen;
+        int first = 1;
+        while (p + 4 <= end) {
+            uint16_t et = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+            uint16_t el = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+            if (p + el > end) break;
+            if (!is_grease(et)) {
+                int w = snprintf(out + ext_off, outsz - ext_off,
+                                 "%s%u", first ? "" : "-", et);
+                if (w < 0 || (size_t)w >= outsz - ext_off) break;
+                ext_off += (size_t)w;
+                first = 0;
+            }
+            p += el;
+        }
+    }
+    out[ext_off] = '\0';
+}
+
+static void ja3_from_client_hello(const uint8_t *hs, size_t hs_len,
+                                  char *out, size_t outsz) {
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) { out[0] = '\0'; return; }
+    uint16_t version = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 2 > blen) { out[0] = '\0'; return; }
+    p += sid_len;
+    uint16_t cs_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    if (p + cs_len + 1 > blen) { out[0] = '\0'; return; }
+    const uint8_t *ciphers = b + p; size_t ciphers_n = cs_len;
+    p += cs_len;
+    uint8_t cm_len = b[p++];
+    if (p + cm_len + 2 > blen) { out[0] = '\0'; return; }
+    p += cm_len;
+    uint16_t ext_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    size_t ext_end = p + ext_len;
+    if (ext_end > blen) ext_end = blen;
+
+    /* Walk extensions to collect ext-type list, and pluck supported_groups
+     * (10) and ec_point_formats (11) bodies. */
+    const uint8_t *groups = NULL;     size_t groups_n = 0;
+    const uint8_t *ecpf = NULL;       size_t ecpf_n = 0;
+    /* We need to emit ext types in order, so do that first in a scratch buf. */
+    char ext_list[512]; ext_list[0] = '\0'; size_t ext_off = 0;
+    int first = 1;
+    size_t q = p;
+    while (q + 4 <= ext_end) {
+        uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        if (q + el > ext_end) break;
+        if (!is_grease(et)) {
+            int w = snprintf(ext_list + ext_off, sizeof(ext_list) - ext_off,
+                             "%s%u", first ? "" : "-", et);
+            if (w < 0 || (size_t)w >= sizeof(ext_list) - ext_off) break;
+            ext_off += (size_t)w; first = 0;
+        }
+        if (et == 10 && el >= 2) {
+            /* supported_groups: u16 list_len then u16 entries */
+            groups = b + q + 2;
+            groups_n = ((size_t)b[q] << 8 | b[q + 1]);
+            if (groups_n + 2 > el) groups_n = el - 2;
+        } else if (et == 11 && el >= 1) {
+            /* ec_point_formats: u8 list_len then u8 entries */
+            ecpf = b + q + 1;
+            ecpf_n = b[q];
+            if (ecpf_n + 1 > el) ecpf_n = el - 1;
+        }
+        q += el;
+    }
+
+    /* Build JA3 string: version,ciphers,extensions,curves,point_formats */
+    int n = snprintf(out, outsz, "%u,", version);
+    if (n < 0 || (size_t)n >= outsz) return;
+    size_t off = (size_t)n;
+    off = append_u16_list(out, outsz, off, ciphers, ciphers_n, 1);
+    if (off + 1 >= outsz) return;
+    out[off++] = ',';
+    /* extensions list already built */
+    int w = snprintf(out + off, outsz - off, "%s,", ext_list);
+    if (w < 0 || (size_t)w >= outsz - off) return;
+    off += (size_t)w;
+    off = append_u16_list(out, outsz, off, groups, groups_n, 1);
+    if (off + 1 >= outsz) return;
+    out[off++] = ',';
+    /* ec_point_formats are u8 — emit each as decimal */
+    int pf_first = 1;
+    for (size_t i = 0; i < ecpf_n; i++) {
+        w = snprintf(out + off, outsz - off, "%s%u",
+                     pf_first ? "" : "-", ecpf[i]);
+        if (w < 0 || (size_t)w >= outsz - off) break;
+        off += (size_t)w; pf_first = 0;
+    }
+    out[off] = '\0';
+}
+
+static void msg_cb(int write_p, int version, int content_type,
+                   const void *buf, size_t len, SSL *ssl, void *arg) {
+    (void)version; (void)ssl;
+    struct hs_capture *cap = arg;
+    if (!cap || content_type != 22) return; /* SSL3_RT_HANDSHAKE = 22 */
+    if (len < 4 || len > sizeof(cap->client_hello)) return;
+    const uint8_t *b = buf;
+    /* First byte is handshake_type; 1 = ClientHello, 2 = ServerHello. */
+    if (write_p && b[0] == 1 && cap->client_hello_len == 0) {
+        memcpy(cap->client_hello, b, len);
+        cap->client_hello_len = len;
+    } else if (!write_p && b[0] == 2 && cap->server_hello_len == 0) {
+        memcpy(cap->server_hello, b, len);
+        cap->server_hello_len = len;
+    }
 }
 
 static int do_handshake(const char *host, uint16_t port,
@@ -92,6 +302,9 @@ static int do_handshake(const char *host, uint16_t port,
     if (a->min_proto) SSL_CTX_set_min_proto_version(ctx, a->min_proto);
     if (a->max_proto) SSL_CTX_set_max_proto_version(ctx, a->max_proto);
     if (a->cipher_list) SSL_CTX_set_cipher_list(ctx, a->cipher_list);
+    struct hs_capture cap; memset(&cap, 0, sizeof(cap));
+    SSL_CTX_set_msg_callback(ctx, msg_cb);
+    SSL_CTX_set_msg_callback_arg(ctx, &cap);
     SSL *ssl = SSL_new(ctx);
     SSL_set_tlsext_host_name(ssl, host);
     SSL_set_fd(ssl, fd);
@@ -104,6 +317,16 @@ static int do_handshake(const char *host, uint16_t port,
         X509 *peer = SSL_get_peer_certificate(ssl);
         if (peer) { out->peer = peer; out->cert_present = 1; }
         out->chain = SSL_get_peer_cert_chain(ssl);
+        if (cap.client_hello_len) {
+            ja3_from_client_hello(cap.client_hello, cap.client_hello_len,
+                                  out->ja3_str, sizeof(out->ja3_str));
+            if (out->ja3_str[0]) md5_hex(out->ja3_str, out->ja3_md5);
+        }
+        if (cap.server_hello_len) {
+            ja3s_from_server_hello(cap.server_hello, cap.server_hello_len,
+                                   out->ja3s_str, sizeof(out->ja3s_str));
+            if (out->ja3s_str[0]) md5_hex(out->ja3s_str, out->ja3s_md5);
+        }
     }
     SSL_free(ssl);
     SSL_CTX_free(ctx);
@@ -347,9 +570,13 @@ static void check_certificate(struct emit_ctx *e, const char *target_host) {
             "{\"protocol\":\"%s\",\"cipher\":\"%s\","
             "\"subject_cn\":\"%s\",\"issuer_cn\":\"%s\","
             "\"not_before\":\"%s\",\"not_after\":\"%s\","
-            "\"cert_sha256\":\"%s\",\"sans\":%s}",
+            "\"cert_sha256\":\"%s\",\"sans\":%s,"
+            "\"ja3\":\"%s\",\"ja3_str\":\"%s\","
+            "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\"}",
             proto_str(r.protocol_version), r.cipher,
-            subj_e, issu_e, nb_e, na_e, sha256, sans);
+            subj_e, issu_e, nb_e, na_e, sha256, sans,
+            r.ja3_md5,  r.ja3_str,
+            r.ja3s_md5, r.ja3s_str);
         char title[320];
         snprintf(title, sizeof(title), "%s (%s) CN=%s",
                  proto_str(r.protocol_version), r.cipher,
