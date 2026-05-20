@@ -5,6 +5,7 @@
 
 int ps_discover_neighbors_run(int argc, char **argv, const struct ps_args *opts);
 int ps_discover_hosts_run    (int argc, char **argv, const struct ps_args *opts);
+int ps_discover_agents_run   (int argc, char **argv, const struct ps_args *opts);
 
 struct discover_kind {
     const char *name;
@@ -15,6 +16,7 @@ struct discover_kind {
 static const struct discover_kind KINDS[] = {
     { "neighbors", ps_discover_neighbors_run, "Local ARP/NDP table" },
     { "hosts",     ps_discover_hosts_run,     "ARP-sweep / connect-sweep a CIDR" },
+    { "agents",    ps_discover_agents_run,    "Signed broadcast for remote packetsonde agents" },
     { NULL, NULL, NULL }
 };
 

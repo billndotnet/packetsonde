@@ -37,6 +37,7 @@ set(CLI_SOURCES
     probe/traceroute.c
     discover/neighbors.c
     discover/hosts.c
+    discover/agents.c
     verbs/discover.c
     verbs/scan.c
     scan/ports.c
@@ -167,6 +168,12 @@ if(BUILD_TESTING)
     add_test(NAME test_audit_kafka
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_kafka.sh)
     set_tests_properties(test_audit_kafka PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_discover_agents
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_discover_agents.sh)
+    set_tests_properties(test_discover_agents PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
