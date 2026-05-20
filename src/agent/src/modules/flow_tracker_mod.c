@@ -35,12 +35,18 @@
 
 #define FT_MOD_MAX_FLOWS          65536
 #define FT_MOD_TRACK_LEVEL        PS_TRACK_IP_PROTO_PORT
-#define FT_MOD_COLLECTOR_HOST     "127.0.0.1"
-#define FT_MOD_COLLECTOR_PORT     2055
-#define FT_MOD_SOURCE_ID          0x5053
-#define FT_MOD_NETFLOW_VERSION    9
+#define FT_MOD_COLLECTOR_HOST_DEFAULT  "127.0.0.1"
+#define FT_MOD_COLLECTOR_PORT_DEFAULT  2055
+#define FT_MOD_SOURCE_ID_DEFAULT       0x5053
+#define FT_MOD_NETFLOW_VERSION_DEFAULT 9
 #define FT_MOD_SNAPLEN            160
 #define FT_MOD_EXPIRE_INTERVAL_US (10ULL * 1000000ULL)
+
+/* Operator config (env):
+ *   PS_NETFLOW_COLLECTOR    "host:port"  (default 127.0.0.1:2055)
+ *   PS_NETFLOW_VERSION      5 | 9 | 10   (default 9; 10 = IPFIX)
+ *   PS_NETFLOW_SOURCE_ID    u32          (default 0x5053)
+ */
 
 #define FT_MOD_EXPIRE_BATCH       256
 #define FT_MOD_MAX_INTERFACES     8
@@ -136,11 +142,30 @@ static int ft_mod_init(ps_module_ctx_t *ctx)
         return -1;
     }
 
-    /* Create NetFlow exporter */
-    st->exporter = ps_nf_exporter_create(FT_MOD_COLLECTOR_HOST,
-                                          FT_MOD_COLLECTOR_PORT,
-                                          FT_MOD_SOURCE_ID,
-                                          FT_MOD_NETFLOW_VERSION);
+    /* Resolve operator-configurable export target. */
+    char host[256]; int port = FT_MOD_COLLECTOR_PORT_DEFAULT;
+    snprintf(host, sizeof(host), "%s", FT_MOD_COLLECTOR_HOST_DEFAULT);
+    const char *coll = getenv("PS_NETFLOW_COLLECTOR");
+    if (coll && *coll) {
+        const char *colon = strrchr(coll, ':');
+        if (colon) {
+            size_t hl = (size_t)(colon - coll);
+            if (hl < sizeof(host)) {
+                memcpy(host, coll, hl); host[hl] = '\0';
+                port = atoi(colon + 1);
+            }
+        } else {
+            snprintf(host, sizeof(host), "%s", coll);
+        }
+    }
+    int version = FT_MOD_NETFLOW_VERSION_DEFAULT;
+    const char *vstr = getenv("PS_NETFLOW_VERSION");
+    if (vstr && *vstr) version = atoi(vstr);
+    uint32_t source_id = FT_MOD_SOURCE_ID_DEFAULT;
+    const char *sstr = getenv("PS_NETFLOW_SOURCE_ID");
+    if (sstr && *sstr) source_id = (uint32_t)strtoul(sstr, NULL, 0);
+
+    st->exporter = ps_nf_exporter_create(host, port, source_id, version);
     if (!st->exporter) {
         ps_error("flow_tracker: failed to create NetFlow exporter");
         ps_flow_table_destroy(st->table);
@@ -151,8 +176,7 @@ static int ft_mod_init(ps_module_ctx_t *ctx)
     ctx->userdata = st;
     ps_info("flow_tracker: initialized (collector=%s:%d, version=%d, "
             "capture will start on flow.control command)",
-            FT_MOD_COLLECTOR_HOST, FT_MOD_COLLECTOR_PORT,
-            FT_MOD_NETFLOW_VERSION);
+            host, port, version);
     return 0;
 }
 
