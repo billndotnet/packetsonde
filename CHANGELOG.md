@@ -5,8 +5,10 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 ## [Unreleased]
 
 ### Added
-- **`probe traceroute --mode paris`** — holds the UDP flow tuple constant across every TTL probe so every hop traverses the same ECMP-balanced path. Useful for getting a single coherent path through load-balanced infrastructure.
-- **`probe traceroute --mode dublin`** — enumerates ECMP alternative paths by walking multiple Paris-style flows with different source ports. The hop set across flows reveals load-balancer diversity. `--flow-count N` (default 8) configures the number of flows; deduplication is by (ttl, addr).
+- **`probe traceroute --mode paris`** — holds the UDP flow tuple constant across every TTL probe so every hop traverses the same ECMP-balanced path.
+- **`probe traceroute --mode dublin`** — enumerates ECMP alternative paths by walking multiple Paris-style flows with different source ports (`--flow-count N`, default 8). Deduplicates hops by (ttl, addr).
+- **`audit smb`** — SMB1 detection via a minimal NEGOTIATE PROTOCOL request offering only the NT LM 0.12 dialect. Emits `smb.metadata` (info) and `smb.smb1_enabled` (high — EternalBlue / WannaCry surface).
+- **`audit telnet`** — Telnet exposure detection. Plaintext + deprecated; reaching the port is itself the finding. Emits `telnet.exposed` (high) with the captured banner.
 
 ## [v1.1] — 2026-05-20
 
