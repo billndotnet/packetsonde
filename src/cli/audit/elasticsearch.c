@@ -1,7 +1,5 @@
-#include "elasticsearch.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -38,11 +36,13 @@ static int json_str(const char *in, const char *key, char *out, size_t outsz) {
     p += strlen(pat);
     size_t k = 0;
     while (*p && *p != '"' && k + 1 < outsz) out[k++] = *p++;
-    out[k] = '\0';
-    return 1;
+    out[k] = '\0'; return 1;
 }
 
-int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts) {
+static int elasticsearch_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit elasticsearch <host[:port]>\n");
         return 2;
@@ -56,26 +56,14 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
     struct addrinfo hints; memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) {
-        ps_output_close(&out); return 1;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) { return 1;
     }
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); ps_output_close(&out); return 1; }
+    if (fd < 0) { freeaddrinfo(res); return 1; }
     struct timeval tv = { 4, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -84,8 +72,7 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
     inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
     if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
         freeaddrinfo(res); close(fd);
-        fprintf(stderr, "audit elasticsearch: cannot connect to %s:%u\n", host, port);
-        ps_output_close(&out); return 1;
+        fprintf(stderr, "audit elasticsearch: cannot connect to %s:%u\n", host, port); return 1;
     }
     freeaddrinfo(res);
 
@@ -94,7 +81,7 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
         "GET / HTTP/1.0\r\nHost: %s\r\nUser-Agent: packetsonde\r\n"
         "Connection: close\r\nAccept: application/json\r\n\r\n", host);
     if (send(fd, req, strlen(req), 0) != (ssize_t)strlen(req)) {
-        close(fd); ps_output_close(&out); return 1;
+        close(fd); return 1;
     }
 
     char resp[8192]; size_t total = 0;
@@ -108,8 +95,7 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
     close(fd);
 
     if (total == 0) {
-        fprintf(stderr, "audit elasticsearch: empty response\n");
-        ps_output_close(&out); return 1;
+        fprintf(stderr, "audit elasticsearch: empty response\n"); return 1;
     }
 
     int status = 0;
@@ -159,7 +145,7 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     if (looks_like_es && !requires_auth) {
@@ -174,10 +160,19 @@ int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "elasticsearch",
+    .summary     = "Audit Elasticsearch: unauthenticated cluster API",
+    .run         = elasticsearch_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_elasticsearch_module(void) { return &MODULE; }
