@@ -8,6 +8,8 @@ set(CLI_SOURCES
     verbs/findings.c
     verbs/config.c
     verbs/probe.c
+    verbs/report.c
+    audit_loader.c
     registry/agents.c
     audit/tls.c
     audit/dns.c
@@ -20,6 +22,9 @@ set(CLI_SOURCES
     audit/ntp.c
     audit/memcached.c
     audit/elasticsearch.c
+    audit/smtp.c
+    audit/mysql.c
+    audit/postgresql.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
@@ -57,6 +62,11 @@ find_package(OpenSSL REQUIRED)
 target_link_libraries(packetsonde PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 if(APPLE)
     target_link_libraries(packetsonde PRIVATE edit)
+endif()
+# dlopen / dlsym for the audit plugin loader. macOS has it in libSystem;
+# Linux needs explicit -ldl.
+if(NOT APPLE)
+    target_link_libraries(packetsonde PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(BUILD_TESTING)
@@ -112,3 +122,47 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS packetsonde RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# ---- Audit modules built as loadable plugins ----
+#
+# Each plugin compiles the same audit source as a MODULE library and exports
+# ps_audit_module(). The CLI's plugin loader scans for these at runtime
+# (PS_AUDITS_DIR override, XDG config, build-tree default, /usr/[local/]lib).
+# Plugins are emitted into ${CMAKE_BINARY_DIR}/src/cli/audit/ where the CLI's
+# build-tree default search path picks them up during development.
+#
+# Audits still living in CLI_SOURCES above are statically linked into the
+# binary too; the loader dedupes by name (first-loaded wins) so a developer
+# can shadow a built-in by dropping a .dylib into the search path.
+
+set(_audit_plugin_dir ${CMAKE_BINARY_DIR}/src/cli/audit)
+
+function(ps_add_audit_plugin name)
+    add_library(audit-${name} MODULE audit/${name}.c)
+    target_compile_definitions(audit-${name} PRIVATE PS_AUDIT_PLUGIN_BUILD=1)
+    target_include_directories(audit-${name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
+    )
+    target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
+    if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch")
+        find_package(OpenSSL REQUIRED)
+        target_link_libraries(audit-${name} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+    set_target_properties(audit-${name} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${_audit_plugin_dir}
+        PREFIX ""
+        OUTPUT_NAME "audit-${name}"
+    )
+    if(APPLE)
+        set_target_properties(audit-${name} PROPERTIES SUFFIX ".dylib")
+    endif()
+endfunction()
+
+# All audit kinds, also built as loadable plugins. Static-linked into
+# packetsonde too; the loader dedupes by name, so a user-supplied .dylib
+# at a higher-priority path overrides a built-in.
+foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
+        elasticsearch smtp mysql postgresql)
+    ps_add_audit_plugin(${_a})
+endforeach()

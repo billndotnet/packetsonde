@@ -1,7 +1,5 @@
-#include "telnet.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -39,22 +37,19 @@ static int read_banner(int fd, char *out, size_t outsz) {
     if (n <= 0) { out[0] = '\0'; return 0; }
     size_t o = 0;
     for (ssize_t i = 0; i < n && o + 1 < outsz; i++) {
-        if (buf[i] == 0xFF) {
-            /* IAC: skip command + option (2 more bytes). */
-            i += 2;
-            continue;
-        }
+        if (buf[i] == 0xFF) { i += 2; continue; }
         unsigned char c = buf[i];
         if (c == '\r') continue;
-        if (c == '\n' || (c >= 0x20 && c < 0x7f)) {
-            out[o++] = (char)c;
-        }
+        if (c == '\n' || (c >= 0x20 && c < 0x7f)) out[o++] = (char)c;
     }
     out[o] = '\0';
     return (int)o;
 }
 
-int ps_audit_telnet_run(int argc, char **argv, const struct ps_args *opts) {
+static int telnet_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit telnet <host[:port]>\n");
         return 2;
@@ -68,28 +63,16 @@ int ps_audit_telnet_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
-    /* Connect */
     char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
     struct addrinfo hints; memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *res = NULL;
     if (getaddrinfo(host, portstr, &hints, &res) != 0) {
         fprintf(stderr, "audit telnet: cannot resolve %s\n", host);
-        ps_output_close(&out); return 1;
+        return 1;
     }
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); ps_output_close(&out); return 1; }
+    if (fd < 0) { freeaddrinfo(res); return 1; }
     struct timeval tv = { 4, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -100,16 +83,14 @@ int ps_audit_telnet_run(int argc, char **argv, const struct ps_args *opts) {
     freeaddrinfo(res);
     if (rc != 0) {
         fprintf(stderr, "audit telnet: cannot connect to %s:%u\n", host, port);
-        close(fd); ps_output_close(&out); return 1;
+        close(fd);
+        return 1;
     }
 
     char banner[1024];
     read_banner(fd, banner, sizeof(banner));
     close(fd);
 
-    /* If we got this far, the Telnet service accepted a TCP connection.
-     * That itself is the finding — Telnet sends credentials in plaintext
-     * and is obsolete for management interfaces in 2026. */
     char banner_e[1024]; size_t k = 0;
     for (size_t i = 0; banner[i] && k + 2 < sizeof(banner_e); i++) {
         unsigned char c = (unsigned char)banner[i];
@@ -119,20 +100,35 @@ int ps_audit_telnet_run(int argc, char **argv, const struct ps_args *opts) {
     }
     banner_e[k] = '\0';
 
-    {
-        char ev[1200];
-        snprintf(ev, sizeof(ev), "{\"banner\":\"%s\"}", banner_e);
-        struct ps_finding f;
-        ps_finding_init(&f, run_id, "cli.audit.telnet", self_host,
-                        "telnet.exposed", PS_SEV_HIGH, PS_CONF_CONFIRMED,
-                        "Telnet service is reachable (plaintext, deprecated)");
-        ps_finding_set_target_ip(&f, ip, port);
-        ps_finding_set_target_hostname(&f, host, port);
-        ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
-    }
+    char ev[1200];
+    snprintf(ev, sizeof(ev), "{\"banner\":\"%s\"}", banner_e);
+    struct ps_finding f;
+    ps_finding_init(&f, run_id, "cli.audit.telnet", self_host,
+                    "telnet.exposed", PS_SEV_HIGH, PS_CONF_CONFIRMED,
+                    "Telnet service is reachable (plaintext, deprecated)");
+    ps_finding_set_target_ip(&f, ip, port);
+    ps_finding_set_target_hostname(&f, host, port);
+    ps_finding_set_evidence_json(&f, ev);
+    api->emit(&f);
 
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
+}
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "telnet",
+    .summary     = "Audit Telnet exposure (plaintext, deprecated)",
+    .run         = telnet_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) {
+    return &MODULE;
+}
+#endif
+
+/* Also expose a stable internal symbol for the static-link path so the
+ * dispatcher's BUILTINS table can pick it up without dlopen. */
+const struct ps_audit_module *ps_audit_telnet_module(void) {
+    return &MODULE;
 }
