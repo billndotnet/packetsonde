@@ -1,4 +1,4 @@
-#include "psctl_connection.h"
+#include "ipc.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -60,7 +60,7 @@ static uint32_t decode_u32le(const uint8_t *b)
          | ((uint32_t)b[3] << 24);
 }
 
-int psctl_connect(struct psctl_conn *conn, const char *socket_path)
+int ps_ipc_connect(struct ps_ipc_conn *conn, const char *socket_path)
 {
     conn->fd = -1;
 
@@ -85,7 +85,7 @@ int psctl_connect(struct psctl_conn *conn, const char *socket_path)
     return 0;
 }
 
-void psctl_disconnect(struct psctl_conn *conn)
+void ps_ipc_disconnect(struct ps_ipc_conn *conn)
 {
     if (conn->fd >= 0) {
         close(conn->fd);
@@ -93,7 +93,7 @@ void psctl_disconnect(struct psctl_conn *conn)
     }
 }
 
-int psctl_send(struct psctl_conn *conn, const char *channel, const char *payload)
+int ps_ipc_send(struct ps_ipc_conn *conn, const char *channel, const char *payload)
 {
     if (!channel) channel = "";
     if (!payload)  payload  = "";
@@ -120,10 +120,10 @@ int psctl_send(struct psctl_conn *conn, const char *channel, const char *payload
     return 0;
 }
 
-int psctl_recv(struct psctl_conn *conn,
-               char *channel_buf, size_t ch_bufsz,
-               char *payload_buf, size_t pl_bufsz,
-               int timeout_ms)
+int ps_ipc_recv(struct ps_ipc_conn *conn,
+                char *channel_buf, size_t ch_bufsz,
+                char *payload_buf, size_t pl_bufsz,
+                int timeout_ms)
 {
     /* Wait for data with poll */
     struct pollfd pfd;
@@ -164,8 +164,8 @@ int psctl_recv(struct psctl_conn *conn,
     return 0;
 }
 
-int psctl_recv_loop(struct psctl_conn *conn, int timeout_ms,
-                    psctl_frame_fn fn, void *userdata)
+int ps_ipc_recv_loop(struct ps_ipc_conn *conn, int timeout_ms,
+                     ps_ipc_frame_fn fn, void *userdata)
 {
     char channel[256];
     char payload[256 * 1024];
@@ -183,10 +183,10 @@ int psctl_recv_loop(struct psctl_conn *conn, int timeout_ms,
         if (rc <= 0) break;
         if (!(pfd.revents & POLLIN)) break;
 
-        if (psctl_recv(conn,
-                       channel, sizeof(channel),
-                       payload, sizeof(payload),
-                       0 /* data is ready, don't block */) == 0)
+        if (ps_ipc_recv(conn,
+                        channel, sizeof(channel),
+                        payload, sizeof(payload),
+                        0 /* data is ready, don't block */) == 0)
         {
             if (fn) fn(channel, payload, userdata);
             count++;

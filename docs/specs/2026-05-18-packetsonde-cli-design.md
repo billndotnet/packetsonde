@@ -373,6 +373,25 @@ These are *not* in v1, but listed so the design accommodates them.
 6. **setuid/cap helper.** A small split-priv helper mirroring the agent's `priv_worker` so raw work doesn't require `sudo packetsonde`.
 7. **Run manifest.** `--manifest <path>` writes one JSON object describing the run; useful for cron / store-and-forward.
 8. **TLS/crypto library selection.** Deferred to follow-on #1; choice will be shared between agent (for the network protocol) and CLI (for `audit tls`'s own client connections — v1 may use OpenSSL or LibreSSL pragmatically and converge later).
+9. **Enrichment & interop lifts** (small, additive — fold into post-v1 plans, ranked by ROI):
+   - **GeoIP + ASN tagging** on flows/findings via libmaxminddb (pmacct-style).
+   - **JA3 / JA3S / JA4 TLS client/server fingerprints** in the agent's `tls_probe` module and the CLI's `audit tls` finding evidence (Suricata-style — narrow algorithmic lift, not the IDS engine).
+   - **Longest-prefix aggregation** knob on `discover hosts` (e.g. `--aggregate /24`).
+   - **FQDN reverse-resolve cache** for flow findings.
+   - **IPFIX export** sibling to the existing NetFlow v5/v9 exporter.
+   - **sFlow ingest** on agent (for upstream-switch flow data on the bridge / trunk deployment models).
+   - **eve.json interop**: ensure finding records can be imported from / exported to Suricata's eve.json schema; influences §3 field choices.
+10. **Passive BGP / BMP peer** for AS-path / next-hop / community enrichment of every flow. pmacct's signature feature, large enough to warrant its own spec when prioritized.
+
+11. **Recipe framework / proxied-scan model.** Audit and probe logic become declarative **recipes** (YAML/TOML, version-pinned, signed) that live in the **client's** recipe library — never on the agent at rest. The CLI compiles a recipe into a sequence of primitive operations, signs it, and pushes it to the agent for execution; the agent streams findings back tagged with `recipe_sha256` and discards the plan on disconnect. The agent exposes only a small set of typed primitives (`tcp_connect/send/recv/set_ttl`, `udp_*`, `tls_handshake`, `dns_query`, `arp_request`, `icmp_echo`, `match`, `extract`, `emit_finding`) plus a tiny non-Turing-complete expression layer. The recipe language is intentionally not code (cf. NSE/Lua, Metasploit/Ruby).
+
+    **Properties this gains:**
+    - **Zero offensive content at rest on the agent.** Forensic and compliance posture improves significantly for trunk/bridge/handheld deployments. An imaged agent is a primitive-runner, not an attack toolkit.
+    - **Recipes are config, not code.** New TLS CVE → new recipe → no agent rebuild or redeploy. Auditors maintain their own libraries in normal source control.
+    - **Reproducibility / evidentiary chain.** Every finding carries the recipe hash that produced it. "What was run on this engagement?" is answered by a git tag.
+    - **Eats its own tail.** Once stable, v1 verbs (`audit tls`, `audit dns`, `scan ports`) get reimplemented as `packetsonde play <recipe-set>` over the same primitives — the in-process implementations become recipe-driven, the engine pays for itself.
+
+    **Sequencing:** This is a v3/v4 effort. v1 (current Plans 1-3) builds verbs in-process in the CLI. v2 builds the **agent network protocol** that lets `--via` transport real work — the protocol design must reserve room for typed primitives, signed plan transport, finding back-channel, and recipe-hash tagging in finding evidence. v3 builds the recipe compiler in the CLI + primitive interpreter in the agent + signing/registry. v4 ports v1 verbs to recipes. Capturing the architectural intent here means v2's protocol design can avoid lock-in even though the recipe runtime isn't built yet.
 
 ---
 
