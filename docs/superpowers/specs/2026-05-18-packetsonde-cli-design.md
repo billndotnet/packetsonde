@@ -376,6 +376,15 @@ These are *not* in v1, but listed so the design accommodates them.
 6. **setuid/cap helper.** A small split-priv helper mirroring the agent's `priv_worker` so raw work doesn't require `sudo packetsonde`.
 7. **Run manifest.** `--manifest <path>` writes one JSON object describing the run; useful for cron / store-and-forward.
 8. **TLS/crypto library selection.** Deferred to follow-on #1; choice will be shared between agent (for the network protocol) and CLI (for `audit tls`'s own client connections — v1 may use OpenSSL or LibreSSL pragmatically and converge later).
+9. **Enrichment & interop lifts** (small, additive — fold into post-v1 plans, ranked by ROI):
+   - **GeoIP + ASN tagging** on flows/findings via libmaxminddb (pmacct-style).
+   - **JA3 / JA3S / JA4 TLS client/server fingerprints** in the agent's `tls_probe` module and the CLI's `audit tls` finding evidence (Suricata-style — narrow algorithmic lift, not the IDS engine).
+   - **Longest-prefix aggregation** knob on `discover hosts` (e.g. `--aggregate /24`).
+   - **FQDN reverse-resolve cache** for flow findings.
+   - **IPFIX export** sibling to the existing NetFlow v5/v9 exporter.
+   - **sFlow ingest** on agent (for upstream-switch flow data on the bridge / trunk deployment models).
+   - **eve.json interop**: ensure finding records can be imported from / exported to Suricata's eve.json schema; influences §3 field choices.
+10. **Passive BGP / BMP peer** for AS-path / next-hop / community enrichment of every flow. pmacct's signature feature, large enough to warrant its own spec when prioritized.
 
 ---
 
