@@ -8,6 +8,7 @@ set(CLI_SOURCES
     verbs/findings.c
     verbs/config.c
     verbs/probe.c
+    verbs/report.c
     registry/agents.c
     audit/tls.c
     audit/dns.c
