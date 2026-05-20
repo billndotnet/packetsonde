@@ -24,7 +24,7 @@ v1.1.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | `tls` (protocol/cipher/cert hygiene), `dns` (resolver posture), `http` (security headers), `ssh` (banner + old-version), `smb` (SMB1 detection), `telnet` (plaintext exposure) |
+| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb` (SMB1 detection), `telnet` (plaintext exposure), `ftp` (anonymous login + plaintext) |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
