@@ -5,6 +5,7 @@ add_library(packetsonde_lib STATIC
     ulid.c
     ipc.c
     finding.c
+    traceroute.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -18,4 +19,8 @@ if(BUILD_TESTING)
     add_executable(test_finding tests/test_finding.c)
     target_link_libraries(test_finding PRIVATE packetsonde_lib)
     add_test(NAME test_finding COMMAND test_finding)
+
+    add_executable(test_traceroute tests/test_traceroute.c)
+    target_link_libraries(test_traceroute PRIVATE packetsonde_lib)
+    add_test(NAME test_traceroute COMMAND test_traceroute)
 endif()
