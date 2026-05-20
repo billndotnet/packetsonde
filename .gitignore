@@ -11,3 +11,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Agent harness / per-user state (not project)
+.claude/
+.cache/
