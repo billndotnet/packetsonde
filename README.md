@@ -2,22 +2,34 @@
 
 A CLI-first network infrastructure and security auditing toolkit.
 
-`packetsonde` is the auditor's command-line tool; `packetsonded` is its long-running observation agent. The CLI runs active campaigns (audit TLS, scan ports, traceroute, probe DNS); the agent runs passive, continuous observation (flow tracking, neighbor discovery, listeners for DHCP/DNS/LLDP/CDP/STP/...).
+`packetsonde` is the auditor's command-line tool; `packetsonded` is its long-running observation agent. The CLI runs active campaigns (audit TLS / HTTP / DNS / SSH, scan ports, traceroute, probe TCP); the agent runs passive, continuous observation (flow tracking, neighbor discovery, listeners for DHCP/DNS/LLDP/CDP/STP/...).
 
 Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk-forwarders, anything that reads a line.
 
+---
+
+## Documentation
+
+- **Use case guides** — three deployment shapes packetsonde fits:
+    - [Trunk probe](docs/guides/trunk-probe.md) — dot1q-attached, multi-VLAN visibility behind ACLs
+    - [Service-dependency test point](docs/guides/service-dependency.md) — continuous validation that a host can reach its dependencies
+    - [Passive bridge appliance](docs/guides/bridge-appliance.md) — small in-line device with wifi management
+- [Design spec](docs/specs/2026-05-18-packetsonde-cli-design.md) — finding wire format, verb grammar, defaults, follow-ons
+- [Agent network protocol brainstorm](docs/specs/agent-network-protocol-brainstorm.md) — open design questions for the `--via <agent>` work
+- [Visualization notes](docs/specs/viz-notes.md) — discipline file for the deferred viz redesign
+
 ## Status
 
-v1 shipped. Verb surface:
+v1.1.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | TLS hygiene (`tls`), DNS resolver posture (`dns`) |
-| `scan`     | Connect-scan ports across a target or CIDR |
-| `discover` | Local ARP/NDP table (`neighbors`), host sweep across a CIDR (`hosts`) |
-| `probe`    | Single TCP probe (`tcp`), traceroute (`traceroute` — UDP classic in v1) |
-| `findings` | Tail / filter JSONL finding records |
-| `config`   | Show resolved configuration |
+| `audit`    | `tls` (protocol/cipher/cert hygiene), `dns` (resolver posture), `http` (security headers), `ssh` (banner + old-version) |
+| `scan`     | `ports` — connect-scan a target or CIDR |
+| `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
+| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic) |
+| `findings` | `tail` / `filter` — read JSONL records from a file or stdin |
+| `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
 | `version`, `help` | Standard |
 
@@ -29,6 +41,12 @@ v1 shipped. Verb surface:
 
 # Audit a TLS service, JSONL piped to jq
 ./build/src/cli/packetsonde --jsonl audit tls mail.example.com:443 | jq -c '{kind,severity,title}'
+
+# Security-header audit on an HTTP service
+./build/src/cli/packetsonde audit http https://example.com
+
+# SSH server banner + version check
+./build/src/cli/packetsonde audit ssh github.com
 
 # Port scan a /28 with a custom port list
 ./build/src/cli/packetsonde scan ports 10.0.0.0/28 -p 22,80,443,8080
@@ -45,11 +63,22 @@ v1 shipped. Verb surface:
 
 ## Output
 
-Default: text on a TTY, JSONL when piped. Override with `--text`, `--json`, `--jsonl`, `--quiet`. Persist runs with `--auto-append` (writes JSONL to `~/.local/state/packetsonde/findings-YYYY-MM-DD.jsonl`).
+Default: text on a TTY, JSONL when piped. Override with `--text`, `--json`, `--jsonl`, `--quiet`. Persist runs with `--auto-append` (writes JSONL to `$XDG_STATE_HOME/packetsonde/findings-YYYY-MM-DD.jsonl`).
 
-Finding wire format documented in `docs/specs/2026-05-18-packetsonde-cli-design.md` §3. Schema-versioned at `v: 1` and committed to stability.
+Every finding carries `v: 1` and a stable schema (kind, severity, target, evidence, host, optional via_agent). The wire format is documented in `docs/specs/2026-05-18-packetsonde-cli-design.md` §3 and committed to stability.
 
-## Architecture in one diagram
+Example finding:
+
+```json
+{"v":1,"id":"01KS22Q97P...","run_id":"01KS22Q8AK...","ts":"2026-05-20T06:56:11.510Z",
+ "source":"cli.audit.tls","host":"auditbox","kind":"tls.weak_protocol",
+ "severity":"high","confidence":"firm",
+ "title":"TLS 1.0 negotiated successfully",
+ "target":{"ip":"10.0.0.42","hostname":"mail.example.com","port":443},
+ "evidence":{"protocol":"TLSv1"}}
+```
+
+## Architecture
 
 ```
                  ┌──────────────────────────┐
@@ -68,13 +97,13 @@ Finding wire format documented in `docs/specs/2026-05-18-packetsonde-cli-design.
                                └────────────────┘
 ```
 
-The agent is positioned in topologically-advantaged places: dot1q trunk for multi-VLAN visibility, in-line bridge for tap-style observation, or co-located with a service consumer to validate upstream dependencies.
+The agent is positioned in topologically-advantaged places — see the [use case guides](docs/guides/) for the three deployment shapes.
 
 ## Build requirements
 
 - C11 compiler (clang or gcc)
 - CMake 3.20+
-- OpenSSL (system)
+- OpenSSL (system) — `audit tls`, `audit http` for HTTPS
 - pthreads
 - Optional: libpcap, hiredis (for agent passive modules)
 
@@ -92,7 +121,7 @@ src/
 ├── agent/    # packetsonded daemon (passive observation, modules)
 └── cli/      # packetsonde (this binary)
     ├── verbs/         # one file per verb
-    ├── audit/         # audit kinds (tls, dns)
+    ├── audit/         # tls, dns, http, ssh
     ├── scan/          # active scans
     ├── discover/      # local discovery
     ├── probe/         # single-target probes
@@ -102,18 +131,19 @@ src/
     └── registry/      # agents.toml parser
 
 docs/
-├── specs/    # design specs (cli-design, agent-network-protocol-brainstorm)
+├── guides/   # use case guides (trunk, service-dependency, bridge)
+├── specs/    # design specs (cli-design, agent-network-protocol-brainstorm, viz-notes)
 └── plans/    # implementation plans (one per phase)
 ```
 
 ## Roadmap
 
-See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the follow-on list. Near-term priorities:
+See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on list. Near-term priorities:
 
-1. Agent network protocol — unlocks `--via <agent>` for remote-segment audits. Brainstorm memo at `docs/specs/agent-network-protocol-brainstorm.md`.
-2. Paris / Dublin / TCP / ICMP traceroute modes.
-3. GeoIP + ASN + JA3/JA3S/JA4 enrichment lifts.
-4. Recipe framework — declarative audit logic that lives client-side, signed and pushed JIT, agent stays a primitive-runner with zero offensive content at rest.
+1. **Agent network protocol** — unlocks `--via <agent>` for remote-segment audits. Brainstorm memo at `docs/specs/agent-network-protocol-brainstorm.md`.
+2. **Paris / Dublin / TCP / ICMP traceroute modes.**
+3. **GeoIP + ASN + JA3/JA3S/JA4 enrichment lifts.**
+4. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT, agent stays a primitive-runner with zero offensive content at rest.
 
 ## Not a 3D visualizer (anymore)
 
