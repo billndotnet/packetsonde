@@ -18,8 +18,9 @@ static void usage(void) {
     fprintf(stderr,
         "Usage: packetsonde probe traceroute <target> "
         "[--proto udp|tcp|icmp] [--mode classic|paris|dublin] [--port N]\n"
-        "Defaults: --proto udp --mode classic --port 33434\n"
-        "TCP, ICMP, Paris, and Dublin modes will land in a follow-on task.\n");
+        "Defaults: --proto udp --mode classic --port 33434 (udp) / 80 (tcp).\n"
+        "TCP: connect-based, hits stateful firewalls that drop UDP.\n"
+        "ICMP: echo-request, all modes treated as classic.\n");
 }
 
 int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
@@ -28,6 +29,7 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
     const char *target = argv[1];
 
     struct ps_traceroute_opts to = PS_TRACEROUTE_DEFAULTS;
+    int port_set = 0;
 
     static const struct option longopts[] = {
         { "proto", required_argument, NULL, 'p' },
@@ -53,10 +55,14 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
                 break;
             case 'P':
                 to.dst_port = (uint16_t)atoi(optarg);
+                port_set = 1;
                 break;
             default: usage(); return 2;
         }
     }
+
+    /* TCP traceroute targets a service port, not the UDP traceroute port. */
+    if (to.proto == PS_TR_PROTO_TCP && !port_set) to.dst_port = 80;
 
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
