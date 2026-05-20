@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -264,14 +265,47 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
     char run_id[PS_ULID_STRLEN + 1];
     ps_ulid_new(run_id, sizeof(run_id));
 
+    _Static_assert(PS_FMT_TEXT  == 1, "fmt mapping drift");
+    _Static_assert(PS_FMT_JSON  == 2, "fmt mapping drift");
+    _Static_assert(PS_FMT_JSONL == 3, "fmt mapping drift");
+    _Static_assert(PS_FMT_QUIET == 4, "fmt mapping drift");
+
     struct ps_output_opts oopts;
     memset(&oopts, 0, sizeof(oopts));
-    oopts.fmt_force = (opts->fmt == 0) ? 0 :
-                      (opts->fmt == 1) ? PS_OFMT_TEXT :
-                      (opts->fmt == 2) ? PS_OFMT_JSON :
-                      (opts->fmt == 3) ? PS_OFMT_JSONL : PS_OFMT_QUIET;
-    oopts.color = 1;
-    oopts.auto_append_path = NULL;
+    switch (opts->fmt) {
+        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
+        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
+        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
+        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
+        default:           oopts.fmt_force = 0;             break;
+    }
+    oopts.color = opts->no_color ? 0 : 1;
+
+    char append_path[512] = "";
+    if (opts->auto_append) {
+        const char *base = getenv("XDG_STATE_HOME");
+        char default_base[400];
+        if (!base || !base[0]) {
+            const char *home = getenv("HOME");
+            if (home && home[0]) {
+                snprintf(default_base, sizeof(default_base), "%s/.local/state", home);
+                base = default_base;
+            } else {
+                base = "/tmp";
+            }
+        }
+        char dir[450];
+        snprintf(dir, sizeof(dir), "%s/packetsonde", base);
+        mkdir(base, 0755);
+        mkdir(dir,  0755);
+        struct timeval tv; gettimeofday(&tv, NULL);
+        struct tm tm; gmtime_r(&tv.tv_sec, &tm);
+        snprintf(append_path, sizeof(append_path),
+                 "%s/findings-%04d-%02d-%02d.jsonl",
+                 dir, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    }
+    oopts.auto_append_path = append_path[0] ? append_path : NULL;
+
     struct ps_output out;
     ps_output_init(&out, &oopts);
 
