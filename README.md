@@ -27,7 +27,7 @@ v1.1.
 | `audit`    | `tls` (protocol/cipher/cert hygiene), `dns` (resolver posture), `http` (security headers), `ssh` (banner + old-version) |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
-| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic) |
+| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` — read JSONL records from a file or stdin |
 | `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
@@ -51,8 +51,10 @@ v1.1.
 # Port scan a /28 with a custom port list
 ./build/src/cli/packetsonde scan ports 10.0.0.0/28 -p 22,80,443,8080
 
-# Traceroute, streaming hops as findings
+# Traceroute, streaming hops as findings (modes: classic, paris, dublin)
 ./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1
+./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1 --mode paris
+./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1 --mode dublin
 
 # Local ARP table
 ./build/src/cli/packetsonde discover neighbors
@@ -141,6 +143,6 @@ docs/
 See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on list. Near-term priorities:
 
 1. **Agent network protocol** — unlocks `--via <agent>` for remote-segment audits. Brainstorm memo at `docs/specs/agent-network-protocol-brainstorm.md`.
-2. **Paris / Dublin / TCP / ICMP traceroute modes.**
+2. **TCP / ICMP traceroute modes** (Paris/Dublin landed for UDP).
 3. **GeoIP + ASN + JA3/JA3S/JA4 enrichment lifts.**
 4. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT, agent stays a primitive-runner with zero offensive content at rest.

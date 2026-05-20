@@ -2,6 +2,12 @@
 
 All notable changes to packetsonde. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **`probe traceroute --mode paris`** — holds the UDP flow tuple constant across every TTL probe so every hop traverses the same ECMP-balanced path. Useful for getting a single coherent path through load-balanced infrastructure.
+- **`probe traceroute --mode dublin`** — enumerates ECMP alternative paths by walking multiple Paris-style flows with different source ports. The hop set across flows reveals load-balancer diversity. `--flow-count N` (default 8) configures the number of flows; deduplication is by (ttl, addr).
+
 ## [v1.1] — 2026-05-20
 
 ### Fixed
