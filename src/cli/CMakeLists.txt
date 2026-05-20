@@ -19,6 +19,7 @@ set(CLI_SOURCES
     audit/redis.c
     audit/ntp.c
     audit/memcached.c
+    audit/elasticsearch.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
