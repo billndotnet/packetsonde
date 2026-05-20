@@ -13,6 +13,8 @@ set(CLI_SOURCES
     audit/dns.c
     probe/tcp.c
     probe/traceroute.c
+    discover/neighbors.c
+    verbs/discover.c
     output/output.c
     workers/limiter.c
     workers/workers.c
