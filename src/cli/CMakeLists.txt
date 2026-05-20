@@ -17,6 +17,7 @@ set(CLI_SOURCES
     audit/telnet.c
     audit/ftp.c
     audit/redis.c
+    audit/ntp.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
