@@ -92,6 +92,8 @@ static int do_handshake(const char *host, uint16_t port,
 
     SSL_CTX *ctx = SSL_CTX_new(a->method ? a->method : TLS_client_method());
     if (!ctx) { close(fd); return -1; }
+    /* Permit ancient protocols / weak ciphers — this is an *audit* client. */
+    SSL_CTX_set_security_level(ctx, 0);
     if (a->min_proto) SSL_CTX_set_min_proto_version(ctx, a->min_proto);
     if (a->max_proto) SSL_CTX_set_max_proto_version(ctx, a->max_proto);
     if (a->cipher_list) SSL_CTX_set_cipher_list(ctx, a->cipher_list);
@@ -137,7 +139,11 @@ static void emit(struct emit_ctx *e,
 }
 
 static void check_protocol(struct emit_ctx *e, const char *target_host) {
-    struct tls_attempt a10 = { TLS_client_method(), TLS1_VERSION, TLS1_VERSION, NULL };
+    /* Permissive cipher list so we can negotiate against servers that only
+     * offer legacy ciphers (the audit is precisely about finding those). */
+    const char *cipher = "ALL:eNULL:@SECLEVEL=0";
+
+    struct tls_attempt a10 = { TLS_client_method(), TLS1_VERSION, TLS1_VERSION, cipher };
     struct tls_result  r10;
     if (do_handshake(target_host, e->target_port, &a10, &r10) == 0) {
         emit(e, "tls.weak_protocol", PS_SEV_HIGH, PS_CONF_FIRM,
@@ -145,7 +151,7 @@ static void check_protocol(struct emit_ctx *e, const char *target_host) {
     }
     tls_result_free(&r10);
 
-    struct tls_attempt a11 = { TLS_client_method(), TLS1_1_VERSION, TLS1_1_VERSION, NULL };
+    struct tls_attempt a11 = { TLS_client_method(), TLS1_1_VERSION, TLS1_1_VERSION, cipher };
     struct tls_result  r11;
     if (do_handshake(target_host, e->target_port, &a11, &r11) == 0) {
         emit(e, "tls.weak_protocol", PS_SEV_HIGH, PS_CONF_FIRM,
@@ -155,9 +161,11 @@ static void check_protocol(struct emit_ctx *e, const char *target_host) {
 }
 
 static void check_ciphers(struct emit_ctx *e, const char *target_host) {
+    /* Offer only weak families and require SECLEVEL=0 so OpenSSL parses them.
+     * If the server negotiates any of these, the cipher really is weak. */
     struct tls_attempt aw = {
         TLS_client_method(), TLS1_VERSION, TLS1_2_VERSION,
-        "DES:3DES:RC4:NULL:EXP:MD5"
+        "DES:3DES:RC4:eNULL:EXP:MD5:@SECLEVEL=0"
     };
     struct tls_result  rw;
     if (do_handshake(target_host, e->target_port, &aw, &rw) == 0 && rw.cipher[0]) {
@@ -195,7 +203,7 @@ static int weak_signature_alg(X509 *cert, char *out, size_t outsz) {
 }
 
 static void check_certificate(struct emit_ctx *e, const char *target_host) {
-    struct tls_attempt a = { TLS_client_method(), 0, 0, NULL };
+    struct tls_attempt a = { TLS_client_method(), 0, 0, "ALL:eNULL:@SECLEVEL=0" };
     struct tls_result  r;
     if (do_handshake(target_host, e->target_port, &a, &r) != 0 || !r.peer) {
         tls_result_free(&r);
@@ -259,7 +267,11 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
         return 2;
     }
 
-    OPENSSL_init_ssl(0, NULL);
+    /* Skip loading the system openssl.cnf — modern distributions set
+     * MinProtocol=TLSv1.2 and SECLEVEL=2 there, which would prevent the
+     * audit from probing TLS 1.0/1.1 or weak-cipher servers. We make the
+     * audit's policy explicit per-context instead. */
+    OPENSSL_init_ssl(OPENSSL_INIT_NO_LOAD_CONFIG, NULL);
 
     char self_host[256] = "";
     gethostname(self_host, sizeof(self_host));
