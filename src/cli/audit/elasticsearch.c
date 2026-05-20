@@ -1,0 +1,183 @@
+#include "elasticsearch.h"
+#include "../output/output.h"
+#include "../runstate.h"
+#include "../util/fail_on.h"
+#include "finding.h"
+#include "ulid.h"
+
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
+    *port = 9200;
+    const char *colon = strrchr(spec, ':');
+    size_t hl = colon ? (size_t)(colon - spec) : strlen(spec);
+    if (hl == 0 || hl >= host_sz) return -1;
+    memcpy(host, spec, hl); host[hl] = '\0';
+    if (colon) {
+        long p = strtol(colon + 1, NULL, 10);
+        if (p <= 0 || p > 65535) return -1;
+        *port = (uint16_t)p;
+    }
+    return 0;
+}
+
+/* Extract a quoted string value for the FIRST `"key":"..."` in input. */
+static int json_str(const char *in, const char *key, char *out, size_t outsz) {
+    char pat[64]; snprintf(pat, sizeof(pat), "\"%s\":\"", key);
+    const char *p = strstr(in, pat);
+    if (!p) { out[0] = '\0'; return 0; }
+    p += strlen(pat);
+    size_t k = 0;
+    while (*p && *p != '"' && k + 1 < outsz) out[k++] = *p++;
+    out[k] = '\0';
+    return 1;
+}
+
+int ps_audit_elasticsearch_run(int argc, char **argv, const struct ps_args *opts) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: packetsonde audit elasticsearch <host[:port]>\n");
+        return 2;
+    }
+    char host[256]; uint16_t port = 9200;
+    if (parse_target(argv[1], host, sizeof(host), &port) != 0) {
+        fprintf(stderr, "audit elasticsearch: bad target '%s'\n", argv[1]);
+        return 2;
+    }
+
+    char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
+    char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
+
+    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
+    switch (opts->fmt) {
+        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
+        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
+        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
+        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
+        default:           oopts.fmt_force = 0;             break;
+    }
+    oopts.color = opts->no_color ? 0 : 1;
+    struct ps_output out; ps_output_init(&out, &oopts);
+
+    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
+    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) {
+        ps_output_close(&out); return 1;
+    }
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); ps_output_close(&out); return 1; }
+    struct timeval tv = { 4, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    char ip[64] = "";
+    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+    inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+        freeaddrinfo(res); close(fd);
+        fprintf(stderr, "audit elasticsearch: cannot connect to %s:%u\n", host, port);
+        ps_output_close(&out); return 1;
+    }
+    freeaddrinfo(res);
+
+    char req[512];
+    snprintf(req, sizeof(req),
+        "GET / HTTP/1.0\r\nHost: %s\r\nUser-Agent: packetsonde\r\n"
+        "Connection: close\r\nAccept: application/json\r\n\r\n", host);
+    if (send(fd, req, strlen(req), 0) != (ssize_t)strlen(req)) {
+        close(fd); ps_output_close(&out); return 1;
+    }
+
+    char resp[8192]; size_t total = 0;
+    for (;;) {
+        if (total >= sizeof(resp) - 1) break;
+        ssize_t r = recv(fd, resp + total, sizeof(resp) - 1 - total, 0);
+        if (r <= 0) break;
+        total += (size_t)r;
+    }
+    resp[total] = '\0';
+    close(fd);
+
+    if (total == 0) {
+        fprintf(stderr, "audit elasticsearch: empty response\n");
+        ps_output_close(&out); return 1;
+    }
+
+    int status = 0;
+    if (strncmp(resp, "HTTP/", 5) == 0) {
+        const char *sp = strchr(resp, ' ');
+        if (sp) status = atoi(sp + 1);
+    }
+
+    /* 401 with WWW-Authenticate "Basic realm=\"security\"" indicates ES with
+     * auth required — record but don't escalate. */
+    int requires_auth = (status == 401);
+
+    /* Body starts after \r\n\r\n */
+    const char *body = strstr(resp, "\r\n\r\n");
+    body = body ? body + 4 : resp;
+
+    char cluster[128] = "", version[64] = "", tagline[160] = "";
+    json_str(body, "cluster_name",    cluster, sizeof(cluster));
+    json_str(body, "tagline",         tagline, sizeof(tagline));
+    /* version.number is nested; do a separate match for the "number":"..."
+     * substring after the first occurrence of "version" */
+    const char *vp = strstr(body, "\"version\"");
+    if (vp) json_str(vp, "number", version, sizeof(version));
+
+    int looks_like_es = (cluster[0] || version[0] ||
+                          strstr(tagline, "elastic") != NULL);
+
+    {
+        char ev[640]; char cluster_e[160], version_e[80];
+        snprintf(cluster_e, sizeof(cluster_e), "%s", cluster);
+        snprintf(version_e, sizeof(version_e), "%s", version);
+        snprintf(ev, sizeof(ev),
+            "{\"status\":%d,\"cluster_name\":\"%s\",\"version\":\"%s\","
+            "\"auth_required\":%s}",
+            status, cluster_e, version_e, requires_auth ? "true" : "false");
+        char title[256];
+        if (requires_auth)
+            snprintf(title, sizeof(title), "Elasticsearch %d (auth required)", status);
+        else if (looks_like_es)
+            snprintf(title, sizeof(title), "Elasticsearch %s reachable without auth", version);
+        else
+            snprintf(title, sizeof(title), "HTTP %d on port %u (not Elasticsearch)", status, port);
+        struct ps_finding f;
+        ps_finding_init(&f, run_id, "cli.audit.elasticsearch", self_host,
+                        "elasticsearch.metadata",
+                        PS_SEV_INFO, PS_CONF_CONFIRMED, title);
+        ps_finding_set_target_ip(&f, ip, port);
+        ps_finding_set_target_hostname(&f, host, port);
+        ps_finding_set_evidence_json(&f, ev);
+        ps_output_emit(&out, &f);
+    }
+
+    if (looks_like_es && !requires_auth) {
+        char ev[256];
+        snprintf(ev, sizeof(ev), "{\"version\":\"%s\",\"cluster_name\":\"%s\"}",
+                 version, cluster);
+        struct ps_finding f;
+        ps_finding_init(&f, run_id, "cli.audit.elasticsearch", self_host,
+                        "elasticsearch.unauthenticated",
+                        PS_SEV_CRITICAL, PS_CONF_CONFIRMED,
+                        "Elasticsearch cluster API reachable without authentication");
+        ps_finding_set_target_ip(&f, ip, port);
+        ps_finding_set_target_hostname(&f, host, port);
+        ps_finding_set_evidence_json(&f, ev);
+        ps_output_emit(&out, &f);
+    }
+
+    ps_output_snapshot(&out, &g_last_run_counts);
+    ps_output_close(&out);
+    return 0;
+}
