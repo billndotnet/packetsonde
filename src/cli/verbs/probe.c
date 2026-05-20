@@ -6,13 +6,6 @@
 int ps_probe_tcp_run       (int argc, char **argv, const struct ps_args *opts);
 int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts);
 
-__attribute__((weak))
-int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
-    (void)argc; (void)argv; (void)opts;
-    fprintf(stderr, "probe traceroute: not yet implemented (Task 9)\n");
-    return 2;
-}
-
 struct probe_kind {
     const char *name;
     int (*run)(int argc, char **argv, const struct ps_args *opts);

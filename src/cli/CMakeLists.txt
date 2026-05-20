@@ -11,6 +11,7 @@ set(CLI_SOURCES
     registry/agents.c
     audit/tls.c
     probe/tcp.c
+    probe/traceroute.c
     output/output.c
     workers/limiter.c
     workers/workers.c
