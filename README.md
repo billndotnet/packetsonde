@@ -24,11 +24,12 @@ v1.1.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp` (monlist), `memcached`, `elasticsearch` |
+| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
+| `report`   | Generate a Markdown engagement report from JSONL findings |
 | `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
 | `version`, `help` | Standard |

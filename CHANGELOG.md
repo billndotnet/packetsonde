@@ -2,6 +2,18 @@
 
 All notable changes to packetsonde. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added — new verb
+- **`packetsonde report [path]`** — reads JSONL findings from a file or stdin, sorts by (severity descending, host, kind), and writes a Markdown deliverable grouped under severity headings with per-host subsections. Each finding renders with target, source, timestamp, and evidence. Closes the "compliance reports" follow-on from the v1 spec.
+
+### Added — audit kinds
+Three more audit kinds; `audit` verb now covers 14 services total.
+
+- **`audit smtp`** — reads banner, sends EHLO, parses capability advertisement. Emits `smtp.metadata` (info) and `smtp.no_starttls` (medium, when STARTTLS is missing on port 25 or 587). Open-relay test deferred behind a future opt-in flag.
+- **`audit mysql`** — reads MySQL/MariaDB initial handshake (sent on connect). Emits `mysql.metadata`, `mysql.old_version` (medium, < 8.0 — 5.x is EOL), `mysql.reachable` (low, posture marker).
+- **`audit postgresql`** — sends SSLRequest, reads the single-byte response. Emits `postgresql.metadata`, `postgresql.no_ssl` (high, server refuses SSL), `postgresql.reachable` (low).
+
 ## [v1.2] — 2026-05-20
 
 ### Added — traceroute modes
