@@ -116,7 +116,7 @@ macOS additionally needs libedit for the agent shell.
 
 ## License
 
-PolyForm Noncommercial 1.0.0. See `LICENSE`. Personal, educational, research, charitable, and government use are permitted; commercial use is not granted under this license.
+PolyForm Noncommercial 1.0.0, modified to exclude government use. See `LICENSE`. Personal, educational, research, and charitable use are permitted; commercial and government use are not granted under this license. Contact the licensor for a separate license if you need to use this software for any non-permitted purpose.
 
 ## Project layout
 

@@ -1,6 +1,14 @@
-# PolyForm Noncommercial License 1.0.0
+# PolyForm Noncommercial License 1.0.0 (modified — government use excluded)
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+This is a modified version of the PolyForm Noncommercial License 1.0.0.
+The canonical text is at <https://polyformproject.org/licenses/noncommercial/1.0.0>.
+This version differs from canonical PolyForm Noncommercial in one
+respect: the "Noncommercial Organizations" clause has been amended to
+exclude government institutions. Use by a government, state, or
+state-affiliated entity is treated as commercial use and is not granted
+under this license. Contact the licensor for a separate license if you
+need to use this software for any non-permitted purpose, including
+government use.
 
 ## Acceptance
 
@@ -65,10 +73,11 @@ is use for a permitted purpose.
 
 Use by any charitable organization, educational institution,
 public research organization, public safety or health
-organization, environmental protection organization,
-or government institution is use for a permitted purpose
-regardless of the source of funding or obligations resulting
-from the funding.
+organization, or environmental protection organization
+is use for a permitted purpose regardless of the source of
+funding or obligations resulting from the funding. Government
+institutions are excluded from this clause; see the header of
+this file.
 
 ## Fair Use
 
