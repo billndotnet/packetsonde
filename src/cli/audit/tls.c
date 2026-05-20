@@ -1,6 +1,8 @@
 #include "tls.h"
 #include "../output/output.h"
+#include "../runstate.h"
 #include "../signals.h"
+#include "../util/fail_on.h"
 #include "../workers/workers.h"
 #include "../workers/limiter.h"
 #include "finding.h"
@@ -350,6 +352,7 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
                + (t_end.tv_usec - t_start.tv_usec) / 1000L;
     ps_output_summary(&out, run_id, dt_ms);
 
+    ps_output_snapshot(&out, &g_last_run_counts);
     ps_output_close(&out);
     return 0;
 }

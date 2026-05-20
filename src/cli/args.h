@@ -20,6 +20,7 @@ struct ps_args {
     bool auto_append;
     int concurrency;          /* --concurrency, 0 = default */
     int rate_pps;             /* --rate, 0 = default */
+    const char *fail_on;      /* --fail-on expression, or NULL */
 
     int    verb_argc;
     char **verb_argv;         /* points into the original argv */

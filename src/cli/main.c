@@ -1,5 +1,7 @@
 #include "args.h"
 #include "verbs.h"
+#include "util/fail_on.h"
+#include "runstate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +15,6 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (prc > 0) {
-        /* --help printed already */
         return 0;
     }
 
@@ -25,6 +26,15 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    /* Verb sees its own argv starting at the verb name. */
-    return v->run(opts.verb_argc, opts.verb_argv, &opts);
+    int rc = v->run(opts.verb_argc, opts.verb_argv, &opts);
+
+    if (rc == 0 && opts.fail_on) {
+        struct ps_fail_on F;
+        if (ps_fail_on_parse(opts.fail_on, &F) != 0) {
+            fprintf(stderr, "%s: bad --fail-on expression '%s'\n", argv[0], opts.fail_on);
+            return 2;
+        }
+        if (ps_fail_on_eval(&F, &g_last_run_counts)) return 3;
+    }
+    return rc;
 }

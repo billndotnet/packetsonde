@@ -14,6 +14,8 @@ set(CLI_SOURCES
     workers/workers.c
     signals.c
     util/targets.c
+    util/fail_on.c
+    runstate.c
     findings_util/reader.c
     findings_util/filter.c
     psctl/psctl_commands.c
@@ -76,6 +78,11 @@ if(BUILD_TESTING)
     target_include_directories(test_agents_registry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_agents_registry PRIVATE packetsonde_lib)
     add_test(NAME test_agents_registry COMMAND test_agents_registry)
+
+    add_executable(test_fail_on tests/test_fail_on.c util/fail_on.c)
+    target_include_directories(test_fail_on PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_fail_on PRIVATE packetsonde_lib)
+    add_test(NAME test_fail_on COMMAND test_fail_on)
 
     add_test(NAME test_audit_tls
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
