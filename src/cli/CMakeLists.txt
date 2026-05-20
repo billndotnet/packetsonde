@@ -13,6 +13,13 @@ set(CLI_SOURCES
     audit/dns.c
     audit/http.c
     audit/ssh.c
+    audit/smb.c
+    audit/telnet.c
+    audit/ftp.c
+    audit/redis.c
+    audit/ntp.c
+    audit/memcached.c
+    audit/elasticsearch.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
