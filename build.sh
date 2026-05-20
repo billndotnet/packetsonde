@@ -1,20 +1,14 @@
 #!/bin/bash
-# Build packetsonde — agent + CLI + UE editor module.
+# Build packetsonde — agent + CLI.
 #   ./build.sh           build agent + cli (default)
 #   ./build.sh agent     agent only
 #   ./build.sh cli       cli only
 #   ./build.sh native    agent + cli (alias)
-#   ./build.sh editor    UE editor only
-#   ./build.sh all       everything (native + editor)
 
 set -e
 trap 'echo ""; echo "=== BUILD FAILED ==="' ERR
 
 PROJECT_DIR="/Users/billn/packetsonde"
-PROJECT_FILE="$PROJECT_DIR/packetsonde.uproject"
-UE_DIR="/Users/Shared/Epic Games/UE_5.7"
-BUILD_SCRIPT="$UE_DIR/Engine/Build/BatchFiles/Mac/Build.sh"
-
 BUILD_DIR="$PROJECT_DIR/build"
 
 TARGET="${1:-native}"
@@ -40,21 +34,9 @@ case "$TARGET" in
     agent)         echo "--- Agent ---";   build_native agent ;;
     cli)           echo "--- CLI ---";     build_native cli ;;
     native|all)    echo "--- Native ---";  build_native all ;;
-    editor)
-        echo "--- Editor ---"
-        cd "$PROJECT_DIR"
-        "$BUILD_SCRIPT" packetsondeEditor Mac Development "$PROJECT_FILE" 2>&1 | tail -15
-        ;;
-    everything)
-        echo "--- Native ---"; build_native all
-        echo ""
-        echo "--- Editor ---"
-        cd "$PROJECT_DIR"
-        "$BUILD_SCRIPT" packetsondeEditor Mac Development "$PROJECT_FILE" 2>&1 | tail -15
-        ;;
     *)
         echo "Unknown target: $TARGET"
-        echo "Usage: $0 [agent|cli|native|editor|everything]"
+        echo "Usage: $0 [agent|cli|native]"
         exit 2
         ;;
 esac
