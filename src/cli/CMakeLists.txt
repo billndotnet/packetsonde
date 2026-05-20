@@ -11,6 +11,8 @@ set(CLI_SOURCES
     workers/workers.c
     signals.c
     util/targets.c
+    findings_util/reader.c
+    findings_util/filter.c
     psctl/psctl_commands.c
     psctl/psctl_connection.c
     psctl/psctl_format.c
@@ -58,6 +60,14 @@ if(BUILD_TESTING)
     target_include_directories(test_targets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_targets PRIVATE packetsonde_lib)
     add_test(NAME test_targets COMMAND test_targets)
+
+    add_executable(test_findings_filter
+        tests/test_findings_filter.c
+        findings_util/reader.c
+        findings_util/filter.c)
+    target_include_directories(test_findings_filter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_findings_filter PRIVATE packetsonde_lib)
+    add_test(NAME test_findings_filter COMMAND test_findings_filter)
 
     add_test(NAME test_audit_tls
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
