@@ -57,7 +57,7 @@ on the same libpcap consumer.
 Both packets are fixed-size, no length prefixes, no TLV. They fit in a
 single UDP datagram with no fragmentation risk on any normal MTU.
 
-### Probe (168 B)
+### Probe (144 B)
 
 ```
 offset  size  field
@@ -67,25 +67,26 @@ offset  size  field
 6       2     max_skew_ms      client-requested timestamp window, BE u16
 8       8     timestamp        ms since UTC epoch, BE
 16      16    nonce            random, client-generated
-32      32    pubkey           Ed25519 caller identity
-64      64    signature        Ed25519 over [0..64]
+32      16    reserved         zeroed; pads probe larger than reply
+48      32    pubkey           Ed25519 caller identity
+80      64    signature        Ed25519 over [0..80]
 ```
 
 ### Reply (136 B)
 
-Strictly ≤ probe so the agent can never be used as a UDP amplifier.
+Strictly < probe so the agent can never be used as a UDP amplifier
+(144 sent → 136 returned).
 
 ```
 offset  size  field
 0       4     magic            "PSDR"
-1       1     version          0x01
+4       1     version          0x01
 5       1     flags
-6       2     _pad             0
-8       16    nonce            echoed from probe (client correlation)
-24      16    listen_ip        IPv6, v4-mapped for v4
-40      2     listen_port
-42      32    agent_pub        Ed25519 agent identity (pinnable)
-74      64    signature        Ed25519 over [0..74] using agent_pub's key
+6       16    nonce            echoed from probe (client correlation)
+22      16    listen_ip        IPv6, v4-mapped for v4
+38      2     listen_port
+40      32    agent_pub        Ed25519 agent identity (pinnable)
+72      64    signature        Ed25519 over [0..72] using agent_pub's key
 ```
 
 ## Replay defense
