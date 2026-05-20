@@ -122,6 +122,12 @@ if(BUILD_TESTING)
     set_tests_properties(test_audit_tls PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_audit_ssh
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_ssh.sh)
+    set_tests_properties(test_audit_ssh PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
 
 include(GNUInstallDirs)
