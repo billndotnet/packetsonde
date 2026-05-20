@@ -10,6 +10,7 @@ int ps_audit_ssh_run (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_smb_run    (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_telnet_run (int argc, char **argv, const struct ps_args *opts);
 int ps_audit_ftp_run    (int argc, char **argv, const struct ps_args *opts);
+int ps_audit_redis_run  (int argc, char **argv, const struct ps_args *opts);
 
 struct audit_kind {
     const char *name;
@@ -25,6 +26,7 @@ static const struct audit_kind KINDS[] = {
     { "smb",    ps_audit_smb_run,    "Audit SMB server: detect SMB1 (EternalBlue surface)" },
     { "telnet", ps_audit_telnet_run, "Audit Telnet exposure (plaintext, deprecated)" },
     { "ftp",    ps_audit_ftp_run,    "Audit FTP server: anonymous login, plaintext" },
+    { "redis",  ps_audit_redis_run,  "Audit Redis: NOAUTH access detection" },
     { NULL, NULL, NULL }
 };
 
