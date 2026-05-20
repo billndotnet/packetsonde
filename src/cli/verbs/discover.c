@@ -6,13 +6,6 @@
 int ps_discover_neighbors_run(int argc, char **argv, const struct ps_args *opts);
 int ps_discover_hosts_run    (int argc, char **argv, const struct ps_args *opts);
 
-__attribute__((weak))
-int ps_discover_hosts_run(int argc, char **argv, const struct ps_args *opts) {
-    (void)argc; (void)argv; (void)opts;
-    fprintf(stderr, "discover hosts: not yet implemented (Task 12)\n");
-    return 2;
-}
-
 struct discover_kind {
     const char *name;
     int (*run)(int argc, char **argv, const struct ps_args *opts);
