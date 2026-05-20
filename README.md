@@ -144,7 +144,3 @@ See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on
 2. **Paris / Dublin / TCP / ICMP traceroute modes.**
 3. **GeoIP + ASN + JA3/JA3S/JA4 enrichment lifts.**
 4. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT, agent stays a primitive-runner with zero offensive content at rest.
-
-## Not a 3D visualizer (anymore)
-
-The repo briefly included a UE5-based visualization frontend driven by an architecture whitepaper. Both are archived locally and paused; the project's focus is the CLI toolkit until the data and operational story are mature enough to inform a better visualization design. See `docs/specs/viz-notes.md` for the gap-year discipline.
