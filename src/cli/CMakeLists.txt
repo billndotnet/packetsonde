@@ -9,6 +9,7 @@ set(CLI_SOURCES
     verbs/config.c
     verbs/probe.c
     verbs/report.c
+    verbs/key.c
     audit_loader.c
     registry/agents.c
     audit/tls.c
@@ -29,10 +30,14 @@ set(CLI_SOURCES
     audit/imap.c
     audit/pop3.c
     audit/snmp.c
+    audit/rdp.c
+    audit/mssql.c
+    audit/kafka.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
     discover/hosts.c
+    discover/agents.c
     verbs/discover.c
     verbs/scan.c
     scan/ports.c
@@ -147,6 +152,30 @@ if(BUILD_TESTING)
     set_tests_properties(test_audit_snmp PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_audit_rdp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_rdp.sh)
+    set_tests_properties(test_audit_rdp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_audit_mssql
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_mssql.sh)
+    set_tests_properties(test_audit_mssql PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_audit_kafka
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_kafka.sh)
+    set_tests_properties(test_audit_kafka PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_discover_agents
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_discover_agents.sh)
+    set_tests_properties(test_discover_agents PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
 
 include(GNUInstallDirs)
@@ -192,6 +221,6 @@ endfunction()
 # packetsonde too; the loader dedupes by name, so a user-supplied .dylib
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
-        elasticsearch smtp mysql postgresql ldap imap pop3 snmp)
+        elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka)
     ps_add_audit_plugin(${_a})
 endforeach()

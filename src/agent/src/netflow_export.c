@@ -39,7 +39,7 @@
 #define NFV9_TEMPLATE_RESEND_PKTS   20
 #define NFV9_TEMPLATE_RESEND_SEC   300
 
-/* NetFlow v9 field type IDs */
+/* NetFlow v9 field type IDs (IANA / RFC 3954 sec. 8) */
 #define NF9_IN_BYTES           1
 #define NF9_IN_PKTS            2
 #define NF9_PROTOCOL           4
@@ -49,6 +49,8 @@
 #define NF9_IPV4_SRC_ADDR      8
 #define NF9_L4_DST_PORT       11
 #define NF9_IPV4_DST_ADDR     12
+#define NF9_LAST_SWITCHED     21   /* sysUpTime (ms) at last packet */
+#define NF9_FIRST_SWITCHED    22   /* sysUpTime (ms) at first packet */
 #define NF9_IPV6_SRC_ADDR     27
 #define NF9_IPV6_DST_ADDR     28
 #define NF9_IPV6_FLOW_LABEL   31
@@ -62,7 +64,7 @@
 
 struct ps_nf_exporter {
     int       sock;
-    int       version;           /* 5 or 9 */
+    int       version;           /* 5, 9, or 10 (IPFIX) */
     uint32_t  source_id;
 
     /* Counters */
@@ -260,18 +262,20 @@ struct nf9_template_field {
 };
 
 static const struct nf9_template_field tmpl_v4_fields[] = {
-    { NF9_IPV4_SRC_ADDR, 4 },
-    { NF9_IPV4_DST_ADDR, 4 },
-    { NF9_L4_SRC_PORT,   2 },
-    { NF9_L4_DST_PORT,   2 },
-    { NF9_PROTOCOL,      1 },
-    { NF9_IN_BYTES,      4 },
-    { NF9_IN_PKTS,       4 },
-    { NF9_TCP_FLAGS,     1 },
-    { NF9_TOS,           1 },
+    { NF9_IPV4_SRC_ADDR,   4 },
+    { NF9_IPV4_DST_ADDR,   4 },
+    { NF9_L4_SRC_PORT,     2 },
+    { NF9_L4_DST_PORT,     2 },
+    { NF9_PROTOCOL,        1 },
+    { NF9_IN_BYTES,        4 },
+    { NF9_IN_PKTS,         4 },
+    { NF9_TCP_FLAGS,       1 },
+    { NF9_TOS,             1 },
+    { NF9_FIRST_SWITCHED,  4 },
+    { NF9_LAST_SWITCHED,   4 },
 };
 #define TMPL_V4_NFIELDS  (sizeof(tmpl_v4_fields) / sizeof(tmpl_v4_fields[0]))
-#define TMPL_V4_RECORD_LEN  (4+4+2+2+1+4+4+1+1)  /* 23 bytes */
+#define TMPL_V4_RECORD_LEN  (4+4+2+2+1+4+4+1+1+4+4)  /* 31 bytes */
 
 /*
  * IPv6 template (ID 257):
@@ -289,9 +293,11 @@ static const struct nf9_template_field tmpl_v6_fields[] = {
     { NF9_IN_PKTS,           4 },
     { NF9_TCP_FLAGS,         1 },
     { NF9_IPV6_FLOW_LABEL,   4 },
+    { NF9_FIRST_SWITCHED,    4 },
+    { NF9_LAST_SWITCHED,     4 },
 };
 #define TMPL_V6_NFIELDS  (sizeof(tmpl_v6_fields) / sizeof(tmpl_v6_fields[0]))
-#define TMPL_V6_RECORD_LEN  (16+16+2+2+1+4+4+1+4)  /* 50 bytes */
+#define TMPL_V6_RECORD_LEN  (16+16+2+2+1+4+4+1+4+4+4)  /* 58 bytes */
 
 static int
 write_v9_header(uint8_t *buf, uint16_t nrecords, uint32_t uptime,
@@ -340,7 +346,8 @@ write_template_flowset(uint8_t *buf, int max_len,
 }
 
 static int
-write_v4_data_record(uint8_t *buf, int off, const struct ps_flow *f)
+write_v4_data_record(uint8_t *buf, int off, const struct ps_flow *f,
+                     const struct ps_nf_exporter *exp)
 {
     put_bytes(buf, &off, f->key.src_addr, 4);
     put_bytes(buf, &off, f->key.dst_addr, 4);
@@ -351,11 +358,14 @@ write_v4_data_record(uint8_t *buf, int off, const struct ps_flow *f)
     put_u32  (buf, &off, (uint32_t)(f->packets[0] + f->packets[1]));
     put_u8   (buf, &off, f->tcp_flags[0] | f->tcp_flags[1]);
     put_u8   (buf, &off, f->key.tos);
+    put_u32  (buf, &off, flow_ts_to_uptime(exp, f->flow_start));
+    put_u32  (buf, &off, flow_ts_to_uptime(exp, f->flow_last));
     return off;
 }
 
 static int
-write_v6_data_record(uint8_t *buf, int off, const struct ps_flow *f)
+write_v6_data_record(uint8_t *buf, int off, const struct ps_flow *f,
+                     const struct ps_nf_exporter *exp)
 {
     put_bytes(buf, &off, f->key.src_addr, 16);
     put_bytes(buf, &off, f->key.dst_addr, 16);
@@ -366,6 +376,8 @@ write_v6_data_record(uint8_t *buf, int off, const struct ps_flow *f)
     put_u32  (buf, &off, (uint32_t)(f->packets[0] + f->packets[1]));
     put_u8   (buf, &off, f->tcp_flags[0] | f->tcp_flags[1]);
     put_u32  (buf, &off, f->flow_label);
+    put_u32  (buf, &off, flow_ts_to_uptime(exp, f->flow_start));
+    put_u32  (buf, &off, flow_ts_to_uptime(exp, f->flow_last));
     return off;
 }
 
@@ -446,7 +458,7 @@ export_v9(struct ps_nf_exporter *exp, const struct ps_flow *flows, int count)
             int records = 0;
             while (v4_sent < v4_count &&
                    (off + TMPL_V4_RECORD_LEN) <= NF_MAX_PACKET) {
-                off = write_v4_data_record(buf, off, &flows[v4_indices[v4_sent]]);
+                off = write_v4_data_record(buf, off, &flows[v4_indices[v4_sent]], exp);
                 v4_sent++;
                 records++;
             }
@@ -476,7 +488,7 @@ export_v9(struct ps_nf_exporter *exp, const struct ps_flow *flows, int count)
             int records = 0;
             while (v6_sent < v6_count &&
                    (off + TMPL_V6_RECORD_LEN) <= NF_MAX_PACKET) {
-                off = write_v6_data_record(buf, off, &flows[v6_indices[v6_sent]]);
+                off = write_v6_data_record(buf, off, &flows[v6_indices[v6_sent]], exp);
                 v6_sent++;
                 records++;
             }
@@ -514,6 +526,209 @@ export_v9(struct ps_nf_exporter *exp, const struct ps_flow *flows, int count)
 }
 
 /* ------------------------------------------------------------------ */
+/* IPFIX (RFC 7011)                                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * Wire format is structurally similar to NetFlow v9 but with:
+ *  - 16-byte header (version=10, length, exportTime, sequence, domainID)
+ *  - Template Set ID = 2 (vs v9's 0)
+ *  - Data Set ID == template ID (256+, same as v9)
+ *  - No sysUpTime reference: timestamps are absolute via
+ *    flowStartMilliseconds (IE 152) / flowEndMilliseconds (IE 153).
+ *  - Counters use 64-bit (octetTotalCount IE 85 / packetTotalCount IE 86),
+ *    side-stepping the v9 32-bit wraparound that breaks at high rates.
+ *
+ * Field numbers 1-31 are shared with NetFlow v9 by IANA convention so the
+ * v4/v6 address/port/protocol/tcp_flags/tos field types stay the same.
+ */
+#define IPFIX_HEADER_LEN          16
+#define IPFIX_TEMPLATE_SET_ID     2
+#define IPFIX_TEMPLATE_ID_V4      256
+#define IPFIX_TEMPLATE_ID_V6      257
+#define IPFIX_TEMPLATE_RESEND_PKTS  20
+#define IPFIX_TEMPLATE_RESEND_SEC  300
+
+/* IPFIX-specific information elements not in the v9 set above. */
+#define IPFIX_IE_OCTET_TOTAL_COUNT     85
+#define IPFIX_IE_PACKET_TOTAL_COUNT    86
+#define IPFIX_IE_FLOW_START_MS        152
+#define IPFIX_IE_FLOW_END_MS          153
+
+static const struct nf9_template_field ipfix_v4_fields[] = {
+    { NF9_IPV4_SRC_ADDR,           4 },
+    { NF9_IPV4_DST_ADDR,           4 },
+    { NF9_L4_SRC_PORT,             2 },
+    { NF9_L4_DST_PORT,             2 },
+    { NF9_PROTOCOL,                1 },
+    { NF9_TCP_FLAGS,               1 },
+    { NF9_TOS,                     1 },
+    { IPFIX_IE_OCTET_TOTAL_COUNT,  8 },
+    { IPFIX_IE_PACKET_TOTAL_COUNT, 8 },
+    { IPFIX_IE_FLOW_START_MS,      8 },
+    { IPFIX_IE_FLOW_END_MS,        8 },
+};
+#define IPFIX_V4_NFIELDS (sizeof(ipfix_v4_fields) / sizeof(ipfix_v4_fields[0]))
+#define IPFIX_V4_REC_LEN (4+4+2+2+1+1+1+8+8+8+8)   /* 47 bytes */
+
+static const struct nf9_template_field ipfix_v6_fields[] = {
+    { NF9_IPV6_SRC_ADDR,          16 },
+    { NF9_IPV6_DST_ADDR,          16 },
+    { NF9_L4_SRC_PORT,             2 },
+    { NF9_L4_DST_PORT,             2 },
+    { NF9_PROTOCOL,                1 },
+    { NF9_TCP_FLAGS,               1 },
+    { NF9_IPV6_FLOW_LABEL,         4 },
+    { IPFIX_IE_OCTET_TOTAL_COUNT,  8 },
+    { IPFIX_IE_PACKET_TOTAL_COUNT, 8 },
+    { IPFIX_IE_FLOW_START_MS,      8 },
+    { IPFIX_IE_FLOW_END_MS,        8 },
+};
+#define IPFIX_V6_NFIELDS (sizeof(ipfix_v6_fields) / sizeof(ipfix_v6_fields[0]))
+#define IPFIX_V6_REC_LEN (16+16+2+2+1+1+4+8+8+8+8)  /* 74 bytes */
+
+static void put_u64(uint8_t *buf, int *off, uint64_t v) {
+    for (int i = 0; i < 8; i++) buf[(*off)++] = (uint8_t)((v >> (56 - 8 * i)) & 0xff);
+}
+
+static int
+write_ipfix_template(uint8_t *buf, int off,
+                     uint16_t template_id,
+                     const struct nf9_template_field *fields, int nfields) {
+    /* Set header (4) + template header (4) + fields (4 each) */
+    int set_len = 4 + 4 + nfields * 4;
+    put_u16(buf, &off, IPFIX_TEMPLATE_SET_ID);
+    put_u16(buf, &off, (uint16_t)set_len);
+    put_u16(buf, &off, template_id);
+    put_u16(buf, &off, (uint16_t)nfields);
+    for (int i = 0; i < nfields; i++) {
+        put_u16(buf, &off, fields[i].type);
+        put_u16(buf, &off, fields[i].length);
+    }
+    return off;
+}
+
+static int
+write_ipfix_v4_record(uint8_t *buf, int off, const struct ps_flow *f) {
+    put_bytes(buf, &off, f->key.src_addr, 4);
+    put_bytes(buf, &off, f->key.dst_addr, 4);
+    put_u16  (buf, &off, f->key.src_port);
+    put_u16  (buf, &off, f->key.dst_port);
+    put_u8   (buf, &off, f->key.proto);
+    put_u8   (buf, &off, f->tcp_flags[0] | f->tcp_flags[1]);
+    put_u8   (buf, &off, f->key.tos);
+    put_u64  (buf, &off, f->octets[0] + f->octets[1]);
+    put_u64  (buf, &off, f->packets[0] + f->packets[1]);
+    put_u64  (buf, &off, f->flow_start / 1000); /* usec -> ms */
+    put_u64  (buf, &off, f->flow_last  / 1000);
+    return off;
+}
+
+static int
+write_ipfix_v6_record(uint8_t *buf, int off, const struct ps_flow *f) {
+    put_bytes(buf, &off, f->key.src_addr, 16);
+    put_bytes(buf, &off, f->key.dst_addr, 16);
+    put_u16  (buf, &off, f->key.src_port);
+    put_u16  (buf, &off, f->key.dst_port);
+    put_u8   (buf, &off, f->key.proto);
+    put_u8   (buf, &off, f->tcp_flags[0] | f->tcp_flags[1]);
+    put_u32  (buf, &off, f->flow_label);
+    put_u64  (buf, &off, f->octets[0] + f->octets[1]);
+    put_u64  (buf, &off, f->packets[0] + f->packets[1]);
+    put_u64  (buf, &off, f->flow_start / 1000);
+    put_u64  (buf, &off, f->flow_last  / 1000);
+    return off;
+}
+
+static int
+export_ipfix(struct ps_nf_exporter *exp, const struct ps_flow *flows, int count) {
+    int v4_indices[NFV5_MAX_RECORDS * 32];
+    int v6_indices[NFV5_MAX_RECORDS * 32];
+    int v4_n = 0, v6_n = 0;
+    int max = (int)(sizeof(v4_indices) / sizeof(v4_indices[0]));
+    for (int i = 0; i < count && v4_n + v6_n < max; i++) {
+        if (flows[i].key.af == AF_INET)  v4_indices[v4_n++] = i;
+        else if (flows[i].key.af == AF_INET6) v6_indices[v6_n++] = i;
+    }
+
+    int packets_sent = 0;
+    int v4_sent = 0, v6_sent = 0;
+
+    while (v4_sent < v4_n || v6_sent < v6_n) {
+        uint8_t buf[NF_MAX_PACKET];
+        int off = 0;
+
+        /* Reserve header */
+        off = IPFIX_HEADER_LEN;
+
+        int send_tmpl = need_template(exp);
+        if (send_tmpl) {
+            off = write_ipfix_template(buf, off, IPFIX_TEMPLATE_ID_V4,
+                                       ipfix_v4_fields, IPFIX_V4_NFIELDS);
+            off = write_ipfix_template(buf, off, IPFIX_TEMPLATE_ID_V6,
+                                       ipfix_v6_fields, IPFIX_V6_NFIELDS);
+        }
+
+        /* v4 data set */
+        if (v4_sent < v4_n) {
+            int set_start = off;
+            put_u16(buf, &off, IPFIX_TEMPLATE_ID_V4);
+            int set_len_pos = off;
+            put_u16(buf, &off, 0); /* set length filled later */
+            int rec_start = off;
+            while (v4_sent < v4_n && off + IPFIX_V4_REC_LEN <= NF_MAX_PACKET) {
+                off = write_ipfix_v4_record(buf, off, &flows[v4_indices[v4_sent]]);
+                v4_sent++;
+            }
+            if (off == rec_start) {
+                off = set_start; /* no records fit, drop the set header */
+            } else {
+                int set_len = off - set_start;
+                buf[set_len_pos]     = (uint8_t)((set_len >> 8) & 0xff);
+                buf[set_len_pos + 1] = (uint8_t)(set_len & 0xff);
+            }
+        }
+        /* v6 data set */
+        if (v6_sent < v6_n) {
+            int set_start = off;
+            put_u16(buf, &off, IPFIX_TEMPLATE_ID_V6);
+            int set_len_pos = off;
+            put_u16(buf, &off, 0);
+            int rec_start = off;
+            while (v6_sent < v6_n && off + IPFIX_V6_REC_LEN <= NF_MAX_PACKET) {
+                off = write_ipfix_v6_record(buf, off, &flows[v6_indices[v6_sent]]);
+                v6_sent++;
+            }
+            if (off == rec_start) {
+                off = set_start;
+            } else {
+                int set_len = off - set_start;
+                buf[set_len_pos]     = (uint8_t)((set_len >> 8) & 0xff);
+                buf[set_len_pos + 1] = (uint8_t)(set_len & 0xff);
+            }
+        }
+
+        /* Backpatch header. */
+        int hdr_off = 0;
+        put_u16(buf, &hdr_off, 10);                       /* version */
+        put_u16(buf, &hdr_off, (uint16_t)off);            /* length  */
+        put_u32(buf, &hdr_off, now_sec());                /* exportTime */
+        put_u32(buf, &hdr_off, exp->flow_sequence);       /* sequence */
+        put_u32(buf, &hdr_off, exp->source_id);           /* observation domain ID */
+
+        if (send_udp(exp, buf, off) < 0) return -1;
+        packets_sent++;
+        exp->v9_pkts_since_template++;
+        if (send_tmpl) {
+            exp->v9_last_template_sec = now_sec();
+            exp->v9_pkts_since_template = 0;
+        }
+    }
+
+    exp->flow_sequence += (uint32_t)count;
+    return packets_sent;
+}
+
+/* ------------------------------------------------------------------ */
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -521,7 +736,7 @@ struct ps_nf_exporter *
 ps_nf_exporter_create(const char *collector_host, int collector_port,
                        uint32_t source_id, int version)
 {
-    if (!collector_host || (version != 5 && version != 9))
+    if (!collector_host || (version != 5 && version != 9 && version != 10))
         return NULL;
 
     struct ps_nf_exporter *exp = calloc(1, sizeof(*exp));
@@ -585,8 +800,7 @@ ps_nf_exporter_send(struct ps_nf_exporter *exp,
 {
     if (!exp || !flows || count <= 0) return 0;
 
-    if (exp->version == 5)
-        return export_v5(exp, flows, count);
-    else
-        return export_v9(exp, flows, count);
+    if (exp->version == 5)  return export_v5(exp, flows, count);
+    if (exp->version == 10) return export_ipfix(exp, flows, count);
+    return export_v9(exp, flows, count);
 }
