@@ -4,6 +4,7 @@
 #include <string.h>
 
 int ps_scan_ports_run(int argc, char **argv, const struct ps_args *opts);
+int ps_scan_udp_run  (int argc, char **argv, const struct ps_args *opts);
 
 struct scan_kind {
     const char *name;
@@ -12,7 +13,8 @@ struct scan_kind {
 };
 
 static const struct scan_kind KINDS[] = {
-    { "ports", ps_scan_ports_run, "Connect-scan a target or CIDR" },
+    { "ports", ps_scan_ports_run, "Connect-scan a target or CIDR (TCP)" },
+    { "udp",   ps_scan_udp_run,   "UDP scan a target or CIDR (protocol-aware probes)" },
     { NULL, NULL, NULL }
 };
 
