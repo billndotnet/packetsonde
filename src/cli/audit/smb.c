@@ -1,0 +1,172 @@
+#include "smb.h"
+#include "../output/output.h"
+#include "../runstate.h"
+#include "../util/fail_on.h"
+#include "finding.h"
+#include "ulid.h"
+
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
+    *port = 445;
+    const char *colon = strrchr(spec, ':');
+    size_t hl = colon ? (size_t)(colon - spec) : strlen(spec);
+    if (hl == 0 || hl >= host_sz) return -1;
+    memcpy(host, spec, hl); host[hl] = '\0';
+    if (colon) {
+        long p = strtol(colon + 1, NULL, 10);
+        if (p <= 0 || p > 65535) return -1;
+        *port = (uint16_t)p;
+    }
+    return 0;
+}
+
+static int tcp_connect(const char *host, uint16_t port, int timeout_ms,
+                       char *ip_out, size_t ip_out_sz) {
+    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
+    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (ip_out && ip_out_sz) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        inet_ntop(AF_INET, &sin->sin_addr, ip_out, (socklen_t)ip_out_sz);
+    }
+    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
+        freeaddrinfo(res); close(fd); return -1;
+    }
+    freeaddrinfo(res);
+    return fd;
+}
+
+/* SMB1 NEGOTIATE PROTOCOL packet, offering only the "NT LM 0.12" dialect.
+ *
+ * Wire format: NetBIOS session header (4B) + SMB1 header (32B) + WordCount (1B)
+ * + ByteCount (2B) + dialect string ("\x02NT LM 0.12\x00", 14B). Total 53B,
+ * NetBIOS length field carrying 0x31 (49B) for everything after the header. */
+static const unsigned char SMB1_NEGOTIATE[] = {
+    /* NetBIOS Session Service: type=session message, length=0x000031 */
+    0x00, 0x00, 0x00, 0x31,
+    /* SMB1 header */
+    0xFF, 'S', 'M', 'B',                /* Magic */
+    0x72,                                /* Command: Negotiate Protocol */
+    0x00, 0x00, 0x00, 0x00,             /* NT Status */
+    0x18,                                /* Flags */
+    0x53, 0xC8,                          /* Flags2 (LE) */
+    0x00, 0x00,                          /* PID High */
+    0,0,0,0,0,0,0,0,                     /* Signature */
+    0x00, 0x00,                          /* Reserved */
+    0x00, 0x00,                          /* TID */
+    0x2F, 0x4B,                          /* PID Low */
+    0x00, 0x00,                          /* UID */
+    0xC5, 0x5E,                          /* MID */
+    /* SMB body */
+    0x00,                                /* WordCount = 0 */
+    0x0E, 0x00,                          /* ByteCount = 14 (LE) */
+    /* Dialect: BufferFormat (0x02) + "NT LM 0.12" + NUL */
+    0x02, 'N','T',' ','L','M',' ','0','.','1','2', 0x00
+};
+
+int ps_audit_smb_run(int argc, char **argv, const struct ps_args *opts) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: packetsonde audit smb <host[:port]>\n");
+        return 2;
+    }
+    char host[256]; uint16_t port = 445;
+    if (parse_target(argv[1], host, sizeof(host), &port) != 0) {
+        fprintf(stderr, "audit smb: bad target '%s'\n", argv[1]);
+        return 2;
+    }
+
+    char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
+    char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
+
+    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
+    switch (opts->fmt) {
+        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
+        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
+        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
+        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
+        default:           oopts.fmt_force = 0;             break;
+    }
+    oopts.color = opts->no_color ? 0 : 1;
+    struct ps_output out; ps_output_init(&out, &oopts);
+
+    char ip[64] = "";
+    int fd = tcp_connect(host, port, 4000, ip, sizeof(ip));
+    if (fd < 0) {
+        fprintf(stderr, "audit smb: cannot connect to %s:%u\n", host, port);
+        ps_output_close(&out);
+        return 1;
+    }
+
+    if (send(fd, SMB1_NEGOTIATE, sizeof(SMB1_NEGOTIATE), 0) != (ssize_t)sizeof(SMB1_NEGOTIATE)) {
+        close(fd); ps_output_close(&out); return 1;
+    }
+
+    unsigned char resp[1024];
+    ssize_t n = recv(fd, resp, sizeof(resp), 0);
+    close(fd);
+
+    if (n < 5) {
+        fprintf(stderr, "audit smb: no usable response from %s:%u\n", host, port);
+        ps_output_close(&out);
+        return 1;
+    }
+
+    /* Response framing:
+     *   bytes 0..3: NetBIOS session header (type 0x00, length)
+     *   bytes 4..7: SMB magic
+     * SMB1 magic = 0xFF S M B; SMB2/3 magic = 0xFE S M B; SMB3 transform = 0xFD. */
+    int is_smb1 = (n >= 8 && resp[4] == 0xFF && resp[5] == 'S' && resp[6] == 'M' && resp[7] == 'B');
+    int is_smb2 = (n >= 8 && resp[4] == 0xFE && resp[5] == 'S' && resp[6] == 'M' && resp[7] == 'B');
+
+    /* Build the metadata finding regardless. */
+    {
+        const char *proto = is_smb1 ? "SMB1" : is_smb2 ? "SMB2/3" : "unknown";
+        char ev[256];
+        snprintf(ev, sizeof(ev),
+                 "{\"protocol\":\"%s\",\"port\":%u}", proto, port);
+        char title[160];
+        snprintf(title, sizeof(title), "SMB negotiate: %s", proto);
+        struct ps_finding f;
+        ps_finding_init(&f, run_id, "cli.audit.smb", self_host,
+                        "smb.metadata", PS_SEV_INFO, PS_CONF_CONFIRMED, title);
+        ps_finding_set_target_ip(&f, ip, port);
+        ps_finding_set_target_hostname(&f, host, port);
+        ps_finding_set_evidence_json(&f, ev);
+        ps_output_emit(&out, &f);
+    }
+
+    if (is_smb1) {
+        /* Server accepted an SMB1-only NEGOTIATE — SMB1 is enabled.
+         * SMB1 is deprecated as of Windows 10/Server 2016 (off by default
+         * since 1709) and is the WannaCry / NotPetya vector via EternalBlue. */
+        struct ps_finding f;
+        ps_finding_init(&f, run_id, "cli.audit.smb", self_host,
+                        "smb.smb1_enabled", PS_SEV_HIGH, PS_CONF_FIRM,
+                        "SMB1 protocol is enabled (EternalBlue / WannaCry surface)");
+        ps_finding_set_target_ip(&f, ip, port);
+        ps_finding_set_target_hostname(&f, host, port);
+        ps_finding_set_evidence_json(&f, "{\"dialect\":\"NT LM 0.12\"}");
+        ps_output_emit(&out, &f);
+    }
+
+    ps_output_snapshot(&out, &g_last_run_counts);
+    ps_output_close(&out);
+    return 0;
+}
