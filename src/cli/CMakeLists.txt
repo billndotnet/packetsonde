@@ -14,7 +14,11 @@ set(CLI_SOURCES
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
+    discover/hosts.c
     verbs/discover.c
+    verbs/scan.c
+    scan/ports.c
+    probe/connect.c
     output/output.c
     workers/limiter.c
     workers/workers.c
