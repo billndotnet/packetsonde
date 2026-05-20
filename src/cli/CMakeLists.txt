@@ -4,6 +4,7 @@ set(CLI_SOURCES
     dispatch.c
     verbs/version.c
     verbs/agent.c
+    output/output.c
     psctl/psctl_commands.c
     psctl/psctl_connection.c
     psctl/psctl_format.c
@@ -29,6 +30,11 @@ if(BUILD_TESTING)
     target_include_directories(test_args PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_args PRIVATE packetsonde_lib)
     add_test(NAME test_args COMMAND test_args)
+
+    add_executable(test_output tests/test_output.c output/output.c)
+    target_include_directories(test_output PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_output PRIVATE packetsonde_lib)
+    add_test(NAME test_output COMMAND test_output)
 endif()
 
 include(GNUInstallDirs)
