@@ -135,26 +135,6 @@ if(HAVE_PCAP)
     target_link_libraries(packetsonde-priv PRIVATE ${PCAP_LIBRARY})
 endif()
 
-# psctl CLI tool
-add_executable(psctl
-    src/psctl/psctl_main.c
-    src/psctl/psctl_connection.c
-    src/psctl/psctl_commands.c
-    src/psctl/psctl_shell.c
-    src/psctl/psctl_format.c
-    src/platform/unix.c
-)
-target_include_directories(psctl PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_link_libraries(psctl PRIVATE packetsonde_lib)
-target_compile_definitions(psctl PRIVATE PS_PSCTL=1)
-if(APPLE)
-    target_link_libraries(psctl PRIVATE edit)
-endif()
-
 # Tests (will be added in later tasks)
 enable_testing()
 
@@ -274,8 +254,6 @@ include(GNUInstallDirs)
 
 install(TARGETS packetsonde-agent packetsonde-priv
         RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
-install(TARGETS psctl
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(DIRECTORY DESTINATION ${SYSCONFDIR}/packetsonde)
 install(FILES conf/packetsonde.conf.default

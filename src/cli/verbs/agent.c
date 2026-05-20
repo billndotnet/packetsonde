@@ -1,9 +1,9 @@
 #include "../verbs.h"
 
-#include "psctl_commands.h"   /* from src/agent/src/psctl */
-#include "psctl_connection.h"
-#include "psctl_format.h"
-#include "psctl_shell.h"
+#include "../psctl/psctl_commands.h"
+#include "../psctl/psctl_connection.h"
+#include "../psctl/psctl_format.h"
+#include "../psctl/psctl_shell.h"
 
 #include <stdio.h>
 #include <stdlib.h>
