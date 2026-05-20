@@ -10,6 +10,7 @@ set(CLI_SOURCES
     verbs/probe.c
     registry/agents.c
     audit/tls.c
+    audit/dns.c
     probe/tcp.c
     probe/traceroute.c
     output/output.c
