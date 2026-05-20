@@ -52,6 +52,12 @@ if(BUILD_TESTING)
     target_include_directories(test_workers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_workers PRIVATE packetsonde_lib pthread)
     add_test(NAME test_workers COMMAND test_workers)
+
+    add_test(NAME test_audit_tls
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
+    set_tests_properties(test_audit_tls PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()
 
 include(GNUInstallDirs)
