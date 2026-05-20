@@ -6,6 +6,8 @@ set(CLI_SOURCES
     verbs/agent.c
     verbs/audit.c
     verbs/findings.c
+    verbs/config.c
+    registry/agents.c
     audit/tls.c
     output/output.c
     workers/limiter.c
@@ -69,6 +71,11 @@ if(BUILD_TESTING)
     target_include_directories(test_findings_filter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_findings_filter PRIVATE packetsonde_lib)
     add_test(NAME test_findings_filter COMMAND test_findings_filter)
+
+    add_executable(test_agents_registry tests/test_agents_registry.c registry/agents.c)
+    target_include_directories(test_agents_registry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_agents_registry PRIVATE packetsonde_lib)
+    add_test(NAME test_agents_registry COMMAND test_agents_registry)
 
     add_test(NAME test_audit_tls
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
