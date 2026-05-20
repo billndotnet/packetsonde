@@ -15,6 +15,7 @@ set(CLI_SOURCES
     audit/ssh.c
     audit/smb.c
     audit/telnet.c
+    audit/ftp.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
