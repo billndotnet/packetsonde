@@ -4,6 +4,9 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added
+- **`audit rdp`** — RDP exposure + NLA detection. Speaks the X.224 / TPKT handshake, sends an `RDP_NEG_REQ` advertising all four protocols (RDP / TLS / HYBRID / HYBRID_EX), parses the `RDP_NEG_RSP`. Emits `rdp.metadata` (info, with selected protocol), `rdp.exposed` (medium, posture marker), and `rdp.no_nla` (high) when the server selects plain RDP or TLS-only — the BlueKeep-class exposure where pre-auth code lives on the listener. Integration test included.
+
 ## [v1.4] — 2026-05-20
 
 ### Added
