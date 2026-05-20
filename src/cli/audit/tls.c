@@ -265,6 +265,9 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
     char run_id[PS_ULID_STRLEN + 1];
     ps_ulid_new(run_id, sizeof(run_id));
 
+    struct timeval t_start;
+    gettimeofday(&t_start, NULL);
+
     _Static_assert(PS_FMT_TEXT  == 1, "fmt mapping drift");
     _Static_assert(PS_FMT_JSON  == 2, "fmt mapping drift");
     _Static_assert(PS_FMT_JSONL == 3, "fmt mapping drift");
@@ -340,6 +343,13 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
     ps_workers_finish(&W);
     ps_workers_destroy(&W);
     ps_limiter_destroy(&L);
+
+    struct timeval t_end;
+    gettimeofday(&t_end, NULL);
+    long dt_ms = (t_end.tv_sec - t_start.tv_sec) * 1000L
+               + (t_end.tv_usec - t_start.tv_usec) / 1000L;
+    ps_output_summary(&out, run_id, dt_ms);
+
     ps_output_close(&out);
     return 0;
 }
