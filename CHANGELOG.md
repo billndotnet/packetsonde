@@ -51,8 +51,5 @@ Initial release of the CLI toolkit. Three phased plans landed:
 - `scan ports` — connect-scan with CIDR + port-list.
 - `discover hosts` — port-set host sweep.
 
-### Removed
-- UE5 3D visualization frontend (`Source/`, `Content/`, `Config/`, `assets/`, `packetsonde.uproject`, `start.sh`) and the UE-era plan docs. Archived locally; paused until toolkit maturity informs a better visualization design.
-
 ### Tags
 - `plan-1-foundation`, `plan-2-findings-and-tls`, `plan-3-verb-breadth`, `v1.0`

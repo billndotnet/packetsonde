@@ -263,15 +263,6 @@ The shape that packetsonde occupies — "Zeek + nuclei + testssl.sh stitched tog
 
 5. **Passive BGP / BMP peer.** Tag every flow with AS-path, next-hop, communities. pmacct's signature feature. Its own spec when prioritized.
 
-### Visualization
-
-The toolkit predates by some months the visualization vision in the earlier (now-archived) whitepaper. We chose to land the toolkit first because:
-
-- The data model and operational story are upstream of any rendering decisions. Designing visuals against imagined data is a known way to build something beautiful that doesn't match what you need to see.
-- Real findings against real networks will produce better design inputs than imagined ones. The `docs/specs/viz-notes.md` file is the discipline: capture observations during toolkit use that will inform the eventual redesign.
-- The toolkit is useful by itself. The visualization need not exist for the toolkit to be useful.
-
-Visualization will return as a consumer of the JSONL stream — same data the operator's pipeline already sees — when the toolkit has been used enough to know what's worth showing.
 
 ## 10. Design principles
 
@@ -299,9 +290,5 @@ The toolkit consistently makes these choices, and they're worth naming:
 - Not an IDS. No line-rate inspection, no real-time alerting framework.
 - Not a SIEM. Records go to stdout; downstream tooling is the user's choice.
 - Not a covert tool. The CLI does not implement evasion techniques.
-- Not a GUI. The CLI is the interface; visualization is deferred until the data is sufficient to inform good design.
+- Not a GUI. The CLI is the interface.
 - Not a plugin runtime in v1. New audit knowledge ships as C files; the recipe framework (v3/v4) replaces this with declarative recipes.
-
----
-
-*This whitepaper supersedes the earlier architecture whitepaper that described a 3D visualization frontend. That earlier document and the UE5 sources it accompanied are archived locally and paused; they will be revisited only after the toolkit's data and operational story are mature enough to inform a fresh visualization design.*

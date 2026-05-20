@@ -1,10 +1,10 @@
 # Visualization design notes
 
-**Purpose:** Capture observations during toolkit work that should inform the eventual visualization layer. The original whitepaper (archived locally, alongside the UE5 source) described a visualization vision from before the toolkit existed; this file accumulates evidence-based corrections.
+**Purpose:** Capture observations during toolkit work that should inform a future visualization layer. The toolkit's data and operational story land first; any visual rendering of that data is downstream of knowing what's worth showing. This file accumulates evidence — concrete moments when the right view of the data would have helped — that a later design pass can lean on.
 
 **Discipline:** When you find yourself wishing you could *see* something while using the toolkit — a relationship, a pattern, a comparison — write it down here. When you spot a query / aggregation that you ran by hand more than once, write it down. When a finding kind feels under- or over-represented in the data, write it down.
 
-**What this file is not:** a design. It's a notebook. The next visualization design will be written from this notebook (and whatever else has accumulated), not from the whitepaper.
+**What this file is not:** a design. It's a notebook. The eventual visualization design will be written from this notebook (and whatever else has accumulated), not from speculation.
 
 ---
 
