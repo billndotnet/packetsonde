@@ -2,19 +2,28 @@
 
 All notable changes to packetsonde. Format roughly follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [v1.2] — 2026-05-20
 
-### Added
+### Added — traceroute modes
 - **`probe traceroute --mode paris`** — holds the UDP flow tuple constant across every TTL probe so every hop traverses the same ECMP-balanced path.
 - **`probe traceroute --mode dublin`** — enumerates ECMP alternative paths by walking multiple Paris-style flows with different source ports (`--flow-count N`, default 8). Deduplicates hops by (ttl, addr).
+
+### Added — audit kinds
+Seven new audit kinds; `audit` verb now covers 11 services total.
+
 - **`audit smb`** — SMB1 detection via a minimal NEGOTIATE PROTOCOL request offering only the NT LM 0.12 dialect. Emits `smb.metadata` (info) and `smb.smb1_enabled` (high — EternalBlue / WannaCry surface).
 - **`audit telnet`** — Telnet exposure detection. Plaintext + deprecated; reaching the port is itself the finding. Emits `telnet.exposed` (high) with the captured banner.
 - **`audit ftp`** — FTP banner + anonymous-login probe. Emits `ftp.metadata` (info), `ftp.plaintext_exposed` (medium), and `ftp.anonymous_allowed` (high) when `USER anonymous` succeeds.
 - **`audit redis`** — Redis NOAUTH detection. Sends `INFO`; if the server replies with data (instead of `-NOAUTH`), emits `redis.noauth` (critical) and `redis.metadata` (info) with version, mode, OS extracted from the INFO payload.
-- **`findings stats [path]`** — reads JSONL findings from a file or stdin and prints aggregate counts by severity, kind, source, and host. Sorted descending. Useful for "what does today look like" review of an `--auto-append` file.
 - **`audit ntp`** — NTP service reachability (mode-3) + monlist amplification probe (mode-7 REQ_MON_GETLIST_1, CVE-2013-5211). Emits `ntp.metadata`, `ntp.monlist_amplification` (critical, with computed amplification factor), `ntp.mode7_enabled` (low) when mode-7 is present but the specific request is rejected.
 - **`audit memcached`** — sends `version\r\n` on TCP/11211. Emits `memcached.metadata` and `memcached.noauth_exposed` (critical) — memcached's text protocol has no authentication.
 - **`audit elasticsearch`** — HTTP GET `/` on port 9200, parses cluster_name + version. Emits `elasticsearch.metadata` and `elasticsearch.unauthenticated` (critical) when the cluster API is reachable without auth.
+
+### Added — findings tooling
+- **`findings stats [path]`** — reads JSONL findings from a file or stdin and prints aggregate counts by severity, kind, source, and host. Sorted descending. Useful for "what does today look like" review of an `--auto-append` file.
+
+### Tags
+- `v1.2`
 
 ## [v1.1] — 2026-05-20
 
