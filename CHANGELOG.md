@@ -12,6 +12,9 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 - **`audit ftp`** — FTP banner + anonymous-login probe. Emits `ftp.metadata` (info), `ftp.plaintext_exposed` (medium), and `ftp.anonymous_allowed` (high) when `USER anonymous` succeeds.
 - **`audit redis`** — Redis NOAUTH detection. Sends `INFO`; if the server replies with data (instead of `-NOAUTH`), emits `redis.noauth` (critical) and `redis.metadata` (info) with version, mode, OS extracted from the INFO payload.
 - **`findings stats [path]`** — reads JSONL findings from a file or stdin and prints aggregate counts by severity, kind, source, and host. Sorted descending. Useful for "what does today look like" review of an `--auto-append` file.
+- **`audit ntp`** — NTP service reachability (mode-3) + monlist amplification probe (mode-7 REQ_MON_GETLIST_1, CVE-2013-5211). Emits `ntp.metadata`, `ntp.monlist_amplification` (critical, with computed amplification factor), `ntp.mode7_enabled` (low) when mode-7 is present but the specific request is rejected.
+- **`audit memcached`** — sends `version\r\n` on TCP/11211. Emits `memcached.metadata` and `memcached.noauth_exposed` (critical) — memcached's text protocol has no authentication.
+- **`audit elasticsearch`** — HTTP GET `/` on port 9200, parses cluster_name + version. Emits `elasticsearch.metadata` and `elasticsearch.unauthenticated` (critical) when the cluster API is reachable without auth.
 
 ## [v1.1] — 2026-05-20
 
