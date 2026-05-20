@@ -4,6 +4,41 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [v1.5] — 2026-05-20
+
+### Added — audit kinds
+Three new audit kinds; `audit` verb now covers 21 services.
+
+- **`audit rdp`** — RDP exposure + NLA detection on TCP/3389. Speaks the X.224 / TPKT handshake, sends an `RDP_NEG_REQ` advertising RDP / TLS / HYBRID / HYBRID_EX, parses the `RDP_NEG_RSP`. Emits `rdp.metadata` (info), `rdp.exposed` (medium), and `rdp.no_nla` (high) when the server selects plain RDP or TLS-only — the BlueKeep-class exposure where pre-auth code lives on the listener.
+- **`audit mssql`** — Microsoft SQL Server pre-login probe on TCP/1433. TDS Pre-Login packet, parses version + encryption posture. Emits `mssql.metadata` (info), `mssql.no_encryption` (high, encryption=OFF/NOT_SUPPORTED), `mssql.old_version` (medium, major < 13 / pre-SQL Server 2016).
+- **`audit kafka`** — Kafka broker reachability + unauthenticated cluster-metadata disclosure on TCP/9092. ApiVersions v0 + Metadata v1; if the broker returns cluster metadata without SASL/ACL gating, that's the common "open kafka" exposure. Emits `kafka.metadata` (info) and `kafka.unauthenticated` (high).
+
+All three include integration tests with mock servers.
+
+### Added — `audit tls` enrichments
+- **JA3 + JA3S fingerprints** in `tls.metadata`. Captures the raw `ClientHello` and `ServerHello` via `SSL_CTX_set_msg_callback`, computes canonical fingerprint strings + MD5s, drops them into the evidence as `ja3` / `ja3_str` / `ja3s` / `ja3s_str`. GREASE values (RFC 8701) stripped so fingerprints are stable across probes. JA3 lets defenders recognise packetsonde traffic; JA3S groups hosts by TLS-stack fingerprint behind LBs / WAFs / CDNs.
+
+### Added — agent discovery
+End-to-end zero-listener discovery for `packetsonded` instances on remote subnets. Companion brainstorm at `docs/specs/agent-discovery-brainstorm.md`.
+
+- **`src/lib/discovery.{h,c}`** — 144-byte signed probe / 136-byte signed reply wire format (reply strictly < probe = no amplification). Ed25519 sign/verify via OpenSSL, bounded replay LRU (4096 entries, `(pubkey,nonce)` keyed).
+- **`src/lib/keystore.{h,c}`** — Ed25519 keypair generate/save/load, SHA-256 fingerprint helper. Raw 32-byte pub + 32-byte seed on disk (seed mode 0600).
+- **`packetsonde key {generate,list,fingerprint,revoke}`** — CLI key management. Keys live under `$PS_KEY_DIR` (defaults to `$XDG_CONFIG_HOME/packetsonde/keys`). Revocation prints the line the operator pastes into agents.
+- **`packetsonde discover agents <cidr|broadcast>`** — signed broadcast probe + listen window; emits `discovery.agent` (info) per validated reply with `agent_pub_fingerprint`, `listen_ip`, `listen_port` in evidence. CLI flags: `--wait`, `--key`, `--max-skew`, `--cover-port`. Bad signatures, expired timestamps, replays, and unauthorized pubkeys are silent drops.
+- **`packetsonded` discovery_listener module** — pcap consumer inspects every captured broadcast packet for the PSDP magic, validates probe, replies via plain DGRAM unicast back to the probe's source IP:port. No listening socket is ever bound — the agent is invisible to port scans. Env config: `PS_DISCOVERY_ENABLED`, `PS_KEY_DIR`, `PS_DISCOVERY_AGENT_KEY`, `PS_DISCOVERY_AUTHORIZED_DIR`, `PS_DISCOVERY_LISTEN_IP`, `PS_DISCOVERY_LISTEN_PORT`, `PS_DISCOVERY_MAX_SKEW_MS_CAP`. Default off; operator opts in.
+
+### Added — flow export compatibility
+NetFlow exporter brought up to maximum-compatibility for off-the-shelf collectors (Kentik, nfdump/nfcapd, ntopng, Logstash, Elastic, Splunk Stream, Wireshark).
+
+- **NetFlow v9 templates** now include `FIRST_SWITCHED(22)` + `LAST_SWITCHED(21)` — collectors get true flow start/end times instead of falling back to packet arrival time.
+- **IPFIX (RFC 7011) export** added as a third supported version (`version = 10`). 16-byte header with absolute `exportTime`, Template Set ID 2, 64-bit `octetTotalCount`(85) / `packetTotalCount`(86) (no 32-bit wrap at high rates), `flowStartMilliseconds`(152) / `flowEndMilliseconds`(153) as absolute uint64 ms since epoch. Field IDs 1-31 share IANA numbers with NetFlow v9 so dual-protocol collectors see consistent semantics.
+- **Operator-configurable export target** via env: `PS_NETFLOW_COLLECTOR` (`host[:port]`, default `127.0.0.1:2055`), `PS_NETFLOW_VERSION` (`5|9|10`, default 9), `PS_NETFLOW_SOURCE_ID`.
+
+sFlow is intentionally not implemented — sample-based protocol mismatches our aggregate-flow data model.
+
+### Tags
+- `v1.5`
+
 ## [v1.4] — 2026-05-20
 
 ### Added

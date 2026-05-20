@@ -33,6 +33,9 @@ extern const struct ps_audit_module *ps_audit_ldap_module(void);
 extern const struct ps_audit_module *ps_audit_imap_module(void);
 extern const struct ps_audit_module *ps_audit_pop3_module(void);
 extern const struct ps_audit_module *ps_audit_snmp_module(void);
+extern const struct ps_audit_module *ps_audit_rdp_module(void);
+extern const struct ps_audit_module *ps_audit_mssql_module(void);
+extern const struct ps_audit_module *ps_audit_kafka_module(void);
 
 static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_tls_module,
@@ -53,6 +56,9 @@ static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_imap_module,
     ps_audit_pop3_module,
     ps_audit_snmp_module,
+    ps_audit_rdp_module,
+    ps_audit_mssql_module,
+    ps_audit_kafka_module,
     NULL
 };
 
