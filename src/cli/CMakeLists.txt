@@ -32,6 +32,7 @@ set(CLI_SOURCES
     verbs/discover.c
     verbs/scan.c
     scan/ports.c
+    scan/udp.c
     probe/connect.c
     output/output.c
     workers/limiter.c
