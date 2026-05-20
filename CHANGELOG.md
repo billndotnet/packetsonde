@@ -5,6 +5,8 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 ## [Unreleased]
 
 ### Added
+- **`audit kafka`** — Kafka broker reachability + unauthenticated cluster-metadata disclosure on TCP/9092. Speaks just enough of the Kafka wire protocol to send an `ApiVersions` v0 request and a `Metadata` v1 request. Emits `kafka.metadata` (info, with broker + topic counts) and `kafka.unauthenticated` (high) when the broker returns cluster metadata without SASL or ACL gating — the common "open kafka" exposure. Integration test included.
+- **`audit mssql`** — Microsoft SQL Server pre-login probe on TCP/1433. Builds a TDS Pre-Login packet, parses the version + encryption posture out of the response option table. Emits `mssql.metadata` (info, with version components), `mssql.no_encryption` (high, when encryption is OFF or NOT_SUPPORTED), and `mssql.old_version` (medium, when major < 13 / pre-SQL Server 2016). Integration test included.
 - **`audit rdp`** — RDP exposure + NLA detection. Speaks the X.224 / TPKT handshake, sends an `RDP_NEG_REQ` advertising all four protocols (RDP / TLS / HYBRID / HYBRID_EX), parses the `RDP_NEG_RSP`. Emits `rdp.metadata` (info, with selected protocol), `rdp.exposed` (medium, posture marker), and `rdp.no_nla` (high) when the server selects plain RDP or TLS-only — the BlueKeep-class exposure where pre-auth code lives on the listener. Integration test included.
 
 ## [v1.4] — 2026-05-20
