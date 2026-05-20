@@ -10,6 +10,7 @@ set(CLI_SOURCES
     workers/limiter.c
     workers/workers.c
     signals.c
+    util/targets.c
     psctl/psctl_commands.c
     psctl/psctl_connection.c
     psctl/psctl_format.c
@@ -52,6 +53,11 @@ if(BUILD_TESTING)
     target_include_directories(test_workers PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(test_workers PRIVATE packetsonde_lib pthread)
     add_test(NAME test_workers COMMAND test_workers)
+
+    add_executable(test_targets tests/test_targets.c util/targets.c)
+    target_include_directories(test_targets PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test_targets PRIVATE packetsonde_lib)
+    add_test(NAME test_targets COMMAND test_targets)
 
     add_test(NAME test_audit_tls
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
