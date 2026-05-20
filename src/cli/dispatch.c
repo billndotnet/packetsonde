@@ -8,10 +8,12 @@ int  ps_verb_agent_run   (int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_audit_run   (int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_findings_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_config_run  (int argc, char **argv, const struct ps_args *opts);
+int  ps_verb_probe_run   (int argc, char **argv, const struct ps_args *opts);
 
 static const struct ps_verb VERBS[] = {
     { "version",  ps_verb_version_run,  "Show packetsonde version" },
     { "audit",    ps_verb_audit_run,    "Run a security audit (tls, ...)" },
+    { "probe",    ps_verb_probe_run,    "Single-target probe (tcp, traceroute)" },
     { "findings", ps_verb_findings_run, "Tail / filter JSONL finding records" },
     { "config",   ps_verb_config_run,   "Show resolved configuration" },
     { "agent",    ps_verb_agent_run,    "Control / query the local agent" },
