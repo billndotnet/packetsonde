@@ -226,6 +226,16 @@ target_include_directories(test_discovery_listener PRIVATE
 target_link_libraries(test_discovery_listener PRIVATE packetsonde_lib)
 add_test(NAME test_discovery_listener COMMAND test_discovery_listener)
 
+# Test: NetFlow / IPFIX exporter wire format
+add_executable(test_netflow_export
+    tests/test_netflow_export.c
+    src/netflow_export.c
+)
+target_include_directories(test_netflow_export PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_netflow_export PRIVATE packetsonde_lib)
+add_test(NAME test_netflow_export COMMAND test_netflow_export)
+
 # Test: flow tracker (synthetic packets — no pcap or network needed)
 add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
 target_include_directories(test_flow_tracker PRIVATE
