@@ -1,10 +1,5 @@
-#include "tls.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../signals.h"
-#include "../util/fail_on.h"
-#include "../workers/workers.h"
-#include "../workers/limiter.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -117,7 +112,7 @@ static int do_handshake(const char *host, uint16_t port,
 }
 
 struct emit_ctx {
-    struct ps_output *out;
+    const struct ps_audit_api *api;
     const char       *run_id;
     const char       *self_host;
     const char       *target_host;
@@ -135,7 +130,7 @@ static void emit(struct emit_ctx *e,
     if (e->target_host && e->target_host[0])
         ps_finding_set_target_hostname(&f, e->target_host, e->target_port);
     if (evidence_json) ps_finding_set_evidence_json(&f, evidence_json);
-    ps_output_emit(e->out, &f);
+    e->api->emit(&f);
 }
 
 static void check_protocol(struct emit_ctx *e, const char *target_host) {
@@ -406,7 +401,10 @@ static void check_certificate(struct emit_ctx *e, const char *target_host) {
     tls_result_free(&r);
 }
 
-int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
+static int tls_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit tls <host:port>\n");
         return 2;
@@ -439,84 +437,45 @@ int ps_audit_tls_run(int argc, char **argv, const struct ps_args *opts) {
     _Static_assert(PS_FMT_JSONL == 3, "fmt mapping drift");
     _Static_assert(PS_FMT_QUIET == 4, "fmt mapping drift");
 
-    struct ps_output_opts oopts;
-    memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-
-    char append_path[512] = "";
-    if (opts->auto_append) {
-        const char *base = getenv("XDG_STATE_HOME");
-        char default_base[400];
-        if (!base || !base[0]) {
-            const char *home = getenv("HOME");
-            if (home && home[0]) {
-                snprintf(default_base, sizeof(default_base), "%s/.local/state", home);
-                base = default_base;
-            } else {
-                base = "/tmp";
-            }
-        }
-        char dir[450];
-        snprintf(dir, sizeof(dir), "%s/packetsonde", base);
-        mkdir(base, 0755);
-        mkdir(dir,  0755);
-        struct timeval tv; gettimeofday(&tv, NULL);
-        struct tm tm; gmtime_r(&tv.tv_sec, &tm);
-        snprintf(append_path, sizeof(append_path),
-                 "%s/findings-%04d-%02d-%02d.jsonl",
-                 dir, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
-    }
-    oopts.auto_append_path = append_path[0] ? append_path : NULL;
-
-    struct ps_output out;
-    ps_output_init(&out, &oopts);
-
-    struct ps_limiter L;
-    int rate = opts->rate_pps > 0 ? opts->rate_pps : 100;
-    ps_limiter_init(&L, rate);
-
-    struct ps_workers W;
-    int concur = opts->concurrency > 0 ? opts->concurrency : 16;
-    ps_workers_init(&W, concur, &L);
-    ps_signals_install(&W);
+    /* Note: the worker pool / rate limiter previously held in this audit
+     * has been removed. Under the plugin ABI, cancellation comes from the
+     * dispatcher via api->cancelled(); rate limiting against a single
+     * target is the dispatcher's concern. */
+    (void)opts;
 
     char ip[64] = "";
     int probe_fd = tcp_connect(target_host, target_port, 4000, ip, sizeof(ip));
     if (probe_fd < 0) {
         fprintf(stderr, "packetsonde audit tls: cannot connect to %s:%u\n", target_host, target_port);
-        ps_workers_finish(&W); ps_workers_destroy(&W);
-        ps_limiter_destroy(&L); ps_output_close(&out);
         return 1;
     }
     close(probe_fd);
 
     struct emit_ctx e;
     memset(&e, 0, sizeof(e));
-    e.out = &out; e.run_id = run_id; e.self_host = self_host;
+    e.api = api; e.run_id = run_id; e.self_host = self_host;
     e.target_host = target_host; e.target_ip = ip; e.target_port = target_port;
 
-    if (!ps_workers_cancelled(&W)) check_protocol   (&e, target_host);
-    if (!ps_workers_cancelled(&W)) check_ciphers    (&e, target_host);
-    if (!ps_workers_cancelled(&W)) check_certificate(&e, target_host);
-
-    ps_workers_finish(&W);
-    ps_workers_destroy(&W);
-    ps_limiter_destroy(&L);
+    if (!api->cancelled()) check_protocol   (&e, target_host);
+    if (!api->cancelled()) check_ciphers    (&e, target_host);
+    if (!api->cancelled()) check_certificate(&e, target_host);
 
     struct timeval t_end;
     gettimeofday(&t_end, NULL);
     long dt_ms = (t_end.tv_sec - t_start.tv_sec) * 1000L
                + (t_end.tv_usec - t_start.tv_usec) / 1000L;
-    ps_output_summary(&out, run_id, dt_ms);
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
+    (void)dt_ms;
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "tls",
+    .summary     = "Audit TLS server: protocol, cipher, cert hygiene",
+    .run         = tls_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_tls_module(void) { return &MODULE; }

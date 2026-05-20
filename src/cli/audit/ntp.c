@@ -1,7 +1,5 @@
-#include "ntp.h"
-#include "../output/output.h"
-#include "../runstate.h"
-#include "../util/fail_on.h"
+#include "audit_module.h"
+#include "../args.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -79,7 +77,10 @@ static int udp_query(const char *host, uint16_t port,
     return (int)n;
 }
 
-int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
+static int ntp_run(int argc, char **argv,
+                      const struct ps_args *opts,
+                      const struct ps_audit_api *api) {
+    (void)opts;
     if (argc < 2) {
         fprintf(stderr, "Usage: packetsonde audit ntp <host[:port]>\n");
         return 2;
@@ -93,17 +94,6 @@ int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
-    switch (opts->fmt) {
-        case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
-        case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
-        case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
-        case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
-        default:           oopts.fmt_force = 0;             break;
-    }
-    oopts.color = opts->no_color ? 0 : 1;
-    struct ps_output out; ps_output_init(&out, &oopts);
-
     char ip[64] = "";
     unsigned char resp[2048];
 
@@ -111,9 +101,7 @@ int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
     int n = udp_query(host, port, NTP_CLIENT_QUERY, sizeof(NTP_CLIENT_QUERY),
                       resp, sizeof(resp), 2500, ip, sizeof(ip));
     if (n < 48) {
-        fprintf(stderr, "audit ntp: no NTP response from %s:%u\n", host, port);
-        ps_output_close(&out);
-        return 1;
+        fprintf(stderr, "audit ntp: no NTP response from %s:%u\n", host, port); return 1;
     }
 
     /* Metadata finding — NTP service reachable. */
@@ -129,7 +117,7 @@ int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
         ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
+        api->emit(&f);
     }
 
     /* Mode 7 monlist probe. CVE-2013-5211: ntpd before 4.2.7p26 responded
@@ -157,7 +145,7 @@ int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
             ps_finding_set_target_ip(&f, ip, port);
             ps_finding_set_target_hostname(&f, host, port);
             ps_finding_set_evidence_json(&f, ev2);
-            ps_output_emit(&out, &f);
+            api->emit(&f);
         } else if ((rmvn & 0x07) == 7) {
             /* Mode 7 enabled but request rejected — still a small information
              * leak about software identity. */
@@ -168,11 +156,20 @@ int ps_audit_ntp_run(int argc, char **argv, const struct ps_args *opts) {
             ps_finding_set_target_ip(&f, ip, port);
             ps_finding_set_target_hostname(&f, host, port);
             ps_finding_set_evidence_json(&f, "{\"mode7\":true}");
-            ps_output_emit(&out, &f);
+            api->emit(&f);
         }
     }
-
-    ps_output_snapshot(&out, &g_last_run_counts);
-    ps_output_close(&out);
     return 0;
 }
+
+static const struct ps_audit_module MODULE = {
+    .abi_version = PS_AUDIT_ABI_VERSION,
+    .name        = "ntp",
+    .summary     = "Audit NTP: monlist amplification, mode-7 leak",
+    .run         = ntp_run,
+};
+
+#ifdef PS_AUDIT_PLUGIN_BUILD
+const struct ps_audit_module *ps_audit_module(void) { return &MODULE; }
+#endif
+const struct ps_audit_module *ps_audit_ntp_module(void) { return &MODULE; }

@@ -14,7 +14,9 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
     - [Trunk probe](docs/guides/trunk-probe.md) — dot1q-attached, multi-VLAN visibility behind ACLs
     - [Service-dependency test point](docs/guides/service-dependency.md) — continuous validation that a host can reach its dependencies
     - [Passive bridge appliance](docs/guides/bridge-appliance.md) — small in-line device with wifi management
+- **Extending** — [Writing audit plugins](docs/guides/writing-audit-plugins.md): single-file C plugins discovered via `dlopen` at runtime; ship custom audits without recompiling `packetsonde`. Example: `examples/audit-plugin/audit-vnc.c`.
 - [Design spec](docs/specs/2026-05-18-packetsonde-cli-design.md) — finding wire format, verb grammar, defaults, follow-ons
+- [Whitepaper](docs/specs/whitepaper.md) — the project's architecture and principles
 - [Agent network protocol brainstorm](docs/specs/agent-network-protocol-brainstorm.md) — open design questions for the `--via <agent>` work
 - [Visualization notes](docs/specs/viz-notes.md) — discipline file for the deferred viz redesign
 
@@ -24,11 +26,12 @@ v1.1.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp` (monlist), `memcached`, `elasticsearch` |
+| `audit`    | `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
+| `report`   | Generate a Markdown engagement report from JSONL findings |
 | `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
 | `version`, `help` | Standard |
