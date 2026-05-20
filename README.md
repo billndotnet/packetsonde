@@ -26,7 +26,7 @@ v1.4.
 
 | Verb       | What it does |
 |-----------:|---|
-| `audit`    | 18 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp` |
+| `audit`    | 19 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp`, `rdp` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
