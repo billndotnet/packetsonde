@@ -64,8 +64,6 @@ endif()
 
 set(AGENT_CORE_SOURCES
     src/config.c
-    src/log.c
-    src/json.c
     src/module.c
     src/host_table.c
     src/ipc_server.c
@@ -107,6 +105,7 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-agent PRIVATE ${PCAP_INCLUDE_DIR})
@@ -123,12 +122,13 @@ if(HAVE_HIREDIS)
 endif()
 
 # Priv worker binary
-add_executable(packetsonde-priv src/priv_worker.c src/log.c src/platform/unix.c)
+add_executable(packetsonde-priv src/priv_worker.c src/platform/unix.c)
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-priv PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-priv PRIVATE ${PCAP_INCLUDE_DIR})
@@ -142,8 +142,6 @@ add_executable(psctl
     src/psctl/psctl_commands.c
     src/psctl/psctl_shell.c
     src/psctl/psctl_format.c
-    src/json.c
-    src/log.c
     src/platform/unix.c
 )
 target_include_directories(psctl PRIVATE
@@ -151,6 +149,7 @@ target_include_directories(psctl PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(psctl PRIVATE packetsonde_lib)
 target_compile_definitions(psctl PRIVATE PS_PSCTL=1)
 if(APPLE)
     target_link_libraries(psctl PRIVATE edit)
@@ -178,85 +177,96 @@ target_include_directories(test_config PRIVATE
 add_test(NAME test_config COMMAND test_config)
 
 # Test: IPC framing
-add_executable(test_ipc_framing tests/test_ipc_framing.c src/ipc_server.c src/log.c)
+add_executable(test_ipc_framing tests/test_ipc_framing.c src/ipc_server.c)
 target_include_directories(test_ipc_framing PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(test_ipc_framing PRIVATE packetsonde_lib)
 add_test(NAME test_ipc_framing COMMAND test_ipc_framing)
 
-add_executable(test_module_registry tests/test_module_registry.c src/module.c src/log.c)
+add_executable(test_module_registry tests/test_module_registry.c src/module.c)
 target_include_directories(test_module_registry PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(test_module_registry PRIVATE packetsonde_lib)
 add_test(NAME test_module_registry COMMAND test_module_registry)
 
 # Test: ICMP traceroute module (includes .c directly — no root or network needed)
-add_executable(test_icmp_traceroute tests/test_icmp_traceroute.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_icmp_traceroute tests/test_icmp_traceroute.c src/platform/unix.c)
 target_include_directories(test_icmp_traceroute PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(test_icmp_traceroute PRIVATE packetsonde_lib)
 target_compile_definitions(test_icmp_traceroute PRIVATE PS_TESTING=1)
 add_test(NAME test_icmp_traceroute COMMAND test_icmp_traceroute)
 
 # Test: TCP traceroute module (includes .c directly — no root or network needed)
-add_executable(test_tcp_traceroute tests/test_tcp_traceroute.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_tcp_traceroute tests/test_tcp_traceroute.c src/platform/unix.c)
 target_include_directories(test_tcp_traceroute PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_tcp_traceroute PRIVATE packetsonde_lib)
 target_compile_definitions(test_tcp_traceroute PRIVATE PS_TESTING=1)
 add_test(NAME test_tcp_traceroute COMMAND test_tcp_traceroute)
 
 # Test: UDP traceroute module (includes .c directly — no root or network needed)
-add_executable(test_udp_traceroute tests/test_udp_traceroute.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_udp_traceroute tests/test_udp_traceroute.c src/platform/unix.c)
 target_include_directories(test_udp_traceroute PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_udp_traceroute PRIVATE packetsonde_lib)
 target_compile_definitions(test_udp_traceroute PRIVATE PS_TESTING=1)
 add_test(NAME test_udp_traceroute COMMAND test_udp_traceroute)
 
 # Test: TCP probe module (includes .c directly — no root or network needed)
-add_executable(test_tcp_probe tests/test_tcp_probe.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_tcp_probe tests/test_tcp_probe.c src/platform/unix.c)
 target_include_directories(test_tcp_probe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_tcp_probe PRIVATE packetsonde_lib)
 target_compile_definitions(test_tcp_probe PRIVATE PS_TCP_PROBE_TESTING=1)
 add_test(NAME test_tcp_probe COMMAND test_tcp_probe)
 
 # Test: UDP probe module (includes .c directly — no network needed)
-add_executable(test_udp_probe tests/test_udp_probe.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_udp_probe tests/test_udp_probe.c src/platform/unix.c)
 target_include_directories(test_udp_probe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_udp_probe PRIVATE packetsonde_lib)
 target_compile_definitions(test_udp_probe PRIVATE PS_UDP_PROBE_TESTING=1)
 add_test(NAME test_udp_probe COMMAND test_udp_probe)
 
 # Test: flow tracker (synthetic packets — no pcap or network needed)
-add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/log.c src/platform/unix.c)
+add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
 target_include_directories(test_flow_tracker PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_flow_tracker PRIVATE packetsonde_lib)
 add_test(NAME test_flow_tracker COMMAND test_flow_tracker)
 
 # Test: neighbor listener (synthetic Ethernet frames — no pcap or network needed)
-add_executable(test_neighbor_listener tests/test_neighbor_listener.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_neighbor_listener tests/test_neighbor_listener.c src/platform/unix.c)
 target_include_directories(test_neighbor_listener PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_neighbor_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_neighbor_listener PRIVATE PS_NEIGHBOR_LISTENER_TESTING=1)
 add_test(NAME test_neighbor_listener COMMAND test_neighbor_listener)
 
 # Test: DNS listener (synthetic Ethernet+IP+UDP+DNS frames — no pcap or network needed)
-add_executable(test_dns_listener tests/test_dns_listener.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_dns_listener tests/test_dns_listener.c src/platform/unix.c)
 target_include_directories(test_dns_listener PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_dns_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_dns_listener PRIVATE PS_DNS_LISTENER_TESTING=1)
 add_test(NAME test_dns_listener COMMAND test_dns_listener)
 
 # Test: honeypot listener (config parser + socket lifecycle + JSON events — no pcap or Redis needed)
-add_executable(test_honeypot_listener tests/test_honeypot_listener.c src/json.c src/log.c src/platform/unix.c)
+add_executable(test_honeypot_listener tests/test_honeypot_listener.c src/platform/unix.c)
 target_include_directories(test_honeypot_listener PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_honeypot_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_honeypot_listener PRIVATE PS_HONEYPOT_LISTENER_TESTING=1)
 add_test(NAME test_honeypot_listener COMMAND test_honeypot_listener)
 
