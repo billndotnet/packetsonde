@@ -42,7 +42,7 @@ static void make_finding(struct ps_finding *f) {
 static void test_jsonl_format(void) {
     struct ps_finding f; make_finding(&f);
     char buf[2048];
-    capture_to_buf(PS_FMT_JSONL, 0, &f, buf, sizeof(buf));
+    capture_to_buf(PS_OFMT_JSONL, 0, &f, buf, sizeof(buf));
     assert(strstr(buf, "\"kind\":\"tls.weak_protocol\""));
     size_t L = strlen(buf);
     assert(L > 0 && buf[L - 1] == '\n');
@@ -51,7 +51,7 @@ static void test_jsonl_format(void) {
 static void test_text_format_no_color(void) {
     struct ps_finding f; make_finding(&f);
     char buf[1024];
-    capture_to_buf(PS_FMT_TEXT, 0, &f, buf, sizeof(buf));
+    capture_to_buf(PS_OFMT_TEXT, 0, &f, buf, sizeof(buf));
     assert(strstr(buf, "tls.weak_protocol"));
     assert(strstr(buf, "10.0.0.42:443"));
     assert(strstr(buf, "TLS 1.0"));
@@ -61,14 +61,14 @@ static void test_text_format_no_color(void) {
 static void test_text_format_with_color(void) {
     struct ps_finding f; make_finding(&f);
     char buf[1024];
-    capture_to_buf(PS_FMT_TEXT, 1, &f, buf, sizeof(buf));
+    capture_to_buf(PS_OFMT_TEXT, 1, &f, buf, sizeof(buf));
     assert(strstr(buf, "\x1b[") != NULL);
 }
 
 static void test_quiet_format(void) {
     struct ps_finding f; make_finding(&f);
     char buf[1024];
-    capture_to_buf(PS_FMT_QUIET, 0, &f, buf, sizeof(buf));
+    capture_to_buf(PS_OFMT_QUIET, 0, &f, buf, sizeof(buf));
     assert(strstr(buf, "high\ttls.weak_protocol"));
     assert(strstr(buf, "\t10.0.0.42:443\t"));
 }

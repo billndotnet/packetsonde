@@ -5,12 +5,12 @@
 #include <pthread.h>
 #include <stdio.h>
 
-enum {
-    PS_FMT_OUT_AUTO  = 0,
-    PS_FMT_TEXT      = 1,
-    PS_FMT_JSON      = 2,
-    PS_FMT_JSONL     = 3,
-    PS_FMT_QUIET     = 4
+enum ps_out_fmt {
+    PS_OFMT_AUTO  = 0,
+    PS_OFMT_TEXT  = 1,
+    PS_OFMT_JSON  = 2,
+    PS_OFMT_JSONL = 3,
+    PS_OFMT_QUIET = 4
 };
 
 struct ps_output_opts {

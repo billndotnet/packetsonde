@@ -30,9 +30,9 @@ int ps_output_init(struct ps_output *o, const struct ps_output_opts *opts) {
     if (opts->fmt_force) {
         o->fmt = opts->fmt_force;
     } else {
-        o->fmt = is_tty ? PS_FMT_TEXT : PS_FMT_JSONL;
+        o->fmt = is_tty ? PS_OFMT_TEXT : PS_OFMT_JSONL;
     }
-    o->color = opts->color && (o->fmt == PS_FMT_TEXT) && is_tty;
+    o->color = opts->color && (o->fmt == PS_OFMT_TEXT) && is_tty;
 
     if (getenv("NO_COLOR")) o->color = 0;
 
@@ -77,16 +77,16 @@ void ps_output_emit(struct ps_output *o, const struct ps_finding *f) {
     int jn = -1;
 
     int need_jsonl = (o->append_fd >= 0) ||
-                     (o->fmt == PS_FMT_JSON || o->fmt == PS_FMT_JSONL);
-    int need_text  = (o->fmt == PS_FMT_TEXT  || o->fmt == PS_FMT_OUT_AUTO);
-    int need_quiet = (o->fmt == PS_FMT_QUIET);
+                     (o->fmt == PS_OFMT_JSON || o->fmt == PS_OFMT_JSONL);
+    int need_text  = (o->fmt == PS_OFMT_TEXT  || o->fmt == PS_OFMT_AUTO);
+    int need_quiet = (o->fmt == PS_OFMT_QUIET);
 
     if (need_jsonl) jn = render_jsonl(f, jsonl_buf, sizeof(jsonl_buf));
     if (need_text)  tn = render_text (f, o->color, text_buf, sizeof(text_buf));
     if (need_quiet) tn = render_quiet(f, text_buf, sizeof(text_buf));
 
     pthread_mutex_lock(&o->lock);
-    if (o->fmt == PS_FMT_TEXT || o->fmt == PS_FMT_QUIET || o->fmt == PS_FMT_OUT_AUTO) {
+    if (o->fmt == PS_OFMT_TEXT || o->fmt == PS_OFMT_QUIET || o->fmt == PS_OFMT_AUTO) {
         if (tn > 0) write_all(o->stdout_fd, text_buf, (size_t)tn);
     } else {
         if (jn > 0) write_all(o->stdout_fd, jsonl_buf, (size_t)jn);
