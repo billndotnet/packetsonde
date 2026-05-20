@@ -1,6 +1,6 @@
 # Visualization design notes
 
-**Purpose:** Capture observations during toolkit work that should inform the eventual visualization layer. The whitepaper at `docs/specs/whitepaper.md` describes a visualization vision from before the toolkit existed; this file accumulates evidence-based corrections.
+**Purpose:** Capture observations during toolkit work that should inform the eventual visualization layer. The original whitepaper (archived locally, alongside the UE5 source) described a visualization vision from before the toolkit existed; this file accumulates evidence-based corrections.
 
 **Discipline:** When you find yourself wishing you could *see* something while using the toolkit — a relationship, a pattern, a comparison — write it down here. When you spot a query / aggregation that you ran by hand more than once, write it down. When a finding kind feels under- or over-represented in the data, write it down.
 
