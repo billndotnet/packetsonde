@@ -22,7 +22,7 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 
 ## Status
 
-v1.1.
+v1.4.
 
 | Verb       | What it does |
 |-----------:|---|
