@@ -7,8 +7,10 @@ set(CLI_SOURCES
     verbs/audit.c
     verbs/findings.c
     verbs/config.c
+    verbs/probe.c
     registry/agents.c
     audit/tls.c
+    probe/tcp.c
     output/output.c
     workers/limiter.c
     workers/workers.c
