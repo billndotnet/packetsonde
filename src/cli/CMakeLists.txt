@@ -9,6 +9,7 @@ set(CLI_SOURCES
     verbs/config.c
     verbs/probe.c
     verbs/report.c
+    audit_loader.c
     registry/agents.c
     audit/tls.c
     audit/dns.c
@@ -61,6 +62,11 @@ find_package(OpenSSL REQUIRED)
 target_link_libraries(packetsonde PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 if(APPLE)
     target_link_libraries(packetsonde PRIVATE edit)
+endif()
+# dlopen / dlsym for the audit plugin loader. macOS has it in libSystem;
+# Linux needs explicit -ldl.
+if(NOT APPLE)
+    target_link_libraries(packetsonde PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(BUILD_TESTING)
@@ -116,3 +122,39 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS packetsonde RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# ---- Audit modules built as loadable plugins ----
+#
+# Each plugin compiles the same audit source as a MODULE library and exports
+# ps_audit_module(). The CLI's plugin loader scans for these at runtime
+# (PS_AUDITS_DIR override, XDG config, build-tree default, /usr/[local/]lib).
+# Plugins are emitted into ${CMAKE_BINARY_DIR}/src/cli/audit/ where the CLI's
+# build-tree default search path picks them up during development.
+#
+# Audits still living in CLI_SOURCES above are statically linked into the
+# binary too; the loader dedupes by name (first-loaded wins) so a developer
+# can shadow a built-in by dropping a .dylib into the search path.
+
+set(_audit_plugin_dir ${CMAKE_BINARY_DIR}/src/cli/audit)
+
+function(ps_add_audit_plugin name)
+    add_library(audit-${name} MODULE audit/${name}.c)
+    target_include_directories(audit-${name} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
+    )
+    target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
+    set_target_properties(audit-${name} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${_audit_plugin_dir}
+        PREFIX ""
+        OUTPUT_NAME "audit-${name}"
+    )
+    if(APPLE)
+        set_target_properties(audit-${name} PROPERTIES SUFFIX ".dylib")
+    endif()
+endfunction()
+
+# Plugins available so far. As more audits convert to the new ABI, add
+# them here. Static link into packetsonde stays during the transition
+# period; loader dedupes.
+ps_add_audit_plugin(telnet)
