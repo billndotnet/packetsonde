@@ -9,6 +9,7 @@ set(CLI_SOURCES
     verbs/config.c
     verbs/probe.c
     verbs/report.c
+    verbs/key.c
     audit_loader.c
     registry/agents.c
     audit/tls.c
