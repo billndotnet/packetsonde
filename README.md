@@ -22,13 +22,14 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 
 ## Status
 
-v1.4.
+v1.5.
 
 | Verb       | What it does |
 |-----------:|---|
 | `audit`    | 21 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp`, `rdp`, `mssql`, `kafka` |
 | `scan`     | `ports` — connect-scan a target or CIDR |
-| `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep of a CIDR) |
+| `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep), `agents` (signed broadcast for remote packetsonded) |
+| `key`      | `generate` / `list` / `fingerprint` / `revoke` — Ed25519 key management for discovery + future `--via` |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
