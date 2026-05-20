@@ -1,16 +1,6 @@
 # Build outputs
-agent/build/
-agent/.cache/
+build/
 *.dSYM/
-
-# UE5 project artifacts (if/when we add a uproject)
-Binaries/
-Intermediate/
-DerivedDataCache/
-Saved/
-*.sln
-*.xcodeproj/
-*.workspace/
 
 # OS
 .DS_Store
@@ -21,4 +11,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
-build/
+
+# Agent harness / per-user state (not project)
+.claude/
+.cache/
