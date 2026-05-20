@@ -36,7 +36,8 @@ void ps_args_usage(const char *prog) {
 enum {
     OPT_TEXT = 1000, OPT_JSON, OPT_JSONL, OPT_QUIET,
     OPT_NO_COLOR, OPT_AUTO_APPEND,
-    OPT_VIA, OPT_CONCURRENCY, OPT_RATE, OPT_SOCKET, OPT_CONFIG
+    OPT_VIA, OPT_CONCURRENCY, OPT_RATE, OPT_SOCKET, OPT_CONFIG,
+    OPT_FAIL_ON
 };
 
 int ps_args_parse(int argc, char **argv, struct ps_args *out) {
@@ -56,6 +57,7 @@ int ps_args_parse(int argc, char **argv, struct ps_args *out) {
         { "rate",         required_argument, NULL, OPT_RATE },
         { "socket",       required_argument, NULL, OPT_SOCKET },
         { "config",       required_argument, NULL, OPT_CONFIG },
+        { "fail-on",      required_argument, NULL, OPT_FAIL_ON },
         { "help",         no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -78,6 +80,7 @@ int ps_args_parse(int argc, char **argv, struct ps_args *out) {
             case OPT_RATE:        out->rate_pps = atoi(optarg); break;
             case OPT_SOCKET:      out->socket_path = optarg; break;
             case OPT_CONFIG:      out->config_path = optarg; break;
+            case OPT_FAIL_ON:     out->fail_on = optarg; break;
             case 'h':
                 ps_args_usage(argv[0]);
                 return 1;   /* not an error; caller exits 0 */
