@@ -29,6 +29,7 @@ extern const struct ps_audit_module *ps_audit_elasticsearch_module(void);
 extern const struct ps_audit_module *ps_audit_smtp_module(void);
 extern const struct ps_audit_module *ps_audit_mysql_module(void);
 extern const struct ps_audit_module *ps_audit_postgresql_module(void);
+extern const struct ps_audit_module *ps_audit_ldap_module(void);
 
 static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_tls_module,
@@ -45,6 +46,7 @@ static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_smtp_module,
     ps_audit_mysql_module,
     ps_audit_postgresql_module,
+    ps_audit_ldap_module,
     NULL
 };
 
