@@ -35,6 +35,8 @@ set(CLI_SOURCES
     audit/mssql.c
     audit/kafka.c
     audit/vnc.c
+    audit/haproxy.c
+    audit/proxmox.c
     audit/audit_common.c
     probe/tcp.c
     probe/icmp.c
@@ -224,7 +226,7 @@ if(BUILD_TESTING)
     foreach(_kind smtp redis memcached ftp telnet http
                   elasticsearch postgresql mysql
                   dns ntp ldap smb
-                  vnc)
+                  vnc haproxy)
         add_test(NAME test_audit_${_kind}
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_${_kind}.sh)
         set_tests_properties(test_audit_${_kind} PROPERTIES
@@ -262,7 +264,8 @@ function(ps_add_audit_plugin name)
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib
     )
     target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
-    if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch")
+    if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch"
+       OR name STREQUAL "proxmox")
         find_package(OpenSSL REQUIRED)
         target_link_libraries(audit-${name} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
@@ -280,6 +283,7 @@ endfunction()
 # packetsonde too; the loader dedupes by name, so a user-supplied .dylib
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
-        elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka vnc)
+        elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka vnc
+        haproxy proxmox)
     ps_add_audit_plugin(${_a})
 endforeach()
