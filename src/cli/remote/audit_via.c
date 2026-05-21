@@ -105,31 +105,141 @@ static void emit_finding_passthrough(struct ps_output *out,
     }
     if (depth != 0) return;
     size_t obj_len = (size_t)(q - start);
-    /* Splice via_agent before the closing brace. */
-    /* Build: <obj_without_closing>,"via_agent":"<name>"} */
-    char buf[8192];
-    if (obj_len + strlen(agent_name) + 32 >= sizeof(buf)) return;
+
     /* JSON-escape agent_name so a stray quote/backslash in a local
-     * agents.toml entry can't corrupt the JSONL stream a downstream
-     * tool will parse. */
+     * agents.toml entry can't corrupt the JSONL stream. */
     char esc[2 * 64 + 4]; /* PS_AGENT_NAME_MAX = 64, worst-case doubled */
     size_t eo = 0;
-    for (const char *p = agent_name; *p && eo + 2 < sizeof(esc); p++) {
-        unsigned char c = (unsigned char)*p;
+    for (const char *pn = agent_name; *pn && eo + 2 < sizeof(esc); pn++) {
+        unsigned char c = (unsigned char)*pn;
         if (c == '"' || c == '\\') { esc[eo++] = '\\'; esc[eo++] = (char)c; }
         else if (c >= 0x20 && c < 0x7f) esc[eo++] = (char)c;
     }
     esc[eo] = '\0';
-    memcpy(buf, start, obj_len - 1); /* drop closing } */
-    int n = snprintf(buf + obj_len - 1, sizeof(buf) - (obj_len - 1),
+
+    /* Find an existing via_agent inside the payload object so we can
+     * promote it from string to array when this hop adds itself.
+     *
+     * Single-hop case (no via_agent present): we splice
+     *   ,"via_agent":"<name>"}  -- string form, unchanged from v1.6 for
+     *   backwards compatibility with existing consumers that expect a
+     *   scalar via_agent.
+     *
+     * Multi-hop case (via_agent already there):
+     *   - if it's a string "X", rewrite to ["X","<name>"]
+     *   - if it's an array [...], insert ,"<name>" before the closing ]
+     *
+     * Searching is a conservative substring scan -- the payload itself is
+     * a flat finding record, no nested via_agent occurrences expected. */
+    const char *vkey = "\"via_agent\"";
+    const size_t vkey_len = 11;
+    const uint8_t *va = NULL;
+    for (const uint8_t *s = start; s + vkey_len <= start + obj_len; s++) {
+        if (memcmp(s, vkey, vkey_len) == 0) { va = s + vkey_len; break; }
+    }
+
+    char buf[8192];
+    int n;
+
+    if (!va) {
+        /* No existing via_agent -- splice as string. */
+        if (obj_len + eo + 32 >= sizeof(buf)) return;
+        memcpy(buf, start, obj_len - 1); /* drop closing } */
+        n = snprintf(buf + obj_len - 1, sizeof(buf) - (obj_len - 1),
                      ",\"via_agent\":\"%s\"}", esc);
-    if (n < 0) return;
-    (void)out;
-    /* JSONL passthrough: one line on stdout. Matches the emitter's JSONL
-     * format. */
-    fwrite(buf, 1, obj_len - 1 + (size_t)n, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
+        if (n < 0) return;
+        fwrite(buf, 1, obj_len - 1 + (size_t)n, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+        return;
+    }
+
+    /* Walk past ':' and whitespace to the value. */
+    while (va < start + obj_len && (*va == ' ' || *va == ':' || *va == '\t')) va++;
+    if (va >= start + obj_len) return;
+
+    if (*va == '"') {
+        /* String form. Find the closing quote (skipping escapes), capture
+         * the string content, then rewrite the entire ,"via_agent":"X"
+         * fragment as ,"via_agent":["X","<name>"]. */
+        const uint8_t *vstart = va + 1;
+        const uint8_t *vend   = vstart;
+        while (vend < start + obj_len && *vend != '"') {
+            if (*vend == '\\' && vend + 1 < start + obj_len) vend += 2;
+            else vend++;
+        }
+        if (vend >= start + obj_len) return;
+        /* Region to replace: from the ',' (or '{') before vkey through
+         * the closing '"' of the existing value. Find the start. */
+        const uint8_t *region_start = (const uint8_t *)memmem(
+            start, (size_t)(va - start), vkey, vkey_len);
+        if (!region_start) return;
+        /* Step backward to swallow any preceding comma. */
+        if (region_start > start && *(region_start - 1) == ',') region_start--;
+        size_t prefix_len = (size_t)(region_start - start);
+        size_t suffix_off = (size_t)(vend + 1 - start);
+        size_t suffix_len = obj_len - suffix_off;
+
+        size_t old_value_len = (size_t)(vend - vstart);
+        if (old_value_len + eo + 64 >= sizeof(buf)) return;
+
+        memcpy(buf, start, prefix_len);
+        size_t bo = prefix_len;
+        /* Always emit with a leading comma; if we're replacing the very
+         * first field (prefix ends in '{'), use no comma. */
+        const char *sep = (bo > 0 && buf[bo - 1] == '{') ? "" : ",";
+        int w = snprintf(buf + bo, sizeof(buf) - bo,
+                         "%s\"via_agent\":[\"%.*s\",\"%s\"]",
+                         sep, (int)old_value_len, vstart, esc);
+        if (w < 0 || (size_t)w >= sizeof(buf) - bo) return;
+        bo += (size_t)w;
+        if (bo + suffix_len >= sizeof(buf)) return;
+        memcpy(buf + bo, start + suffix_off, suffix_len);
+        bo += suffix_len;
+        fwrite(buf, 1, bo, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+        return;
+    }
+
+    if (*va == '[') {
+        /* Array form. Find the matching ']' (no nested arrays expected in
+         * the via_agent value -- it's a flat string list). Insert
+         * ,"<name>" just before it. */
+        const uint8_t *aend = va + 1;
+        while (aend < start + obj_len && *aend != ']') {
+            if (*aend == '"') {
+                aend++;
+                while (aend < start + obj_len && *aend != '"') {
+                    if (*aend == '\\' && aend + 1 < start + obj_len) aend += 2;
+                    else aend++;
+                }
+                if (aend < start + obj_len) aend++;
+                continue;
+            }
+            aend++;
+        }
+        if (aend >= start + obj_len) return;
+        size_t insert_off = (size_t)(aend - start);
+        if (obj_len + eo + 8 >= sizeof(buf)) return;
+        memcpy(buf, start, insert_off);
+        size_t bo = insert_off;
+        /* If the array is empty, no leading comma. Look back one char. */
+        const char *sep = (bo > 0 && buf[bo - 1] == '[') ? "" : ",";
+        int w = snprintf(buf + bo, sizeof(buf) - bo, "%s\"%s\"", sep, esc);
+        if (w < 0 || (size_t)w >= sizeof(buf) - bo) return;
+        bo += (size_t)w;
+        memcpy(buf + bo, start + insert_off, obj_len - insert_off);
+        bo += obj_len - insert_off;
+        fwrite(buf, 1, bo, stdout);
+        fputc('\n', stdout);
+        fflush(stdout);
+        return;
+    }
+
+    /* Unknown shape -- give up silently, finding stays as the agent sent
+     * it. Caller will not see this hop's name, but the data is intact. */
+    (void)out; (void)n;
 }
 
 /* Send a signed broadcast knock and wait for a reply from the agent whose
