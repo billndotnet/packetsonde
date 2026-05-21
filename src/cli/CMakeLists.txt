@@ -34,6 +34,7 @@ set(CLI_SOURCES
     audit/rdp.c
     audit/mssql.c
     audit/kafka.c
+    audit/vnc.c
     audit/audit_common.c
     probe/tcp.c
     probe/traceroute.c
@@ -203,7 +204,8 @@ if(BUILD_TESTING)
     # as the existing tests.
     foreach(_kind smtp redis memcached ftp telnet http
                   elasticsearch postgresql mysql
-                  dns ntp ldap smb)
+                  dns ntp ldap smb
+                  vnc)
         add_test(NAME test_audit_${_kind}
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_${_kind}.sh)
         set_tests_properties(test_audit_${_kind} PROPERTIES
@@ -259,6 +261,6 @@ endfunction()
 # packetsonde too; the loader dedupes by name, so a user-supplied .dylib
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
-        elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka)
+        elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka vnc)
     ps_add_audit_plugin(${_a})
 endforeach()
