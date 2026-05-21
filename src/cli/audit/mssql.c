@@ -1,4 +1,5 @@
 #include "audit_module.h"
+#include "audit_common.h"
 #include "../args.h"
 #include "finding.h"
 #include "ulid.h"
@@ -42,17 +43,7 @@
  */
 
 static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
-    *port = 1433;
-    const char *colon = strrchr(spec, ':');
-    size_t hl = colon ? (size_t)(colon - spec) : strlen(spec);
-    if (hl == 0 || hl >= host_sz) return -1;
-    memcpy(host, spec, hl); host[hl] = '\0';
-    if (colon) {
-        long p = strtol(colon + 1, NULL, 10);
-        if (p <= 0 || p > 65535) return -1;
-        *port = (uint16_t)p;
-    }
-    return 0;
+    return ps_audit_parse_target(spec, host, host_sz, 1433, port);
 }
 
 static int read_n(int fd, void *buf, size_t want) {
@@ -92,25 +83,12 @@ static int mssql_run(int argc, char **argv,
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) return 1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return 1; }
-    struct timeval tv = { 5, 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     char ip[64] = "";
-    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-    inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
-    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        freeaddrinfo(res); close(fd);
+    int fd = ps_audit_tcp_connect(host, port, 5000, ip, sizeof(ip));
+    if (fd < 0) {
         fprintf(stderr, "audit mssql: cannot connect to %s:%u\n", host, port);
         return 1;
     }
-    freeaddrinfo(res);
 
     /* Build pre-login packet.
      *

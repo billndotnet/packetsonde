@@ -1,4 +1,5 @@
 #include "audit_module.h"
+#include "audit_common.h"
 #include "../args.h"
 #include "finding.h"
 #include "ulid.h"
@@ -15,40 +16,12 @@
 #include <unistd.h>
 
 static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
-    *port = 445;
-    const char *colon = strrchr(spec, ':');
-    size_t hl = colon ? (size_t)(colon - spec) : strlen(spec);
-    if (hl == 0 || hl >= host_sz) return -1;
-    memcpy(host, spec, hl); host[hl] = '\0';
-    if (colon) {
-        long p = strtol(colon + 1, NULL, 10);
-        if (p <= 0 || p > 65535) return -1;
-        *port = (uint16_t)p;
-    }
-    return 0;
+    return ps_audit_parse_target(spec, host, host_sz, 445, port);
 }
 
 static int tcp_connect(const char *host, uint16_t port, int timeout_ms,
                        char *ip_out, size_t ip_out_sz) {
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return -1; }
-    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    if (ip_out && ip_out_sz) {
-        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-        inet_ntop(AF_INET, &sin->sin_addr, ip_out, (socklen_t)ip_out_sz);
-    }
-    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        freeaddrinfo(res); close(fd); return -1;
-    }
-    freeaddrinfo(res);
-    return fd;
+    return ps_audit_tcp_connect(host, port, timeout_ms, ip_out, ip_out_sz);
 }
 
 /* SMB1 NEGOTIATE PROTOCOL packet, offering only the "NT LM 0.12" dialect.
