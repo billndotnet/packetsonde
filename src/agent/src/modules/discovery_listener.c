@@ -40,6 +40,7 @@
 #include "log.h"
 #include "discovery.h"
 #include "keystore.h"
+#include "network_listener.h"
 
 #define ETH_HDR_LEN     14
 #define ETHERTYPE_IPV4  0x0800
@@ -117,6 +118,20 @@ static void send_reply(struct discovery_state *st,
     memcpy(r.nonce, p->nonce, PS_DISCOVERY_NONCE_SIZE);
     memcpy(r.listen_ip, st->listen_ip_v4mapped, 16);
     r.listen_port = st->listen_port;
+    /* Knock-mode: if the probe requested a session window AND a network
+     * listener is loaded, open a one-shot mTLS listener and advertise its
+     * ephemeral port in this reply instead of the (typically zero or
+     * unconfigured) static listen_port. */
+    if (p->flags & PS_DISCOVERY_FLAG_REQUEST_SESSION) {
+        uint16_t eph = 0;
+        if (ps_nl_open_session_window(5, &eph) == 0) {
+            r.listen_port = eph;
+        } else {
+            /* Listener module disabled or out of resources -- silent drop
+             * so we don't tell a knock attempt "no listener here". */
+            return;
+        }
+    }
     memcpy(r.agent_pub, st->kp.pubkey, PS_DISCOVERY_PUBKEY_SIZE);
     if (ps_discovery_reply_sign(&r, st->kp.seckey) != 0) {
         ps_warn("discovery_listener: sign failed");
