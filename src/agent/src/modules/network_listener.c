@@ -187,7 +187,7 @@ static int parse_audit_request(const uint8_t *frame, size_t len,
 static const char *AUDIT_KIND_ALLOWLIST[] = {
     "tls", "dns", "http", "ssh", "smb", "telnet", "ftp", "redis",
     "ntp", "memcached", "elasticsearch", "smtp", "mysql", "postgresql",
-    "ldap", "imap", "pop3", "snmp", "rdp", "mssql", "kafka", NULL
+    "ldap", "imap", "pop3", "snmp", "rdp", "mssql", "kafka", "vnc", NULL
 };
 
 static int kind_is_allowed(const char *kind) {
