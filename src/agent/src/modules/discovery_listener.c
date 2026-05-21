@@ -312,7 +312,5 @@ const ps_module_t discovery_listener_module = {
     .tick        = NULL,
 };
 
-__attribute__((constructor))
-static void register_discovery_listener(void) {
-    ps_module_register(&discovery_listener_module);
-}
+/* Self-registration via constructor was deleted -- main.c registers
+ * this module explicitly so the global registry exists by then. */

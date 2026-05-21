@@ -102,6 +102,10 @@ set(AGENT_CORE_SOURCES
 
 # Agent binary
 add_executable(packetsonde-agent src/main.c ${AGENT_CORE_SOURCES})
+# Brand name on disk is `packetsonded` (matches the README, systemd
+# unit, launchd plist, and rc.d script). The CMake target stays
+# `packetsonde-agent` for readability in build output.
+set_target_properties(packetsonde-agent PROPERTIES OUTPUT_NAME packetsonded)
 target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -123,6 +127,9 @@ if(HAVE_HIREDIS)
     target_link_libraries(packetsonde-agent PRIVATE ${HIREDIS_LIBRARY})
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_HIREDIS=1)
 endif()
+
+include(GNUInstallDirs)
+install(TARGETS packetsonde-agent RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
 
 # Priv worker binary
 add_executable(packetsonde-priv src/priv_worker.c src/platform/unix.c)
