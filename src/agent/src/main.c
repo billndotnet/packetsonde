@@ -9,6 +9,7 @@
 #include "build_config.h"
 #include "log.h"
 #include "config.h"
+#include "config_to_env.h"
 #include "json.h"
 #include "ipc_server.h"
 #include "module.h"
@@ -766,6 +767,13 @@ int main(int argc, char **argv)
         } else {
             ps_info("main: loaded config from '%s'", config_path);
         }
+    }
+    /* Translate config keys to env vars so the modules can read them
+     * unchanged. Pre-existing env vars win over file values, giving
+     * operators a clean override path (-e in systemd, env: in launchd). */
+    int env_set = ps_config_to_env(&cfg);
+    if (env_set > 0) {
+        ps_info("main: applied %d config keys to environment", env_set);
     }
 
     /* --- Configure log level from config --- */

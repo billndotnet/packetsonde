@@ -64,6 +64,7 @@ endif()
 
 set(AGENT_CORE_SOURCES
     src/config.c
+    src/config_to_env.c
     src/module.c
     src/host_table.c
     src/ipc_server.c
@@ -157,6 +158,15 @@ target_include_directories(test_config PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_test(NAME test_config COMMAND test_config)
+
+# Test: config -> env translation
+add_executable(test_config_to_env tests/test_config_to_env.c src/config.c src/config_to_env.c)
+target_include_directories(test_config_to_env PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
+add_test(NAME test_config_to_env COMMAND test_config_to_env)
 
 # Test: IPC framing
 add_executable(test_ipc_framing tests/test_ipc_framing.c src/ipc_server.c)
