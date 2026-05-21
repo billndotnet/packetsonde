@@ -42,6 +42,9 @@ int ps_verb_agent_run(int argc, char **argv, const struct ps_args *opts) {
         agent_usage();
         return 2;
     }
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        agent_usage(); return 0;
+    }
 
     const char *socket_path = opts->socket_path ? opts->socket_path : DEFAULT_SOCKET;
     enum psctl_fmt fmt = map_fmt(opts->fmt);
