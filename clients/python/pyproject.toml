@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "packetsonde"
+version = "1.6.0"
+description = "Python client for the packetsonde network auditing CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "PolyForm Noncommercial 1.0.0 (modified)" }
+authors = [{ name = "Bill Nash" }]
+keywords = ["network", "security", "audit", "celery", "airflow"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking :: Monitoring",
+    "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+celery  = ["celery>=5"]
+airflow = ["apache-airflow>=2.7"]
+dev     = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/billndotnet/packetsonde"
+
+[tool.setuptools.packages.find]
+include = ["packetsonde*"]
