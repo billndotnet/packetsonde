@@ -200,6 +200,12 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
+    add_test(NAME test_via_fail_on
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_fail_on.sh)
+    set_tests_properties(test_via_fail_on PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
     add_test(NAME test_probe_icmp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_probe_icmp.sh)
     set_tests_properties(test_probe_icmp PROPERTIES

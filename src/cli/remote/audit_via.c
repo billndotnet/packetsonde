@@ -4,7 +4,9 @@
 #include "agent_transport.h"
 #include "discovery.h"
 #include "keystore.h"
+#include "../output/output.h"
 #include "../registry/agents.h"
+#include "finding.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -86,6 +88,27 @@ static int build_audit_request(char *out, size_t outsz,
     return (int)off;
 }
 
+/* Extract the severity field from a v:1 JSONL finding line so the
+ * passthrough emitter can credit the right --fail-on counter. Returns
+ * a PS_SEV_* value or -1 if not found. */
+static int parse_severity_from_jsonl(const uint8_t *buf, size_t len) {
+    const char *key = "\"severity\":\"";
+    const size_t klen = 12;
+    for (size_t i = 0; i + klen < len; i++) {
+        if (memcmp(buf + i, key, klen) != 0) continue;
+        const uint8_t *v = buf + i + klen;
+        size_t vlen = 0;
+        while (v + vlen < buf + len && v[vlen] != '"') vlen++;
+        if      (vlen == 4 && memcmp(v, "info",     4) == 0) return PS_SEV_INFO;
+        else if (vlen == 3 && memcmp(v, "low",      3) == 0) return PS_SEV_LOW;
+        else if (vlen == 6 && memcmp(v, "medium",   6) == 0) return PS_SEV_MEDIUM;
+        else if (vlen == 4 && memcmp(v, "high",     4) == 0) return PS_SEV_HIGH;
+        else if (vlen == 8 && memcmp(v, "critical", 8) == 0) return PS_SEV_CRITICAL;
+        return -1;
+    }
+    return -1;
+}
+
 /* Lift a "finding" frame's payload onto our local emitter. The payload
  * is already JSON in the v:1 schema, so we feed it to ps_output via
  * the JSON-passthrough path. We splice in a via_agent field before the
@@ -131,6 +154,8 @@ static void emit_finding_passthrough(struct ps_output *out,
     if (depth != 0) return;
     size_t obj_len = (size_t)(q - start);
 
+    int sev = parse_severity_from_jsonl(start, obj_len);
+
     /* JSON-escape agent_name so a stray quote/backslash in a local
      * agents.toml entry can't corrupt the JSONL stream. */
     char esc[2 * 64 + 4]; /* PS_AGENT_NAME_MAX = 64, worst-case doubled */
@@ -173,9 +198,10 @@ static void emit_finding_passthrough(struct ps_output *out,
         n = snprintf(buf + obj_len - 1, sizeof(buf) - (obj_len - 1),
                      ",\"via_agent\":\"%s\"}", esc);
         if (n < 0) return;
-        fwrite(buf, 1, obj_len - 1 + (size_t)n, stdout);
-        fputc('\n', stdout);
-        fflush(stdout);
+        size_t bo = obj_len - 1 + (size_t)n;
+        if (bo + 1 >= sizeof(buf)) return;
+        buf[bo++] = '\n';
+        ps_output_emit_raw_jsonl(out, sev, buf, bo);
         return;
     }
 
@@ -221,9 +247,9 @@ static void emit_finding_passthrough(struct ps_output *out,
         if (bo + suffix_len >= sizeof(buf)) return;
         memcpy(buf + bo, start + suffix_off, suffix_len);
         bo += suffix_len;
-        fwrite(buf, 1, bo, stdout);
-        fputc('\n', stdout);
-        fflush(stdout);
+        if (bo + 1 >= sizeof(buf)) return;
+        buf[bo++] = '\n';
+        ps_output_emit_raw_jsonl(out, sev, buf, bo);
         return;
     }
 
@@ -256,9 +282,9 @@ static void emit_finding_passthrough(struct ps_output *out,
         bo += (size_t)w;
         memcpy(buf + bo, start + insert_off, obj_len - insert_off);
         bo += obj_len - insert_off;
-        fwrite(buf, 1, bo, stdout);
-        fputc('\n', stdout);
-        fflush(stdout);
+        if (bo + 1 >= sizeof(buf)) return;
+        buf[bo++] = '\n';
+        ps_output_emit_raw_jsonl(out, sev, buf, bo);
         return;
     }
 

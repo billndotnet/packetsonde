@@ -36,6 +36,26 @@ struct ps_output {
 
 int  ps_output_init   (struct ps_output *o, const struct ps_output_opts *opts);
 void ps_output_emit   (struct ps_output *o, const struct ps_finding *f);
+/*
+ * Emit a pre-rendered JSONL finding line. Used by the --via forwarder,
+ * where the agent already produced a finding in v:1 JSON form and we
+ * splice via_agent in by string surgery rather than round-tripping
+ * through ps_finding.
+ *
+ * Behaves like ps_output_emit in that it:
+ *   - holds o->lock,
+ *   - bumps the severity counter that --fail-on consults,
+ *   - writes to the same stdout_fd / append_fd as locally-rendered findings.
+ *
+ * Does not render TEXT/QUIET (the parsed finding isn't available); in
+ * those formats the caller still sees JSONL. That's a known limitation
+ * of --via for human-targeted formats.
+ *
+ * `line` must include the trailing newline. `severity` is matched against
+ * the PS_SEV_* enum; pass -1 if unknown and no counter will move.
+ */
+void ps_output_emit_raw_jsonl(struct ps_output *o, int severity,
+                              const char *line, size_t len);
 void ps_output_summary(const struct ps_output *o, const char *run_id, long duration_ms);
 void ps_output_close  (struct ps_output *o);
 
