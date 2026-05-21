@@ -28,6 +28,9 @@ static void usage(void) {
 
 int ps_verb_discover_run(int argc, char **argv, const struct ps_args *opts) {
     if (argc < 2) { usage(); return 2; }
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        usage(); return 0;
+    }
     for (const struct discover_kind *k = KINDS; k->name; k++) {
         if (strcmp(k->name, argv[1]) == 0) return k->run(argc - 1, argv + 1, opts);
     }
