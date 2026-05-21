@@ -691,6 +691,8 @@ extern const ps_module_t ospf_module;
 extern const ps_module_t vrrp_module;
 extern const ps_module_t broadcast_module;
 extern const ps_module_t ps_honeypot_listener_module;
+extern const ps_module_t discovery_listener_module;
+extern const ps_module_t network_listener_module;
 #ifdef HAVE_OPENSSL
 extern const ps_module_t ps_tls_probe_module;
 #endif
@@ -827,10 +829,18 @@ int main(int argc, char **argv)
     }
     ps_info("main: priv worker forked (fd=%d)", priv_fd);
 
-    /* --- Drop privileges --- */
+    /* --- Drop privileges ---
+     *
+     * `[agent] user = "current"` (or env PS_AGENT_USER=current) keeps
+     * the existing UID -- useful for self-tests and developer runs
+     * where the agent needs to read files owned by the invoking user.
+     * Production deployments leave this unset to drop to 'nobody'. */
     const char *run_as = ps_config_get(&cfg, "agent", "user");
-    if (!run_as) run_as = "nobody";
-    if (ps_platform_drop_privs(run_as) < 0) {
+    if (!run_as) run_as = getenv("PS_AGENT_USER");
+    if (!run_as || !*run_as) run_as = "nobody";
+    if (strcmp(run_as, "current") == 0) {
+        ps_info("main: keeping current uid (agent.user=current)");
+    } else if (ps_platform_drop_privs(run_as) < 0) {
         ps_warn("main: could not drop privileges to '%s' (continuing)", run_as);
     } else {
         ps_info("main: privileges dropped to '%s'", run_as);
@@ -930,6 +940,12 @@ int main(int argc, char **argv)
         ps_module_registry_add(&g_registry, &broadcast_module);
     if (ps_config_get_bool(&cfg, "modules", "honeypot_listener", 0))  /* off by default */
         ps_module_registry_add(&g_registry, &ps_honeypot_listener_module);
+    /* Discovery + network listener: registered unconditionally. Each
+     * module is its own opt-in gate (PS_DISCOVERY_ENABLED /
+     * PS_AGENT_LISTEN_MODE) so it stays a no-op unless the operator
+     * turns it on in packetsonded.toml. */
+    ps_module_registry_add(&g_registry, &discovery_listener_module);
+    ps_module_registry_add(&g_registry, &network_listener_module);
 #ifdef HAVE_OPENSSL
     if (ps_config_get_bool(&cfg, "modules", "tls_probe", 1))
         ps_module_registry_add(&g_registry, &ps_tls_probe_module);
