@@ -171,6 +171,9 @@ static int cmd_revoke(int argc, char **argv) {
 int ps_verb_key_run(int argc, char **argv, const struct ps_args *opts) {
     (void)opts;
     if (argc < 2) { usage(); return 2; }
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        usage(); return 0;
+    }
     const char *sub = argv[1];
     if (strcmp(sub, "generate")    == 0) return cmd_generate   (argc - 1, argv + 1);
     if (strcmp(sub, "list")        == 0) return cmd_list       (argc - 1, argv + 1);

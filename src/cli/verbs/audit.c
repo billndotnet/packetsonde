@@ -124,6 +124,9 @@ int ps_audit_via_run(int argc, char **argv, const struct ps_args *opts,
 
 int ps_verb_audit_run(int argc, char **argv, const struct ps_args *opts) {
     if (argc < 2) { audit_usage(); return 2; }
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        audit_usage(); return 0;
+    }
     const char *kind = argv[1];
 
     /* --via <agent>: dispatch to a remote agent over mTLS. The local
