@@ -59,4 +59,6 @@ OUT="$("$CLI" --jsonl audit dns "127.0.0.1:$PORT" 2>/dev/null || true)"
 fail() { echo "FAIL: $1"; echo "OUTPUT:"; echo "$OUT"; exit 1; }
 echo "$OUT" | grep -q '"kind":"dns.version_leak"' || fail "missing dns.version_leak"
 echo "$OUT" | grep -q 'mock-bind 1.0'              || fail "missing version string"
+echo "$OUT" | grep -q '"kind":"dns.metadata"'     || fail "missing dns.metadata"
+echo "$OUT" | grep -q '"responded":true'           || fail "missing responded:true in metadata"
 echo "test_audit_dns: OK"
