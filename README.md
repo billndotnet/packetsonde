@@ -109,11 +109,15 @@ The agent is positioned in topologically-advantaged places — see the [use case
 
 - C11 compiler (clang or gcc)
 - CMake 3.20+
-- OpenSSL (system) — `audit tls`, `audit http` for HTTPS
+- OpenSSL — `audit tls`, `audit http` for HTTPS, mTLS for the agent network protocol
 - pthreads
-- Optional: libpcap, hiredis (for agent passive modules)
-
-macOS additionally needs libedit for the agent shell.
+- libedit — used by the `packetsonde agent shell` REPL
+    - macOS: shipped (no install needed)
+    - Debian/Ubuntu: `apt install libedit-dev`
+    - RHEL/Fedora: `dnf install libedit-devel`
+- Optional: libpcap (passive capture), hiredis (Redis bridge) — agent only
+    - Debian/Ubuntu: `apt install libpcap-dev libhiredis-dev`
+    - RHEL/Fedora: `dnf install libpcap-devel hiredis-devel`
 
 ## License
 

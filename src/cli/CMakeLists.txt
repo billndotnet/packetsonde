@@ -71,8 +71,21 @@ target_include_directories(packetsonde PRIVATE
 target_link_libraries(packetsonde PRIVATE packetsonde_lib)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(packetsonde PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+# libedit is used by the psctl shell on all platforms. macOS ships it in
+# /usr/lib so plain `-ledit` works; Linux distros ship it as a package
+# (apt: libedit-dev, dnf: libedit-devel) -- detect via find_library so a
+# missing libedit produces a clean error message instead of a link
+# failure deep in the build.
 if(APPLE)
     target_link_libraries(packetsonde PRIVATE edit)
+else()
+    find_library(EDIT_LIB edit)
+    if(NOT EDIT_LIB)
+        message(FATAL_ERROR
+            "libedit not found -- install libedit-dev (Debian/Ubuntu) "
+            "or libedit-devel (RHEL/Fedora) and re-run cmake")
+    endif()
+    target_link_libraries(packetsonde PRIVATE ${EDIT_LIB})
 endif()
 # dlopen / dlsym for the audit plugin loader. macOS has it in libSystem;
 # Linux needs explicit -ldl.
