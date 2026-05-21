@@ -117,9 +117,33 @@ static void audit_usage(void) {
     }
 }
 
+int ps_audit_via_run(int argc, char **argv, const struct ps_args *opts,
+                     struct ps_output *out); /* remote/audit_via.c */
+
 int ps_verb_audit_run(int argc, char **argv, const struct ps_args *opts) {
     if (argc < 2) { audit_usage(); return 2; }
     const char *kind = argv[1];
+
+    /* --via <agent>: dispatch to a remote agent over mTLS. The local
+     * module table is consulted only when --via is absent; the remote
+     * side does its own dispatch. */
+    if (opts->via && *opts->via) {
+        struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
+        switch (opts->fmt) {
+            case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
+            case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
+            case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
+            case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
+            default:           oopts.fmt_force = 0;             break;
+        }
+        oopts.color = opts->no_color ? 0 : 1;
+        struct ps_output out;
+        ps_output_init(&out, &oopts);
+        int rc = ps_audit_via_run(argc - 1, argv + 1, opts, &out);
+        ps_output_close(&out);
+        return rc;
+    }
+
     const struct ps_audit_module *m = find_module(kind);
     if (!m) {
         fprintf(stderr, "packetsonde audit: unknown kind '%s'\n", kind);

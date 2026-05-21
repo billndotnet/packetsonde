@@ -10,6 +10,7 @@ set(CLI_SOURCES
     verbs/probe.c
     verbs/report.c
     verbs/key.c
+    remote/audit_via.c
     audit_loader.c
     registry/agents.c
     audit/tls.c
