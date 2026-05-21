@@ -119,12 +119,16 @@ static int dns_run(int argc, char **argv,
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
+    char ver[256] = "";
+    int responded = 0;          /* either query got a parseable DNS header */
+    int ra = -1, rcode = -1, ancount = -1;
+
     /* version.bind CHAOS TXT */
     {
         uint8_t q[512]; int qlen = build_query(q, sizeof(q), "version.bind", 16, 3, 1);
         uint8_t r[4096];
         int n = qlen > 0 ? udp_query(host, port, q, qlen, r, sizeof(r), 1500) : -1;
-        char ver[256] = "";
+        if (n >= 12) responded = 1;
         if (n > 0 && extract_txt(r, (size_t)n, ver, sizeof(ver)) == 0 && ver[0]) {
             char ev[320];
             snprintf(ev, sizeof(ev), "{\"version\":\"%s\"}", ver);
@@ -145,8 +149,10 @@ static int dns_run(int argc, char **argv,
         uint8_t r[4096];
         int n = qlen > 0 ? udp_query(host, port, q, qlen, r, sizeof(r), 2500) : -1;
         if (n >= 12) {
-            int ancount = (r[6] << 8) | r[7];
-            int ra      = (r[3] & 0x80) ? 1 : 0;
+            responded = 1;
+            ancount = (r[6] << 8) | r[7];
+            ra      = (r[3] & 0x80) ? 1 : 0;
+            rcode   = (r[3] & 0x0f);
             if (ra && ancount > 0) {
                 char ev[160];
                 snprintf(ev, sizeof(ev), "{\"ra\":true,\"ancount\":%d}", ancount);
@@ -159,6 +165,45 @@ static int dns_run(int argc, char **argv,
                 api->emit(&f);
             }
         }
+    }
+
+    /* Always emit a metadata finding so the user sees that the audit ran
+     * (and reached the resolver at all), even when there's nothing else
+     * to report. */
+    {
+        char ver_esc[512] = "";
+        for (size_t i = 0, o = 0; ver[i] && o + 2 < sizeof(ver_esc); i++) {
+            unsigned char c = (unsigned char)ver[i];
+            if (c == '"' || c == '\\') { ver_esc[o++] = '\\'; ver_esc[o++] = (char)c; }
+            else if (c >= 0x20 && c < 0x7f) ver_esc[o++] = (char)c;
+        }
+        char ev[640];
+        if (responded) {
+            snprintf(ev, sizeof(ev),
+                     "{\"responded\":true,\"version\":\"%s\","
+                     "\"ra\":%s,\"rcode\":%d,\"ancount\":%d}",
+                     ver_esc,
+                     ra < 0 ? "null" : (ra ? "true" : "false"),
+                     rcode, ancount);
+        } else {
+            snprintf(ev, sizeof(ev), "{\"responded\":false}");
+        }
+        char title[256];
+        if (responded) {
+            snprintf(title, sizeof(title),
+                     "DNS resolver responded (ra=%s%s%s)",
+                     ra < 0 ? "?" : (ra ? "yes" : "no"),
+                     ver_esc[0] ? ", version=" : "",
+                     ver_esc[0] ? ver_esc : "");
+        } else {
+            snprintf(title, sizeof(title), "DNS resolver did not respond");
+        }
+        struct ps_finding f;
+        ps_finding_init(&f, run_id, "cli.audit.dns", self_host,
+                        "dns.metadata", PS_SEV_INFO, PS_CONF_FIRM, title);
+        ps_finding_set_target_ip(&f, host, port);
+        ps_finding_set_evidence_json(&f, ev);
+        api->emit(&f);
     }
     return 0;
 }
