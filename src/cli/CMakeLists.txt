@@ -196,6 +196,17 @@ if(BUILD_TESTING)
     set_tests_properties(test_via_e2e PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    # ---- coverage backfill for audit kinds that previously had no
+    # integration test (review finding #14). Same Python+FIFO mock pattern
+    # as the existing tests.
+    foreach(_kind smtp redis memcached ftp telnet http)
+        add_test(NAME test_audit_${_kind}
+                 COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_${_kind}.sh)
+        set_tests_properties(test_audit_${_kind} PROPERTIES
+            SKIP_RETURN_CODE 77
+            ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+    endforeach()
 endif()
 
 include(GNUInstallDirs)
