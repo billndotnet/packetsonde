@@ -7,7 +7,7 @@
 # regardless of the host's default policy.
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="${PS_BUILD_DIR:-/Users/billn/packetsonde/build}"
+BUILD_DIR="${PS_BUILD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/build}"
 CLI="$BUILD_DIR/src/cli/packetsonde"
 
 if [ ! -x "$CLI" ]; then
