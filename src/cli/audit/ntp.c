@@ -47,21 +47,10 @@ static int udp_query(const char *host, uint16_t port,
                      unsigned char *r, size_t r_cap,
                      int timeout_ms,
                      char *ip_out, size_t ip_out_sz) {
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return -1; }
-    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    if (ip_out && ip_out_sz) {
-        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-        inet_ntop(AF_INET, &sin->sin_addr, ip_out, (socklen_t)ip_out_sz);
-    }
-    ssize_t s = sendto(fd, q, qlen, 0, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
+    int fd = ps_audit_udp_connect(host, port, timeout_ms, ip_out, ip_out_sz);
+    if (fd < 0) return -1;
+    /* DGRAM socket is connected -- send/recv work without an address. */
+    ssize_t s = send(fd, q, qlen, 0);
     if (s != (ssize_t)qlen) { close(fd); return -1; }
     ssize_t n = recv(fd, r, r_cap, 0);
     close(fd);

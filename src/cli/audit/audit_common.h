@@ -52,4 +52,19 @@ int ps_audit_parse_target(const char *spec,
 int ps_audit_tcp_connect(const char *host, uint16_t port, int timeout_ms,
                          char *out_ip, size_t out_ip_sz);
 
+/*
+ * Same shape, UDP. Returns a connected DGRAM socket (so send/recv work
+ * without an explicit address) suitable for protocols like NTP, SNMP
+ * that are request-response over a single (src, dst) tuple.
+ *
+ * Accepts both IPv4 and IPv6 (AF_UNSPEC). The connect on a DGRAM
+ * socket is what makes the kernel surface ICMP port-unreachable as
+ * ECONNREFUSED on subsequent recv -- useful for "is anything
+ * listening?" probes.
+ *
+ * Returns the fd on success, -1 on any failure. Caller closes.
+ */
+int ps_audit_udp_connect(const char *host, uint16_t port, int timeout_ms,
+                         char *out_ip, size_t out_ip_sz);
+
 #endif
