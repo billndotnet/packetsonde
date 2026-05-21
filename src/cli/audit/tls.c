@@ -81,6 +81,12 @@ struct tls_result {
     char         ja3_md5  [33];
     char         ja3s_str [512];
     char         ja3s_md5 [33];
+    /* JA4X (FoxIO 2023) -- X.509 certificate fingerprint. Three SHA-256-12
+     * hex hashes joined by '_':
+     *   {issuer_OIDs_hash}_{subject_OIDs_hash}_{extension_OIDs_hash}
+     * Useful for clustering hosts that share a cert *template* (same CA,
+     * same template settings) regardless of CN / SAN content. */
+    char         ja4x  [40];   /* 12+1+12+1+12+1 */
 };
 
 /* TLS handshake bytes captured via SSL_CTX_set_msg_callback. We keep the
@@ -118,6 +124,79 @@ static size_t append_u16_list(char *out, size_t outsz, size_t off,
         first = 0;
     }
     return off;
+}
+
+/* SHA-256(input), first 12 hex chars in out[12+1]. Used by JA4X. */
+static void sha256_hex12(const char *str, char out[13]) {
+    unsigned char dig[32];
+    unsigned int  dl = 0;
+    EVP_MD_CTX *m = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(m, EVP_sha256(), NULL);
+    EVP_DigestUpdate(m, str, strlen(str));
+    EVP_DigestFinal_ex(m, dig, &dl);
+    EVP_MD_CTX_free(m);
+    static const char *H = "0123456789abcdef";
+    for (int i = 0; i < 6; i++) {
+        out[i * 2]     = H[dig[i] >> 4];
+        out[i * 2 + 1] = H[dig[i] & 0x0f];
+    }
+    out[12] = '\0';
+}
+
+/* Build a comma-separated list of OID strings from an X509_NAME's entries
+ * (in the order they appear in the cert -- this matters for the JA4X
+ * hash). Truncated quietly if too long; the OID buffer is generous. */
+static void x509_name_oids(X509_NAME *name, char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t off = 0;
+    int n = X509_NAME_entry_count(name);
+    for (int i = 0; i < n; i++) {
+        X509_NAME_ENTRY *e = X509_NAME_get_entry(name, i);
+        if (!e) continue;
+        ASN1_OBJECT *o = X509_NAME_ENTRY_get_object(e);
+        char dot[128];
+        int dl = OBJ_obj2txt(dot, sizeof(dot), o, 1); /* 1 = no name lookup */
+        if (dl <= 0) continue;
+        int w = snprintf(out + off, outsz - off, "%s%.*s",
+                         i == 0 ? "" : ",", dl, dot);
+        if (w < 0 || (size_t)w >= outsz - off) break;
+        off += (size_t)w;
+    }
+}
+
+/* Same shape, but for extension OIDs. */
+static void x509_ext_oids(X509 *cert, char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t off = 0;
+    int n = X509_get_ext_count(cert);
+    for (int i = 0; i < n; i++) {
+        X509_EXTENSION *e = X509_get_ext(cert, i);
+        if (!e) continue;
+        ASN1_OBJECT *o = X509_EXTENSION_get_object(e);
+        char dot[128];
+        int dl = OBJ_obj2txt(dot, sizeof(dot), o, 1);
+        if (dl <= 0) continue;
+        int w = snprintf(out + off, outsz - off, "%s%.*s",
+                         i == 0 ? "" : ",", dl, dot);
+        if (w < 0 || (size_t)w >= outsz - off) break;
+        off += (size_t)w;
+    }
+}
+
+/* Compute JA4X = issuer_OIDs_hash _ subject_OIDs_hash _ extension_OIDs_hash. */
+static void ja4x_from_cert(X509 *cert, char *out, size_t outsz) {
+    out[0] = '\0';
+    char issuer_oids[2048] = "";
+    char subject_oids[2048] = "";
+    char ext_oids   [2048] = "";
+    x509_name_oids(X509_get_issuer_name(cert),  issuer_oids,  sizeof(issuer_oids));
+    x509_name_oids(X509_get_subject_name(cert), subject_oids, sizeof(subject_oids));
+    x509_ext_oids (cert,                        ext_oids,     sizeof(ext_oids));
+    char ih[13], sh[13], eh[13];
+    sha256_hex12(issuer_oids,  ih);
+    sha256_hex12(subject_oids, sh);
+    sha256_hex12(ext_oids,     eh);
+    snprintf(out, outsz, "%s_%s_%s", ih, sh, eh);
 }
 
 static void md5_hex(const char *str, char *hex_out /* 33 bytes */) {
@@ -315,7 +394,10 @@ static int do_handshake(const char *host, uint16_t port,
         const char *cn = SSL_get_cipher_name(ssl);
         if (cn) snprintf(out->cipher, sizeof(out->cipher), "%s", cn);
         X509 *peer = SSL_get_peer_certificate(ssl);
-        if (peer) { out->peer = peer; out->cert_present = 1; }
+        if (peer) {
+            out->peer = peer; out->cert_present = 1;
+            ja4x_from_cert(peer, out->ja4x, sizeof(out->ja4x));
+        }
         out->chain = SSL_get_peer_cert_chain(ssl);
         if (cap.client_hello_len) {
             ja3_from_client_hello(cap.client_hello, cap.client_hello_len,
@@ -572,11 +654,13 @@ static void check_certificate(struct emit_ctx *e, const char *target_host) {
             "\"not_before\":\"%s\",\"not_after\":\"%s\","
             "\"cert_sha256\":\"%s\",\"sans\":%s,"
             "\"ja3\":\"%s\",\"ja3_str\":\"%s\","
-            "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\"}",
+            "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\","
+            "\"ja4x\":\"%s\"}",
             proto_str(r.protocol_version), r.cipher,
             subj_e, issu_e, nb_e, na_e, sha256, sans,
             r.ja3_md5,  r.ja3_str,
-            r.ja3s_md5, r.ja3s_str);
+            r.ja3s_md5, r.ja3s_str,
+            r.ja4x);
         char title[320];
         snprintf(title, sizeof(title), "%s (%s) CN=%s",
                  proto_str(r.protocol_version), r.cipher,
