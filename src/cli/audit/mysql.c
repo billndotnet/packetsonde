@@ -1,4 +1,5 @@
 #include "audit_module.h"
+#include "audit_common.h"
 #include "../args.h"
 #include "finding.h"
 #include "ulid.h"
@@ -15,17 +16,7 @@
 #include <unistd.h>
 
 static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
-    *port = 3306;
-    const char *colon = strrchr(spec, ':');
-    size_t hl = colon ? (size_t)(colon - spec) : strlen(spec);
-    if (hl == 0 || hl >= host_sz) return -1;
-    memcpy(host, spec, hl); host[hl] = '\0';
-    if (colon) {
-        long p = strtol(colon + 1, NULL, 10);
-        if (p <= 0 || p > 65535) return -1;
-        *port = (uint16_t)p;
-    }
-    return 0;
+    return ps_audit_parse_target(spec, host, host_sz, 3306, port);
 }
 
 static int mysql_run(int argc, char **argv,
