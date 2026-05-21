@@ -1,0 +1,41 @@
+[Unit]
+Description=packetsonde network observation agent
+Documentation=https://github.com/billndotnet/packetsonde
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/packetsonded -c /etc/packetsonded/packetsonded.toml
+Restart=on-failure
+RestartSec=5s
+
+# Capabilities: pcap requires NET_RAW + NET_ADMIN; mTLS doesn't need them
+# itself but the agent's passive modules do.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# Run as an unprivileged user with the right capabilities granted by
+# systemd. Create with: useradd --system --no-create-home --shell /usr/sbin/nologin packetsonded
+User=packetsonded
+Group=packetsonded
+
+# Filesystem isolation. The agent only needs read access to its config
+# and key dirs, plus write to its state/log dirs.
+ReadOnlyPaths=/etc/packetsonded
+StateDirectory=packetsonded
+LogsDirectory=packetsonded
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
