@@ -175,16 +175,16 @@ static int parse_snmp_response(const uint8_t *buf, size_t len,
     return 1;
 }
 
-static int try_community(int fd, struct sockaddr *addr, socklen_t addrlen,
-                         uint8_t version, const char *community,
+static int try_community(int fd, uint8_t version, const char *community,
                          char *sysdescr, size_t sysdescr_sz) {
     uint8_t pkt[256];
     uint32_t rid = 0x70616373; /* "pacs" */
     int n = build_snmp_get(pkt, sizeof(pkt), version, community, rid);
     if (n < 0) return 0;
-    if (sendto(fd, pkt, (size_t)n, 0, addr, addrlen) < 0) return 0;
+    /* fd is a connected UDP socket -- send/recv work without addresses. */
+    if (send(fd, pkt, (size_t)n, 0) < 0) return 0;
     uint8_t rbuf[1500];
-    ssize_t r = recvfrom(fd, rbuf, sizeof(rbuf), 0, NULL, NULL);
+    ssize_t r = recv(fd, rbuf, sizeof(rbuf), 0);
     if (r <= 0) return 0;
     return parse_snmp_response(rbuf, (size_t)r, rid, sysdescr, sysdescr_sz);
 }
@@ -206,19 +206,9 @@ static int snmp_run(int argc, char **argv,
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_DGRAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) return 1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return 1; }
-    struct timeval tv = { 2, 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     char ip[64] = "";
-    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-    inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+    int fd = ps_audit_udp_connect(host, port, 2000, ip, sizeof(ip));
+    if (fd < 0) return 1;
 
     /* Try v2c then v1, with "public" then "private". First hit wins.
      * Both common defaults are read-only on most stacks but their presence
@@ -235,8 +225,8 @@ static int snmp_run(int argc, char **argv,
     for (size_t vi = 0; vi < sizeof(versions) && !matched; vi++) {
         for (size_t ci = 0; ci < sizeof(communities) / sizeof(communities[0]) && !matched; ci++) {
             char sd[256] = "";
-            if (try_community(fd, res->ai_addr, res->ai_addrlen,
-                              versions[vi], communities[ci], sd, sizeof(sd))) {
+            if (try_community(fd, versions[vi], communities[ci],
+                              sd, sizeof(sd))) {
                 matched = 1;
                 match_community = communities[ci];
                 match_version = vlabels[vi];
@@ -245,7 +235,6 @@ static int snmp_run(int argc, char **argv,
         }
     }
 
-    freeaddrinfo(res);
     close(fd);
 
     if (!matched) {
