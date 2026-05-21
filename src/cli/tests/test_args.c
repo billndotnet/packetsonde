@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/* args.c calls into the verb registry to print the Verbs section of
+ * usage; dispatch.c provides the real implementation. Stub it out here
+ * so test_args can link without pulling in every audit/probe/scan TU. */
+void ps_verbs_print_list(FILE *fp) { (void)fp; }
+
 static void test_defaults(void) {
     char *argv[] = { "packetsonde", "version" };
     struct ps_args a = {0};
