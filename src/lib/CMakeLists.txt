@@ -8,6 +8,7 @@ add_library(packetsonde_lib STATIC
     traceroute.c
     discovery.c
     keystore.c
+    agent_proto.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -32,4 +33,8 @@ if(BUILD_TESTING)
     add_executable(test_discovery tests/test_discovery.c)
     target_link_libraries(test_discovery PRIVATE packetsonde_lib)
     add_test(NAME test_discovery COMMAND test_discovery)
+
+    add_executable(test_agent_proto tests/test_agent_proto.c)
+    target_link_libraries(test_agent_proto PRIVATE packetsonde_lib)
+    add_test(NAME test_agent_proto COMMAND test_agent_proto)
 endif()
