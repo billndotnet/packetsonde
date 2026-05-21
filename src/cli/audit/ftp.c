@@ -78,25 +78,11 @@ static int ftp_run(int argc, char **argv,
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 
     /* Connect */
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) { return 1;
-    }
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return 1; }
-    struct timeval tv = { 4, 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     char ip[64] = "";
-    struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-    inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
-    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
-    freeaddrinfo(res);
-    if (rc != 0) {
+    int fd = ps_audit_tcp_connect(host, port, 4000, ip, sizeof(ip));
+    if (fd < 0) {
         fprintf(stderr, "audit ftp: cannot connect to %s:%u\n", host, port);
-        close(fd); return 1;
+        return 1;
     }
 
     /* Read greeting (220) */
