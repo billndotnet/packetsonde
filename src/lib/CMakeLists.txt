@@ -8,13 +8,15 @@ add_library(packetsonde_lib STATIC
     traceroute.c
     discovery.c
     keystore.c
+    agent_proto.c
+    agent_transport.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
 set_target_properties(packetsonde_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Ed25519 sign/verify + SHA-256 fingerprints live in discovery.c / keystore.c.
 find_package(OpenSSL REQUIRED)
-target_link_libraries(packetsonde_lib PUBLIC OpenSSL::Crypto)
+target_link_libraries(packetsonde_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
 
 if(BUILD_TESTING)
     add_executable(test_ulid tests/test_ulid.c)
@@ -32,4 +34,12 @@ if(BUILD_TESTING)
     add_executable(test_discovery tests/test_discovery.c)
     target_link_libraries(test_discovery PRIVATE packetsonde_lib)
     add_test(NAME test_discovery COMMAND test_discovery)
+
+    add_executable(test_agent_proto tests/test_agent_proto.c)
+    target_link_libraries(test_agent_proto PRIVATE packetsonde_lib)
+    add_test(NAME test_agent_proto COMMAND test_agent_proto)
+
+    add_executable(test_agent_transport tests/test_agent_transport.c)
+    target_link_libraries(test_agent_transport PRIVATE packetsonde_lib pthread)
+    add_test(NAME test_agent_transport COMMAND test_agent_transport)
 endif()

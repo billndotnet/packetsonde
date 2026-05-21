@@ -22,7 +22,7 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 
 ## Status
 
-v1.5.
+v1.6.
 
 | Verb       | What it does |
 |-----------:|---|
@@ -94,7 +94,7 @@ Example finding:
                  └────┬──────────────┬──────┘
                       │              │
               local raw          --via <name>
-        (cap_net_raw/sudo)       (network, follow-on)
+        (cap_net_raw/sudo)       (mTLS, knock-then-listen)
                       │              │
                       ▼              ▼
                   kernel       ┌────────────────┐

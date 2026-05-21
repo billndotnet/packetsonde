@@ -4,6 +4,21 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+## [v1.6] — 2026-05-20
+
+### Added — agent network protocol
+Closes the `--via <agent>` follow-on. End-to-end mTLS channel for remote-segment audits; reuses the Ed25519 keystore from v1.5 discovery so identity and trust model are unified across the project.
+
+- **`src/lib/agent_proto.{h,c}`** — transport-independent wire framing. `uint32_t length || JSON{...}` per frame, 1 MiB ceiling, canonical message types: `hello`, `audit`, `finding`, `log`, `error`, `bye`. Conservative top-level `type` scanner so the dispatch path doesn't pay for a full JSON parse on every frame.
+- **`src/lib/agent_transport.{h,c}`** — TLS 1.3 mTLS with Ed25519 self-signed certs. Identity == pubkey, no PKI, no CA, no chain validation. Built-in verify callback accepts the chain unconditionally; the real check is a post-handshake SHA-256 of the peer's `SubjectPublicKeyInfo` compared to a pinned fingerprint. `SSL` wrapped in the `ps_ap_io` abstraction so framing code works over both plain fds (tests) and TLS sessions.
+- **CLI `--via <agent>`** — when set, `packetsonde audit ...` dispatches to a remote agent instead of the local audit modules. Resolves the agent from `agents.toml` (`key_fingerprint` pin required), opens the mTLS channel, sends `hello` + `audit`, streams `finding` frames back with a `via_agent` field spliced in.
+- **agent `network_listener` module** — operator opt-in (`PS_AGENT_LISTEN_MODE=persistent|knock|both`). Accept loop, pthread per session (capped via `PS_AGENT_MAX_CLIENTS`, default 64). On valid audit request, forks `packetsonde --jsonl audit ...` as a subprocess and pipes each JSONL line out as a `finding` frame. Audit-side crashes can't take down the agent.
+- **Knock-then-listen stealth mode** — bit 0 of the existing discovery probe flags = `PS_DISCOVERY_FLAG_REQUEST_SESSION`. The discovery_listener calls a cross-module hook into network_listener to bind a fresh ephemeral TCP socket for one accept; the discovery reply advertises that port. Between knocks the agent has no listening socket at all — port scans return nothing distinguishable from a quiet host. CLI side: `knock = "true"` + optional `broadcast = "..."` in `agents.toml`.
+- **End-to-end test (`test_via_e2e`)** — drives a real `packetsonde --via testagent audit ssh` against a `test_network_listener_driver` that hosts the agent module, with a Python mock SSH server as the audit target. Asserts `ssh.metadata`, `ssh.old_version`, and `via_agent` all appear in the finding stream.
+
+### Tags
+- `v1.6`
+
 ## [v1.5] — 2026-05-20
 
 ### Added — audit kinds

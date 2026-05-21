@@ -10,6 +10,7 @@ set(CLI_SOURCES
     verbs/probe.c
     verbs/report.c
     verbs/key.c
+    remote/audit_via.c
     audit_loader.c
     registry/agents.c
     audit/tls.c
@@ -174,6 +175,12 @@ if(BUILD_TESTING)
     add_test(NAME test_discover_agents
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_discover_agents.sh)
     set_tests_properties(test_discover_agents PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_via_e2e
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_e2e.sh)
+    set_tests_properties(test_via_e2e PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 endif()

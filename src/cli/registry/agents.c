@@ -73,6 +73,8 @@ int ps_agents_load(struct ps_agents *A, const char *path) {
         if      (!strcmp(key, "address"))         strncpy(cur.address,         val, sizeof(cur.address)         - 1);
         else if (!strcmp(key, "key_fingerprint")) strncpy(cur.key_fingerprint, val, sizeof(cur.key_fingerprint) - 1);
         else if (!strcmp(key, "tags"))            strncpy(cur.tags,            val, sizeof(cur.tags)            - 1);
+        else if (!strcmp(key, "broadcast"))       strncpy(cur.broadcast,       val, sizeof(cur.broadcast)       - 1);
+        else if (!strcmp(key, "knock"))           cur.knock = (val[0] == 't' || val[0] == '1');
     }
     if (in_block && cur.name[0]) ps_agents_push(A, &cur);
     fclose(f);
@@ -93,6 +95,11 @@ void ps_agents_destroy(struct ps_agents *A) {
 
 const char *ps_agents_default_path(void) {
     static char path[512];
+    const char *override = getenv("PS_AGENTS_TOML");
+    if (override && *override) {
+        snprintf(path, sizeof(path), "%s", override);
+        return path;
+    }
     const char *cfg = getenv("XDG_CONFIG_HOME");
     if (cfg && cfg[0]) {
         snprintf(path, sizeof(path), "%s/packetsonde/agents.toml", cfg);
