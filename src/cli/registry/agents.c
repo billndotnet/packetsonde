@@ -93,6 +93,11 @@ void ps_agents_destroy(struct ps_agents *A) {
 
 const char *ps_agents_default_path(void) {
     static char path[512];
+    const char *override = getenv("PS_AGENTS_TOML");
+    if (override && *override) {
+        snprintf(path, sizeof(path), "%s", override);
+        return path;
+    }
     const char *cfg = getenv("XDG_CONFIG_HOME");
     if (cfg && cfg[0]) {
         snprintf(path, sizeof(path), "%s/packetsonde/agents.toml", cfg);

@@ -94,6 +94,7 @@ set(AGENT_CORE_SOURCES
     src/modules/broadcast_listener.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
+    src/modules/network_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
 )
@@ -235,6 +236,13 @@ target_include_directories(test_netflow_export PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_netflow_export PRIVATE packetsonde_lib)
 add_test(NAME test_netflow_export COMMAND test_netflow_export)
+
+# Standalone driver for the e2e --via test (no add_test; the bash test
+# invokes it as a subprocess).
+add_executable(test_network_listener_driver tests/test_network_listener_driver.c)
+target_include_directories(test_network_listener_driver PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_network_listener_driver PRIVATE packetsonde_lib pthread)
 
 # Test: flow tracker (synthetic packets — no pcap or network needed)
 add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
