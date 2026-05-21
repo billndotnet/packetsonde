@@ -109,9 +109,20 @@ static void emit_finding_passthrough(struct ps_output *out,
     /* Build: <obj_without_closing>,"via_agent":"<name>"} */
     char buf[8192];
     if (obj_len + strlen(agent_name) + 32 >= sizeof(buf)) return;
+    /* JSON-escape agent_name so a stray quote/backslash in a local
+     * agents.toml entry can't corrupt the JSONL stream a downstream
+     * tool will parse. */
+    char esc[2 * 64 + 4]; /* PS_AGENT_NAME_MAX = 64, worst-case doubled */
+    size_t eo = 0;
+    for (const char *p = agent_name; *p && eo + 2 < sizeof(esc); p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { esc[eo++] = '\\'; esc[eo++] = (char)c; }
+        else if (c >= 0x20 && c < 0x7f) esc[eo++] = (char)c;
+    }
+    esc[eo] = '\0';
     memcpy(buf, start, obj_len - 1); /* drop closing } */
     int n = snprintf(buf + obj_len - 1, sizeof(buf) - (obj_len - 1),
-                     ",\"via_agent\":\"%s\"}", agent_name);
+                     ",\"via_agent\":\"%s\"}", esc);
     if (n < 0) return;
     (void)out;
     /* JSONL passthrough: one line on stdout. Matches the emitter's JSONL
@@ -255,7 +266,10 @@ int ps_audit_via_run(int argc, char **argv,
         }
     }
 
-    /* Open the mTLS channel. */
+    /* Open the mTLS channel. SIGPIPE block is opt-in now (#11) so the
+     * library can be embedded without surprise. We want it set for any
+     * --via run so a half-closed peer doesn't kill us mid-stream. */
+    ps_at_block_sigpipe();
     struct ps_at_ctx tctx;
     if (ps_at_ctx_init(&tctx, PS_AT_CLIENT, &kp, pin) != 0) {
         fprintf(stderr, "--via: TLS context init failed\n");
