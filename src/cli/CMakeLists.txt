@@ -202,7 +202,8 @@ if(BUILD_TESTING)
     # integration test (review finding #14). Same Python+FIFO mock pattern
     # as the existing tests.
     foreach(_kind smtp redis memcached ftp telnet http
-                  elasticsearch postgresql mysql)
+                  elasticsearch postgresql mysql
+                  dns ntp ldap smb)
         add_test(NAME test_audit_${_kind}
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_${_kind}.sh)
         set_tests_properties(test_audit_${_kind} PROPERTIES
