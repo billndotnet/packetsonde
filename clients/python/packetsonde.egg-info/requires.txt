@@ -1,9 +1,0 @@
-
-[airflow]
-apache-airflow>=2.7
-
-[celery]
-celery>=5
-
-[dev]
-pytest>=7
