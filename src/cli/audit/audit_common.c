@@ -96,3 +96,47 @@ int ps_audit_tcp_connect(const char *host, uint16_t port, int timeout_ms,
     freeaddrinfo(res);
     return fd;
 }
+
+int ps_audit_udp_connect(const char *host, uint16_t port, int timeout_ms,
+                         char *out_ip, size_t out_ip_sz) {
+    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
+    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_protocol = IPPROTO_UDP;
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
+
+    int fd = -1;
+    for (struct addrinfo *r = res; r; r = r->ai_next) {
+        fd = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
+        if (fd < 0) continue;
+        if (timeout_ms > 0) {
+            struct timeval tv;
+            tv.tv_sec  = timeout_ms / 1000;
+            tv.tv_usec = (timeout_ms % 1000) * 1000;
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
+        /* connect() on a DGRAM socket fixes the peer so send/recv work
+         * without an explicit address, and lets ICMP port-unreachable
+         * surface as ECONNREFUSED on the next recv. */
+        if (connect(fd, r->ai_addr, r->ai_addrlen) == 0) {
+            if (out_ip && out_ip_sz > 0) {
+                if (r->ai_family == AF_INET) {
+                    struct sockaddr_in *sin = (struct sockaddr_in *)r->ai_addr;
+                    inet_ntop(AF_INET, &sin->sin_addr, out_ip, (socklen_t)out_ip_sz);
+                } else if (r->ai_family == AF_INET6) {
+                    struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)r->ai_addr;
+                    inet_ntop(AF_INET6, &s6->sin6_addr, out_ip, (socklen_t)out_ip_sz);
+                } else {
+                    out_ip[0] = '\0';
+                }
+            }
+            break;
+        }
+        close(fd); fd = -1;
+    }
+    freeaddrinfo(res);
+    return fd;
+}
