@@ -34,7 +34,8 @@ static int split_addr(const char *spec, char *host, size_t host_sz, uint16_t *po
  * Each arg is shell-escape-free (we just pass the verb's argv through).
  * JSON-string-escape each arg minimally. */
 static int build_audit_request(char *out, size_t outsz,
-                               int argc, char **argv) {
+                               int argc, char **argv,
+                               const char *const *via_chain, int via_count) {
     size_t off = 0;
     int n = snprintf(out + off, outsz - off,
                      "{\"type\":\"audit\",\"kind\":\"%s\",\"args\":[", argv[0]);
@@ -54,8 +55,32 @@ static int build_audit_request(char *out, size_t outsz,
         if (off + 1 >= outsz) return -1;
         out[off++] = '"';
     }
-    if (off + 3 >= outsz) return -1;
+    if (off + 1 >= outsz) return -1;
     out[off++] = ']';
+    /* Optional via_chain: the *remaining* hops after this one. The
+     * receiving agent runs `packetsonde --via via_chain[0] ...` so the
+     * forwarded request keeps shrinking by one hop per layer. */
+    if (via_count > 0) {
+        int w = snprintf(out + off, outsz - off, ",\"via_chain\":[");
+        if (w < 0 || (size_t)w >= outsz - off) return -1;
+        off += (size_t)w;
+        for (int i = 0; i < via_count; i++) {
+            if (i > 0 && off + 1 < outsz) out[off++] = ',';
+            if (off + 1 >= outsz) return -1;
+            out[off++] = '"';
+            for (const char *p = via_chain[i]; *p; p++) {
+                if (off + 2 >= outsz) return -1;
+                unsigned char c = (unsigned char)*p;
+                if (c == '"' || c == '\\') { out[off++] = '\\'; out[off++] = (char)c; }
+                else if (c >= 0x20 && c < 0x7f) out[off++] = (char)c;
+            }
+            if (off + 1 >= outsz) return -1;
+            out[off++] = '"';
+        }
+        if (off + 1 >= outsz) return -1;
+        out[off++] = ']';
+    }
+    if (off + 1 >= outsz) return -1;
     out[off++] = '}';
     out[off]   = '\0';
     return (int)off;
@@ -407,7 +432,13 @@ int ps_audit_via_run(int argc, char **argv,
         return 1;
     }
     char req[4096];
-    int rn = build_audit_request(req, sizeof(req), argc, argv);
+    /* opts->via_chain[0] is the hop we just connected to; the remaining
+     * hops travel in the request so the receiving agent can forward. */
+    const char *const *next_chain = (opts->via_count > 1)
+        ? &opts->via_chain[1] : NULL;
+    int next_count = (opts->via_count > 1) ? (opts->via_count - 1) : 0;
+    int rn = build_audit_request(req, sizeof(req), argc, argv,
+                                 next_chain, next_count);
     if (rn < 0 || ps_ap_write_frame(&io, req, (size_t)rn) != PS_AP_OK) {
         fprintf(stderr, "--via: audit request write failed\n");
         ps_at_close(ssl); ps_at_ctx_destroy(&tctx); ps_agents_destroy(&A);

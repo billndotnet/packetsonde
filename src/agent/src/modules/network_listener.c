@@ -47,6 +47,10 @@
 #include "log.h"
 
 #define MAX_AUTHORIZED 64
+/* Mirrors PS_ARGS_MAX_VIA_HOPS in the CLI: longest --via chain we accept
+ * in a single forwarded request. Defense-in-depth bound on argv growth
+ * and recursion depth across the agent fleet. */
+#define PS_NL_MAX_VIA_HOPS 8
 
 struct nl_state {
     int                listen_fd;
@@ -112,21 +116,25 @@ static int is_authorized(struct nl_state *st, SSL *ssl) {
  * pointers into argbuf (a private scratch buffer). */
 static int parse_audit_request(const uint8_t *frame, size_t len,
                                char *argbuf, size_t argbuf_sz,
-                               char **argv, int argv_cap, int *argc_out) {
+                               char **argv, int argv_cap, int *argc_out,
+                               const char **via_chain, int via_cap,
+                               int *via_count_out) {
     /* The frame shape we emit on the CLI side:
-     *   {"type":"audit","kind":"<k>","args":["a","b",...]}
-     * Conservative scanner: find "kind" string, then "args" array, walk
-     * its strings. */
+     *   {"type":"audit","kind":"<k>","args":["a","b",...],
+     *    "via_chain":["host1","host2",...]?}
+     * Conservative scanner: find each keyed array/string in turn. */
     const uint8_t *p = frame;
     const uint8_t *end = frame + len;
     const char *kind_lit = "\"kind\"";
     const char *args_lit = "\"args\"";
+    const char *via_lit  = "\"via_chain\"";
 
-    const uint8_t *kp = NULL, *ap = NULL;
+    const uint8_t *kp = NULL, *ap = NULL, *vp = NULL;
     for (const uint8_t *s = p; s + 6 <= end; s++) {
         if (!kp && memcmp(s, kind_lit, 6) == 0) kp = s + 6;
         if (!ap && memcmp(s, args_lit, 6) == 0) ap = s + 6;
-        if (kp && ap) break;
+        if (!vp && s + 11 <= end && memcmp(s, via_lit, 11) == 0) vp = s + 11;
+        if (kp && ap && vp) break;
     }
     if (!kp) return -1;
     while (kp < end && (*kp == ' ' || *kp == ':' || *kp == '\t')) kp++;
@@ -171,6 +179,38 @@ static int parse_audit_request(const uint8_t *frame, size_t len,
         }
     }
     *argc_out = argc;
+
+    /* via_chain (optional). Walks an array of strings. Each entry has to
+     * be a safe hostname-ish token; we use the same arg_is_safe check
+     * below so the runner can't be tricked into building --via with
+     * shell-meta payloads. */
+    int via_count = 0;
+    if (vp && via_chain && via_cap > 0) {
+        while (vp < end && (*vp == ' ' || *vp == ':' || *vp == '\t')) vp++;
+        if (vp < end && *vp == '[') {
+            vp++;
+            while (vp < end && via_count < via_cap) {
+                while (vp < end && (*vp == ' ' || *vp == ',' || *vp == '\t')) vp++;
+                if (vp >= end || *vp == ']') break;
+                if (*vp != '"') return -1;
+                vp++;
+                const uint8_t *avs = vp;
+                while (vp < end && *vp != '"') {
+                    if (*vp == '\\' && vp + 1 < end) vp += 2;
+                    else vp++;
+                }
+                if (vp >= end) return -1;
+                size_t alen = (size_t)(vp - avs);
+                if (off + alen + 1 > argbuf_sz) return -1;
+                memcpy(argbuf + off, avs, alen);
+                argbuf[off + alen] = '\0';
+                via_chain[via_count++] = argbuf + off;
+                off += alen + 1;
+                vp++;
+            }
+        }
+    }
+    if (via_count_out) *via_count_out = via_count;
     return 0;
 }
 
@@ -219,6 +259,7 @@ static int arg_is_safe(const char *s) {
 static void run_subprocess(struct nl_state *st,
                            const char *audit_kind,
                            char **audit_argv, int audit_argc,
+                           const char **via_chain, int via_count,
                            const struct ps_ap_io *io) {
     int pfd[2];
     if (pipe(pfd) != 0) return;
@@ -231,14 +272,22 @@ static void run_subprocess(struct nl_state *st,
         dup2(pfd[1], 1);
         int n = open("/dev/null", O_WRONLY); if (n >= 0) { dup2(n, 2); close(n); }
         close(pfd[0]); close(pfd[1]);
-        /* argv: packetsonde --jsonl audit <kind> <args...> NULL */
-        const char *argv[16] = {0};
+        /* argv: packetsonde --jsonl [--via X]... audit <kind> <args...> NULL
+         *
+         * Multi-hop: each entry in via_chain adds a `--via NAME` pair so
+         * the subprocess opens another --via session to the next hop.
+         * The receiving agent there sees one fewer entry, and so on. */
+        const char *argv[32] = {0};
         int i = 0;
         argv[i++] = st->packetsonde_bin;
         argv[i++] = "--jsonl";
+        for (int v = 0; v < via_count && i + 2 < 31; v++) {
+            argv[i++] = "--via";
+            argv[i++] = via_chain[v];
+        }
         argv[i++] = "audit";
         argv[i++] = audit_kind;
-        for (int j = 1; j < audit_argc && i < 15; j++) argv[i++] = audit_argv[j];
+        for (int j = 1; j < audit_argc && i < 31; j++) argv[i++] = audit_argv[j];
         argv[i] = NULL;
         execvp(argv[0], (char *const *)argv);
         _exit(127);
@@ -338,7 +387,10 @@ static void *session_thread(void *arg) {
         }
         /* Parse + dispatch. */
         char argbuf[2048]; char *av[16] = {0}; int ac = 0;
-        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, 16, &ac) != 0 || ac < 1) {
+        const char *via_chain[PS_NL_MAX_VIA_HOPS] = {0};
+        int vc = 0;
+        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, 16, &ac,
+                                via_chain, PS_NL_MAX_VIA_HOPS, &vc) != 0 || ac < 1) {
             const char *e = "{\"type\":\"error\",\"message\":\"bad audit request\"}";
             ps_ap_write_frame(&io, e, strlen(e));
             goto out;
@@ -358,7 +410,16 @@ static void *session_thread(void *arg) {
                 goto out;
             }
         }
-        run_subprocess(st, av[0], av, ac, &io);
+        /* via_chain hops must also be safe -- they become --via args
+         * to the subprocess. */
+        for (int i = 0; i < vc; i++) {
+            if (!arg_is_safe(via_chain[i])) {
+                const char *e = "{\"type\":\"error\",\"message\":\"unsafe via_chain entry\"}";
+                ps_ap_write_frame(&io, e, strlen(e));
+                goto out;
+            }
+        }
+        run_subprocess(st, av[0], av, ac, via_chain, vc, &io);
         dispatched = 1;
     }
 
