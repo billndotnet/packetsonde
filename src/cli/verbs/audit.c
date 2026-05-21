@@ -142,6 +142,7 @@ int ps_verb_audit_run(int argc, char **argv, const struct ps_args *opts) {
         struct ps_output out;
         ps_output_init(&out, &oopts);
         int rc = ps_audit_via_run(argc - 1, argv + 1, opts, &out);
+        ps_output_snapshot(&out, &g_last_run_counts);
         ps_output_close(&out);
         return rc;
     }

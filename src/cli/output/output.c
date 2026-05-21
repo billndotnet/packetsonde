@@ -104,6 +104,27 @@ void ps_output_emit(struct ps_output *o, const struct ps_finding *f) {
     pthread_mutex_unlock(&o->lock);
 }
 
+void ps_output_emit_raw_jsonl(struct ps_output *o, int severity,
+                              const char *line, size_t len) {
+    if (!o || !line || len == 0) return;
+    pthread_mutex_lock(&o->lock);
+    switch (severity) {
+        case PS_SEV_INFO:     o->n_info++;     break;
+        case PS_SEV_LOW:      o->n_low++;      break;
+        case PS_SEV_MEDIUM:   o->n_medium++;   break;
+        case PS_SEV_HIGH:     o->n_high++;     break;
+        case PS_SEV_CRITICAL: o->n_critical++; break;
+        default: break;
+    }
+    if (o->fmt != PS_OFMT_QUIET) {
+        write_all(o->stdout_fd, line, len);
+    }
+    if (o->append_fd >= 0) {
+        write_all(o->append_fd, line, len);
+    }
+    pthread_mutex_unlock(&o->lock);
+}
+
 void ps_output_summary(const struct ps_output *o, const char *run_id, long duration_ms) {
     unsigned int total = o->n_info + o->n_low + o->n_medium + o->n_high + o->n_critical;
     fprintf(stderr,
