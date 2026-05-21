@@ -36,11 +36,15 @@ const struct ps_verb *ps_verbs_find(const char *name) {
     return NULL;
 }
 
+void ps_verbs_print_list(FILE *fp) {
+    for (const struct ps_verb *v = VERBS; v->name; v++) {
+        fprintf(fp, "  %-10s %s\n", v->name, v->summary);
+    }
+}
+
 int ps_verb_help_run(int argc, char **argv, const struct ps_args *opts) {
     (void)argc; (void)argv; (void)opts;
     printf("Verbs:\n");
-    for (const struct ps_verb *v = VERBS; v->name; v++) {
-        printf("  %-12s %s\n", v->name, v->summary);
-    }
+    ps_verbs_print_list(stdout);
     return 0;
 }
