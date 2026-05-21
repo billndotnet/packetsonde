@@ -11,9 +11,13 @@ enum ps_fmt {
     PS_FMT_QUIET
 };
 
+#define PS_ARGS_MAX_VIA_HOPS 8
+
 struct ps_args {
     enum ps_fmt fmt;
-    const char *via;          /* --via name, or NULL */
+    const char *via;          /* first --via name (for back-compat callers) */
+    const char *via_chain[PS_ARGS_MAX_VIA_HOPS]; /* full --via sequence */
+    int         via_count;
     const char *config_path;  /* --config path, or NULL */
     const char *socket_path;  /* --socket path (override), or NULL */
     bool no_color;
