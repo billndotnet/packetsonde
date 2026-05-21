@@ -36,6 +36,7 @@ set(CLI_SOURCES
     audit/kafka.c
     audit/audit_common.c
     probe/tcp.c
+    probe/icmp.c
     probe/traceroute.c
     discover/neighbors.c
     discover/hosts.c
