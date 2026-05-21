@@ -1,0 +1,99 @@
+# packetsonde (Python client)
+
+Python wrapper around the [`packetsonde`](../../) CLI. Spawns the
+binary as a subprocess and yields findings as typed dataclasses.
+
+```bash
+pip install packetsonde            # core (subprocess client only)
+pip install 'packetsonde[celery]'  # + Celery tasks
+pip install 'packetsonde[airflow]' # + Airflow operators
+```
+
+The CLI itself must be installed separately and available on `$PATH`
+(or pass `binary=` to `Client()`).
+
+## Quick start
+
+```python
+from packetsonde import Client, Severity
+
+pc = Client()
+result = pc.audit("tls", "mail.example.com:443")
+print(f"got {len(result.findings)} findings in {result.duration_ms} ms")
+
+for f in result.findings:
+    if f.severity in (Severity.HIGH, Severity.CRITICAL):
+        print(f.kind, f.title, f.target.ip, f.target.port)
+```
+
+## Streaming long runs
+
+For traceroute, CIDR scans, and other long-running runs, use
+`Client.stream()` to receive findings as they arrive:
+
+```python
+for f in pc.stream("scan", "ports", "10.0.0.0/24", "-p", "22,80,443"):
+    print(f.kind, f.target.ip, f.target.port)
+```
+
+## Failing CI on a severity floor
+
+```python
+pc = Client(fail_on="severity>=high")
+try:
+    pc.audit("tls", target)
+except FailOnTriggered:
+    sys.exit(1)
+```
+
+## Celery
+
+```python
+from celery import Celery
+from packetsonde.celery_tasks import register_tasks
+
+app = Celery("scanner", broker="redis://localhost:6379/0")
+register_tasks(app)
+
+# Worker side runs tasks; producer side dispatches:
+result = app.send_task("packetsonde.audit",
+                       args=["tls", "mail.example.com:443"])
+findings = result.get(timeout=30)
+```
+
+Findings come back as plain dicts (Finding.raw) so they serialize
+cleanly through Celery's default JSON backend.
+
+## Airflow
+
+```python
+from airflow import DAG
+from packetsonde.airflow import PacketSondeAuditOperator
+
+with DAG("nightly_audit", schedule_interval="0 2 * * *", ...) as dag:
+    PacketSondeAuditOperator(
+        task_id="audit_mail_tls",
+        kind="tls",
+        target="mail.example.com:443",
+        fail_on="severity>=high",
+    )
+```
+
+Findings land in XCom under the operator's task_id.
+
+## Remote agents (`--via`)
+
+If you've configured an agent in `~/.config/packetsonde/agents.toml`,
+pass `via="name"` to the client and the audit runs on that agent:
+
+```python
+pc = Client(via="trunkbox")
+pc.audit("tls", "internal-host:443")
+```
+
+This requires the CLI to be v1.6+ (agent network protocol).
+
+## License
+
+PolyForm Noncommercial 1.0.0 (modified to exclude government use), same
+as the rest of the project. See `../../LICENSE`.
