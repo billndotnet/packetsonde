@@ -71,6 +71,37 @@ static int test_reply_roundtrip(void) {
     return 0;
 }
 
+/* H-2 regression: an evicted (pubkey,nonce) must NOT be replayable
+ * even after flood traffic pushes it out of the primary LRU. */
+static int test_replay_eviction_is_remembered(void) {
+    struct ps_discovery_replay r;
+    ps_discovery_replay_init(&r);
+
+    uint8_t pk[PS_DISCOVERY_PUBKEY_SIZE]; memset(pk, 0xaa, sizeof(pk));
+    uint8_t victim_nonce[PS_DISCOVERY_NONCE_SIZE];
+    memset(victim_nonce, 0x42, sizeof(victim_nonce));
+
+    /* Victim probe. */
+    CHECK(ps_discovery_replay_check(&r, pk, victim_nonce, 1000, 0) == 0);
+
+    /* Flood: fill the primary table with PS_DISCOVERY_REPLAY_CAP fresh
+     * (pubkey,nonce) entries, all with a LATER expiry than the victim.
+     * The victim entry (with the earliest expiry) is the oldest, so
+     * eviction picks it first. */
+    uint8_t flood_pk[PS_DISCOVERY_PUBKEY_SIZE]; memset(flood_pk, 0xbb, sizeof(flood_pk));
+    for (int i = 0; i < PS_DISCOVERY_REPLAY_CAP; i++) {
+        uint8_t n[PS_DISCOVERY_NONCE_SIZE]; memset(n, 0, sizeof(n));
+        n[0] = (uint8_t)(i & 0xff);
+        n[1] = (uint8_t)((i >> 8) & 0xff);
+        n[2] = 0xcc; /* distinguish from victim_nonce */
+        CHECK(ps_discovery_replay_check(&r, flood_pk, n, 9999, 0) == 0);
+    }
+
+    /* The victim's slot should have been evicted -- now try to replay. */
+    CHECK(ps_discovery_replay_check(&r, pk, victim_nonce, 1000, 0) == 1);
+    return 0;
+}
+
 static int test_replay_lru(void) {
     struct ps_discovery_replay r;
     ps_discovery_replay_init(&r);
@@ -132,6 +163,7 @@ int main(void) {
     if (test_probe_roundtrip()) return 1;
     if (test_reply_roundtrip()) return 1;
     if (test_replay_lru()) return 1;
+    if (test_replay_eviction_is_remembered()) return 1;
     if (test_wrong_key_fails_verify()) return 1;
     if (test_keystore_fingerprint_deterministic()) return 1;
     fprintf(stderr, "test_discovery: OK\n");

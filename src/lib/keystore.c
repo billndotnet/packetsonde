@@ -44,8 +44,15 @@ int ps_keystore_fingerprint(const uint8_t *pubkey, char *out_hex) {
     return 0;
 }
 
-static int write_file(const char *path, const void *buf, size_t n, mode_t mode) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+/* Write `n` bytes to `path` with `mode`. If `exclusive` is non-zero, fail
+ * if the path already exists (O_EXCL). Used for secret-key writes so an
+ * attacker cannot pre-create the file with permissive permissions and
+ * race us into writing the key into a world-readable inode. */
+static int write_file(const char *path, const void *buf, size_t n,
+                      mode_t mode, int exclusive) {
+    int flags = O_WRONLY | O_CREAT | O_TRUNC;
+    if (exclusive) flags |= O_EXCL;
+    int fd = open(path, flags, mode);
     if (fd < 0) return -1;
     ssize_t w = write(fd, buf, n);
     close(fd);
@@ -63,10 +70,14 @@ static int read_file(const char *path, void *buf, size_t want) {
 int ps_keystore_save(const char *dir, const char *name,
                      const struct ps_keypair *kp) {
     char p[1024];
-    snprintf(p, sizeof(p), "%s/%s.pub", dir, name);
-    if (write_file(p, kp->pubkey, PS_KEYSTORE_PUBKEY_SIZE, 0644) != 0) return -1;
+    /* Write secret first so a partial run never leaves an orphan pubkey
+     * with no matching seckey (caller's error path will see the failure
+     * and not advertise a key that doesn't exist). O_EXCL so an attacker
+     * cannot pre-create the .sec path with permissive perms. */
     snprintf(p, sizeof(p), "%s/%s.sec", dir, name);
-    if (write_file(p, kp->seckey, PS_KEYSTORE_SECKEY_SIZE, 0600) != 0) return -1;
+    if (write_file(p, kp->seckey, PS_KEYSTORE_SECKEY_SIZE, 0600, 1) != 0) return -1;
+    snprintf(p, sizeof(p), "%s/%s.pub", dir, name);
+    if (write_file(p, kp->pubkey, PS_KEYSTORE_PUBKEY_SIZE, 0644, 0) != 0) return -1;
     return 0;
 }
 

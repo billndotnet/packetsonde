@@ -93,11 +93,15 @@ static void load_authorized(struct nl_state *st, const char *dir) {
 static int is_authorized(struct nl_state *st, SSL *ssl) {
     char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
     if (ps_at_peer_fingerprint(ssl, fpr, sizeof(fpr)) != 0) return 0;
+    /* Constant-time-ish scan: walk all entries even after a match so a
+     * timing oracle can't enumerate the authorized list. */
+    int matched = 0;
     for (size_t i = 0; i < st->authorized_n; i++) {
         char expected[PS_KEYSTORE_FPR_HEX_SIZE];
         ps_keystore_fingerprint(st->authorized[i], expected);
-        if (strcmp(fpr, expected) == 0) return 1;
+        if (strcmp(fpr, expected) == 0) matched = 1;
     }
+    if (matched) return 1;
     return 0;
 }
 
@@ -172,6 +176,46 @@ static int parse_audit_request(const uint8_t *frame, size_t len,
 
 /* Drive the subprocess: build argv, fork, exec packetsonde, stream stdout
  * line by line to the SSL session as finding frames. */
+/* Audit kinds that the subprocess is allowed to invoke. Matches the
+ * built-in module list in src/cli/verbs/audit.c. Centralised here so a
+ * malicious authorized client cannot inject arbitrary verbs or shell
+ * tokens via the JSON 'kind' field -- see C-2 in the security review.
+ *
+ * If you add a new audit module to the CLI, also add it here. The
+ * test_via_e2e bash test exercises 'ssh' so the most-trafficked path
+ * stays covered. */
+static const char *AUDIT_KIND_ALLOWLIST[] = {
+    "tls", "dns", "http", "ssh", "smb", "telnet", "ftp", "redis",
+    "ntp", "memcached", "elasticsearch", "smtp", "mysql", "postgresql",
+    "ldap", "imap", "pop3", "snmp", "rdp", "mssql", "kafka", NULL
+};
+
+static int kind_is_allowed(const char *kind) {
+    if (!kind || !*kind) return 0;
+    for (const char **p = AUDIT_KIND_ALLOWLIST; *p; p++) {
+        if (strcmp(*p, kind) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Reject any argument that contains a byte that could change shell or
+ * exec semantics. We're using execvp (no shell), so this is mostly
+ * about catching characters that downstream parsers in the audit
+ * modules might mis-handle. Conservative: alphanumeric + a small
+ * punctuation set that covers host:port, paths, CIDRs, ports lists. */
+static int arg_is_safe(const char *s) {
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'a' && c <= 'z') continue;
+        if (c >= 'A' && c <= 'Z') continue;
+        if (c >= '0' && c <= '9') continue;
+        if (c == '.' || c == ':' || c == '-' || c == '_' ||
+            c == '/' || c == ',' || c == '@' || c == '=') continue;
+        return 0;
+    }
+    return 1;
+}
+
 static void run_subprocess(struct nl_state *st,
                            const char *audit_kind,
                            char **audit_argv, int audit_argc,
@@ -299,6 +343,21 @@ static void *session_thread(void *arg) {
             ps_ap_write_frame(&io, e, strlen(e));
             goto out;
         }
+        /* C-2 / M-3: allowlist the kind and validate each arg before
+         * handing them to execvp. JSON-content tricks (escape sequences,
+         * embedded NULs, key-order confusion) all bottom out here. */
+        if (!kind_is_allowed(av[0])) {
+            const char *e = "{\"type\":\"error\",\"message\":\"unknown audit kind\"}";
+            ps_ap_write_frame(&io, e, strlen(e));
+            goto out;
+        }
+        for (int i = 1; i < ac; i++) {
+            if (!arg_is_safe(av[i])) {
+                const char *e = "{\"type\":\"error\",\"message\":\"unsafe audit argument\"}";
+                ps_ap_write_frame(&io, e, strlen(e));
+                goto out;
+            }
+        }
         run_subprocess(st, av[0], av, ac, &io);
         dispatched = 1;
     }
@@ -324,13 +383,15 @@ static void *accept_thread_fn(void *arg) {
                     st->max_clients);
             continue;
         }
-        /* Hand the fd to ps_at_accept-style handshake: pretend the accept
-         * already happened by setting up a one-shot listener. Simpler: do
-         * a manual SSL_new + SSL_accept here. */
-        SSL *ssl = SSL_new(st->tctx.ssl_ctx);
-        if (!ssl) { close(cfd); continue; }
-        SSL_set_fd(ssl, cfd);
-        if (SSL_accept(ssl) != 1) { SSL_free(ssl); close(cfd); continue; }
+        /* Route through ps_at_accept_fd so the TLS handshake AND fingerprint
+         * enforcement happen in one place. We then immediately gate on the
+         * authorized-keys list before any application data flows. */
+        SSL *ssl = ps_at_accept_fd(&st->tctx, cfd);
+        if (!ssl) continue;
+        if (!is_authorized(st, ssl)) {
+            ps_at_close(ssl);  /* silent drop, no hello frame leak */
+            continue;
+        }
 
         struct session_args *sa = calloc(1, sizeof(*sa));
         if (!sa) { ps_at_close(ssl); continue; }
@@ -409,6 +470,9 @@ static int nl_init(ps_module_ctx_t *ctx) {
     else snprintf(auth_dir, sizeof(auth_dir), "%s/authorized", kdir);
     load_authorized(st, auth_dir);
 
+    /* Opt-in SIGPIPE block (#11): the agent has nontrivial cleanup
+     * paths -- don't get killed by a half-closed client mid-write. */
+    ps_at_block_sigpipe();
     if (ps_at_ctx_init(&st->tctx, PS_AT_SERVER, &st->agent_kp, NULL) != 0) {
         free(st); return -1;
     }
@@ -505,10 +569,12 @@ static void *window_thread(void *arg) {
         close(cfd);
         return NULL;
     }
-    SSL *ssl = SSL_new(g_state->tctx.ssl_ctx);
-    if (!ssl) { close(cfd); return NULL; }
-    SSL_set_fd(ssl, cfd);
-    if (SSL_accept(ssl) != 1) { SSL_free(ssl); close(cfd); return NULL; }
+    SSL *ssl = ps_at_accept_fd(&g_state->tctx, cfd);
+    if (!ssl) return NULL;
+    if (!is_authorized(g_state, ssl)) {
+        ps_at_close(ssl);  /* silent drop; no hello frame leak */
+        return NULL;
+    }
 
     struct session_args *sa = calloc(1, sizeof(*sa));
     if (!sa) { ps_at_close(ssl); return NULL; }
