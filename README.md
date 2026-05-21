@@ -17,7 +17,6 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 - **Extending** — [Writing audit plugins](docs/guides/writing-audit-plugins.md): single-file C plugins discovered via `dlopen` at runtime; ship custom audits without recompiling `packetsonde`. Example: `examples/audit-plugin/audit-vnc.c`.
 - [Design spec](docs/specs/2026-05-18-packetsonde-cli-design.md) — finding wire format, verb grammar, defaults, follow-ons
 - [Whitepaper](docs/specs/whitepaper.md) — the project's architecture and principles
-- [Agent network protocol brainstorm](docs/specs/agent-network-protocol-brainstorm.md) — open design questions for the `--via <agent>` work
 - [Visualization notes](docs/specs/viz-notes.md) — discipline file for the deferred viz redesign
 
 ## Status
@@ -146,7 +145,7 @@ src/
 
 docs/
 ├── guides/   # use case guides (trunk, service-dependency, bridge)
-├── specs/    # design specs (cli-design, agent-network-protocol-brainstorm, viz-notes)
+├── specs/    # design specs (cli-design, whitepaper, viz-notes)
 └── plans/    # implementation plans (one per phase)
 ```
 
@@ -154,7 +153,7 @@ docs/
 
 See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on list. Near-term priorities:
 
-1. **Agent network protocol** — unlocks `--via <agent>` for remote-segment audits. Brainstorm memo at `docs/specs/agent-network-protocol-brainstorm.md`.
-2. **TCP / ICMP traceroute modes** (Paris/Dublin landed for UDP).
-3. **GeoIP + ASN + JA3/JA3S/JA4 enrichment lifts.**
-4. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT, agent stays a primitive-runner with zero offensive content at rest.
+1. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT to the agent over the v1.6 `--via` channel; agent stays a primitive-runner with zero offensive content at rest.
+2. **Multi-hop `--via`** (`CLI → bunker → trunkbox`). Single-hop landed in v1.6.
+3. **GeoIP + ASN + JA4** enrichments (JA3 / JA3S landed in v1.5).
+4. **IPv6 + UDP audit-common helpers** — the TCP path is shared; UDP and TLS/HTTP modules still hand-roll their connect blocks.
