@@ -39,6 +39,7 @@ extern const struct ps_audit_module *ps_audit_kafka_module(void);
 extern const struct ps_audit_module *ps_audit_vnc_module(void);
 extern const struct ps_audit_module *ps_audit_haproxy_module(void);
 extern const struct ps_audit_module *ps_audit_proxmox_module(void);
+extern const struct ps_audit_module *ps_audit_nginx_module(void);
 
 static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_tls_module,
@@ -65,6 +66,7 @@ static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
     ps_audit_vnc_module,
     ps_audit_haproxy_module,
     ps_audit_proxmox_module,
+    ps_audit_nginx_module,
     NULL
 };
 
