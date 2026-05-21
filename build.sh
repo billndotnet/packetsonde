@@ -1,11 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build packetsonde -- agent + CLI.
 #   ./build.sh           build agent + cli (default)
 #   ./build.sh agent     agent only
 #   ./build.sh cli       cli only
 #   ./build.sh native    agent + cli (alias)
 #
-# Portable: works on macOS, Linux, anything with a POSIX shell + cmake.
+# Portable across macOS, Linux, FreeBSD / OPNsense / pfSense.
+# Requires bash (uses BASH_SOURCE) -- on FreeBSD: pkg install bash.
+# Honors PS_BUILD_DIR for out-of-tree builds; PS_CMAKE_ARGS for extras.
 
 set -e
 trap 'echo ""; echo "=== BUILD FAILED ==="' ERR
@@ -42,7 +44,8 @@ build_native() {
     local goal="$1"   # all|agent|cli
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
-    cmake "$PROJECT_DIR" 2>&1 | tail -8
+    # shellcheck disable=SC2086
+    cmake "$PROJECT_DIR" ${PS_CMAKE_ARGS:-} 2>&1 | tail -8
     case "$goal" in
         agent) cmake --build . -j "$(ncpu)" --target packetsonde-agent --target packetsonde-priv 2>&1 | tail -20 ;;
         cli)   cmake --build . -j "$(ncpu)" --target packetsonde                                  2>&1 | tail -20 ;;
