@@ -72,7 +72,7 @@ struct tls_result {
     int          cert_present;
     X509        *peer;
     STACK_OF(X509) *chain;
-    /* JA3 / JA3S fingerprints.
+    /* JA3 / JA3S fingerprints (legacy FoxIO format, MD5-based).
      * JA3  -- MD5 of "version,ciphers,extensions,curves,point_formats" from
      *         OUR ClientHello. Useful for defenders to recognise the scanner.
      * JA3S -- MD5 of "version,cipher,extensions" from the SERVER'S ServerHello.
@@ -81,6 +81,15 @@ struct tls_result {
     char         ja3_md5  [33];
     char         ja3s_str [512];
     char         ja3s_md5 [33];
+    /* JA4 / JA4S fingerprints (FoxIO 2023, SHA-256-based, structured prefix).
+     * Format:
+     *   JA4  = "t{ver}{sni}{ncipher:02}{next:02}{alpn2}_{cipher_hash}_{ext_sigalg_hash}"
+     *   JA4S = "t{ver}{nextNN}{alpn2}_{cipher_hex}_{ext_hash}"
+     *
+     * Each hash is the first 12 hex chars of SHA-256 over the canonical
+     * comma-separated list. GREASE values are filtered. */
+    char         ja4   [64];   /* "t13d1314h2_aaaaaaaaaaaa_bbbbbbbbbbbb" */
+    char         ja4s  [64];   /* "t130200_1301_cccccccccccc" */
 };
 
 /* TLS handshake bytes captured via SSL_CTX_set_msg_callback. We keep the
@@ -270,6 +279,306 @@ static void ja3_from_client_hello(const uint8_t *hs, size_t hs_len,
     out[off] = '\0';
 }
 
+/* ---- JA4 + JA4S (FoxIO 2023, https://github.com/FoxIO-LLC/ja4) ----
+ *
+ * Newer fingerprinting scheme than JA3. Notable differences:
+ *   - SHA-256 over comma-separated lists (truncated to first 12 hex chars).
+ *   - Prefix is a human-readable summary (e.g. "t13d2010h2"):
+ *       t/q   transport (TLS / QUIC)
+ *       NN    TLS version (13 = TLS 1.3, 12 = TLS 1.2, 10 = TLS 1.0)
+ *       d/i   SNI present / not (client only)
+ *       NN    cipher count (client) -- always "00" client-side here
+ *              since we don't emit a JA4 string -- or 4-hex chosen cipher
+ *              (server)
+ *       NN    extension count (skipping GREASE; on the server side this
+ *              IS the chosen-cipher-aware count)
+ *       XX    ALPN first/last char of the negotiated protocol, or "00"
+ *   - Cipher and extension lists are SORTED ascending (a stable
+ *     fingerprint even when servers permute the order).
+ *
+ * We compute JA4 (client) from our own ClientHello and JA4S (server) from
+ * the ServerHello -- same source bytes as JA3/JA3S, different format. */
+
+#include <openssl/sha.h>
+
+static int cmp_u16(const void *a, const void *b) {
+    uint16_t ia = *(const uint16_t *)a, ib = *(const uint16_t *)b;
+    return (ia > ib) - (ia < ib);
+}
+
+static void sha256_hex12(const char *str, char out[13]) {
+    unsigned char dig[SHA256_DIGEST_LENGTH];
+    EVP_MD_CTX *m = EVP_MD_CTX_new();
+    unsigned int dl = 0;
+    EVP_DigestInit_ex(m, EVP_sha256(), NULL);
+    EVP_DigestUpdate(m, str, strlen(str));
+    EVP_DigestFinal_ex(m, dig, &dl);
+    EVP_MD_CTX_free(m);
+    static const char *H = "0123456789abcdef";
+    for (int i = 0; i < 6; i++) {
+        out[i * 2]     = H[dig[i] >> 4];
+        out[i * 2 + 1] = H[dig[i] & 0x0f];
+    }
+    out[12] = '\0';
+}
+
+/* Two chars representing the TLS version: "13"/"12"/"11"/"10".
+ * For TLS 1.3 the legacy version field is 0x0303 but the *real* version
+ * lives in the supported_versions extension (43). The caller decides
+ * which value to feed in. */
+static const char *ja4_ver(uint16_t v) {
+    switch (v) {
+        case 0x0304: return "13";   /* TLS 1.3 */
+        case 0x0303: return "12";   /* TLS 1.2 */
+        case 0x0302: return "11";   /* TLS 1.1 */
+        case 0x0301: return "10";   /* TLS 1.0 */
+        case 0x0300: return "s3";   /* SSL 3.0 */
+        default:     return "00";
+    }
+}
+
+/* Walk a list of u16 extension types in the wire order; if extension 43
+ * (supported_versions) is present in the *client* hello, return its
+ * highest non-GREASE version. */
+static uint16_t client_supported_version(const uint8_t *b, size_t blen,
+                                          size_t ext_start, size_t ext_end) {
+    size_t q = ext_start;
+    while (q + 4 <= ext_end) {
+        uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        if (q + el > ext_end) break;
+        if (et == 43 && el >= 1) {
+            uint8_t list_len = b[q];
+            uint16_t best = 0;
+            for (size_t i = 1; i + 1 < el && i + 2 <= 1 + list_len; i += 2) {
+                uint16_t vv = ((uint16_t)b[q + i] << 8) | b[q + i + 1];
+                if (!is_grease(vv) && vv > best) best = vv;
+            }
+            if (best) return best;
+        }
+        q += el;
+    }
+    return 0;
+}
+
+/* Find ALPN-selected protocol or first offered: extension 16. Returns the
+ * two-char "alpn" field used by JA4 (first + last char of the first
+ * non-GREASE protocol name), or "00" if absent. */
+static void ja4_alpn_from_extensions(const uint8_t *b, size_t blen,
+                                     size_t ext_start, size_t ext_end,
+                                     char out[3]) {
+    out[0] = '0'; out[1] = '0'; out[2] = '\0';
+    size_t q = ext_start;
+    while (q + 4 <= ext_end) {
+        uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        if (q + el > ext_end) break;
+        if (et == 16 && el >= 3) {
+            /* alpn ext body: u16 list_len, then [u8 plen, plen bytes]+ */
+            size_t lp = q + 2;
+            if (lp + 1 > q + el) { q += el; continue; }
+            uint8_t plen = b[lp];
+            if (lp + 1 + plen > q + el) { q += el; continue; }
+            if (plen >= 1) {
+                out[0] = (char)b[lp + 1];
+                out[1] = (char)b[lp + plen];
+                out[2] = '\0';
+            }
+            return;
+        }
+        q += el;
+    }
+}
+
+static void ja4s_from_server_hello(const uint8_t *hs, size_t hs_len,
+                                   char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) return;
+    uint16_t legacy_ver = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 3 > blen) return;
+    p += sid_len;
+    uint16_t cipher = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    p += 1; /* compression method */
+
+    /* Extensions block: scan to record types (sorted), find ALPN, and
+     * find the real version from supported_versions if present. */
+    uint16_t real_ver = legacy_ver;
+    uint16_t ext_types[64]; size_t ext_n = 0;
+    char alpn[3] = "00";
+    if (p + 2 <= blen) {
+        uint16_t ext_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+        size_t end = p + ext_len;
+        if (end > blen) end = blen;
+        size_t q = p;
+        while (q + 4 <= end) {
+            uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+            uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+            if (q + el > end) break;
+            if (!is_grease(et) && ext_n < 64) ext_types[ext_n++] = et;
+            if (et == 43 && el >= 2) {
+                /* server supported_versions: single u16 */
+                real_ver = ((uint16_t)b[q] << 8) | b[q + 1];
+            } else if (et == 16 && el >= 3) {
+                size_t lp = q + 2;
+                if (lp + 1 <= q + el) {
+                    uint8_t plen = b[lp];
+                    if (lp + 1 + plen <= q + el && plen >= 1) {
+                        alpn[0] = (char)b[lp + 1];
+                        alpn[1] = (char)b[lp + plen];
+                    }
+                }
+            }
+            q += el;
+        }
+    }
+
+    /* JA4S prefix: t{ver}{ext_count:02}{alpn2}_{cipher_4hex}_{ext_hash12} */
+    /* Build the canonical extension list (sorted, comma-separated). */
+    qsort(ext_types, ext_n, sizeof(uint16_t), cmp_u16);
+    char ext_csv[512]; size_t off = 0;
+    ext_csv[0] = '\0';
+    for (size_t i = 0; i < ext_n; i++) {
+        int w = snprintf(ext_csv + off, sizeof(ext_csv) - off,
+                         "%s%u", i ? "," : "", ext_types[i]);
+        if (w < 0 || (size_t)w >= sizeof(ext_csv) - off) break;
+        off += (size_t)w;
+    }
+    char ext_hash[13]; sha256_hex12(ext_csv, ext_hash);
+    snprintf(out, outsz, "t%s%02zu%s_%04x_%s",
+             ja4_ver(real_ver), ext_n, alpn, cipher, ext_hash);
+}
+
+static void ja4_from_client_hello(const uint8_t *hs, size_t hs_len,
+                                  char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) return;
+    uint16_t legacy_ver = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 2 > blen) return;
+    p += sid_len;
+    uint16_t cs_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    if (p + cs_len + 1 > blen) return;
+    const uint8_t *ciphers = b + p; size_t ciphers_n = cs_len;
+    p += cs_len;
+    uint8_t cm_len = b[p++];
+    if (p + cm_len + 2 > blen) return;
+    p += cm_len;
+    uint16_t ext_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    size_t ext_end = p + ext_len;
+    if (ext_end > blen) ext_end = blen;
+
+    /* Has SNI extension (0)? */
+    int has_sni = 0;
+    {
+        size_t q = p;
+        while (q + 4 <= ext_end) {
+            uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1];
+            uint16_t el = ((uint16_t)b[q + 2] << 8) | b[q + 3];
+            if (et == 0 && el > 0) { has_sni = 1; break; }
+            q += 4 + el;
+        }
+    }
+
+    /* Real TLS version from supported_versions, fall back to legacy. */
+    uint16_t real_ver = client_supported_version(b, blen, p, ext_end);
+    if (real_ver == 0) real_ver = legacy_ver;
+
+    /* Collect non-GREASE ciphers; sort. */
+    uint16_t ciph[256]; size_t cn = 0;
+    for (size_t i = 0; i + 1 < ciphers_n && cn < 256; i += 2) {
+        uint16_t c = ((uint16_t)ciphers[i] << 8) | ciphers[i + 1];
+        if (!is_grease(c)) ciph[cn++] = c;
+    }
+    qsort(ciph, cn, sizeof(uint16_t), cmp_u16);
+
+    /* Collect non-GREASE extension types (excluding SNI=0 and ALPN=16,
+     * per the JA4 spec -- they're already encoded in the prefix). */
+    uint16_t exts[256]; size_t en = 0;
+    /* Also collect signature_algorithms (ext 13) body for the second hash. */
+    const uint8_t *sig_algs = NULL; size_t sig_algs_n = 0;
+    char alpn[3] = "00";
+    size_t q = p;
+    while (q + 4 <= ext_end) {
+        uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        if (q + el > ext_end) break;
+        if (!is_grease(et) && et != 0 && et != 16 && en < 256) exts[en++] = et;
+        if (et == 13 && el >= 2) {
+            uint16_t sig_len = ((uint16_t)b[q] << 8) | b[q + 1];
+            sig_algs = b + q + 2;
+            sig_algs_n = sig_len;
+            if (sig_algs_n + 2 > el) sig_algs_n = el - 2;
+        } else if (et == 16 && el >= 3) {
+            size_t lp = q + 2;
+            if (lp + 1 <= q + el) {
+                uint8_t plen = b[lp];
+                if (lp + 1 + plen <= q + el && plen >= 1) {
+                    alpn[0] = (char)b[lp + 1];
+                    alpn[1] = (char)b[lp + plen];
+                }
+            }
+        }
+        q += el;
+    }
+    qsort(exts, en, sizeof(uint16_t), cmp_u16);
+
+    /* Build the prefix: "t{ver}{sni}{nciph:02}{next:02}{alpn}" -- the
+     * cipher/extension counts include all collected entries.
+     *
+     * Important: ext_count for JA4 is `en + 2` if SNI + ALPN are present
+     * (they go back in the count even though they were excluded from the
+     * extension hash). Strict spec compliance. */
+    size_t ext_count = en + (has_sni ? 1 : 0) + (alpn[0] != '0' ? 1 : 0);
+    char prefix[24];
+    snprintf(prefix, sizeof(prefix), "t%s%c%02zu%02zu%s",
+             ja4_ver(real_ver), has_sni ? 'd' : 'i',
+             cn, ext_count, alpn);
+
+    /* Cipher hash: SHA-256 over sorted cipher list, comma-separated 4-hex.
+     * Spec uses lowercase hex. */
+    char ciph_csv[2048]; size_t off = 0;
+    ciph_csv[0] = '\0';
+    for (size_t i = 0; i < cn; i++) {
+        int w = snprintf(ciph_csv + off, sizeof(ciph_csv) - off,
+                         "%s%04x", i ? "," : "", ciph[i]);
+        if (w < 0 || (size_t)w >= sizeof(ciph_csv) - off) break;
+        off += (size_t)w;
+    }
+    char ciph_hash[13]; sha256_hex12(ciph_csv, ciph_hash);
+
+    /* Extension hash: SHA-256 over sorted ext list, then a comma, then
+     * the signature_algorithms list IN WIRE ORDER (NOT sorted) as
+     * 4-hex codes separated by commas. */
+    char ext_csv[2048]; off = 0; ext_csv[0] = '\0';
+    for (size_t i = 0; i < en; i++) {
+        int w = snprintf(ext_csv + off, sizeof(ext_csv) - off,
+                         "%s%04x", i ? "," : "", exts[i]);
+        if (w < 0 || (size_t)w >= sizeof(ext_csv) - off) break;
+        off += (size_t)w;
+    }
+    if (sig_algs_n > 0 && off + 1 < sizeof(ext_csv)) {
+        ext_csv[off++] = '_';
+        for (size_t i = 0; i + 1 < sig_algs_n; i += 2) {
+            uint16_t sa = ((uint16_t)sig_algs[i] << 8) | sig_algs[i + 1];
+            int w = snprintf(ext_csv + off, sizeof(ext_csv) - off,
+                             "%s%04x", i ? "," : "", sa);
+            if (w < 0 || (size_t)w >= sizeof(ext_csv) - off) break;
+            off += (size_t)w;
+        }
+        ext_csv[off] = '\0';
+    }
+    char ext_hash[13]; sha256_hex12(ext_csv, ext_hash);
+
+    snprintf(out, outsz, "%s_%s_%s", prefix, ciph_hash, ext_hash);
+}
+
 static void msg_cb(int write_p, int version, int content_type,
                    const void *buf, size_t len, SSL *ssl, void *arg) {
     (void)version; (void)ssl;
@@ -321,11 +630,15 @@ static int do_handshake(const char *host, uint16_t port,
             ja3_from_client_hello(cap.client_hello, cap.client_hello_len,
                                   out->ja3_str, sizeof(out->ja3_str));
             if (out->ja3_str[0]) md5_hex(out->ja3_str, out->ja3_md5);
+            ja4_from_client_hello(cap.client_hello, cap.client_hello_len,
+                                  out->ja4, sizeof(out->ja4));
         }
         if (cap.server_hello_len) {
             ja3s_from_server_hello(cap.server_hello, cap.server_hello_len,
                                    out->ja3s_str, sizeof(out->ja3s_str));
             if (out->ja3s_str[0]) md5_hex(out->ja3s_str, out->ja3s_md5);
+            ja4s_from_server_hello(cap.server_hello, cap.server_hello_len,
+                                   out->ja4s, sizeof(out->ja4s));
         }
     }
     SSL_free(ssl);
@@ -572,11 +885,13 @@ static void check_certificate(struct emit_ctx *e, const char *target_host) {
             "\"not_before\":\"%s\",\"not_after\":\"%s\","
             "\"cert_sha256\":\"%s\",\"sans\":%s,"
             "\"ja3\":\"%s\",\"ja3_str\":\"%s\","
-            "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\"}",
+            "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\","
+            "\"ja4\":\"%s\",\"ja4s\":\"%s\"}",
             proto_str(r.protocol_version), r.cipher,
             subj_e, issu_e, nb_e, na_e, sha256, sans,
             r.ja3_md5,  r.ja3_str,
-            r.ja3s_md5, r.ja3s_str);
+            r.ja3s_md5, r.ja3s_str,
+            r.ja4, r.ja4s);
         char title[320];
         snprintf(title, sizeof(title), "%s (%s) CN=%s",
                  proto_str(r.protocol_version), r.cipher,
