@@ -6,12 +6,18 @@ and **FreeBSD / OPNsense**. There is one helper script — `build.sh` —
 that wraps the underlying `cmake` invocations for the common case.
 
 ```bash
+sudo ./bootstrap.sh  # install build deps (auto-detects platform)
 ./build.sh           # agent + cli
 ./build.sh agent     # agent only
 ./build.sh cli       # cli only
 ```
 
 Binaries land in `build/src/cli/packetsonde` and `build/src/agent/packetsonded`.
+
+The bootstrap dispatcher reads `/etc/os-release` and runs the right
+per-platform installer from `packaging/bootstrap/`. Force a profile
+with `PS_BOOTSTRAP_AS=ubuntu|redhat|freebsd ./bootstrap.sh` when the
+detection misfires (derivative distros, custom builds, etc).
 
 `PS_BUILD_DIR=/some/path ./build.sh` directs the build to an out-of-tree
 location (CI, clean rebuilds, multiple targets in parallel).

@@ -40,6 +40,10 @@ v1.6.
 ## Quick start
 
 ```bash
+# Install build deps (Ubuntu/Debian, RHEL/Fedora, FreeBSD/OPNsense
+# detected automatically; macOS prints the brew command).
+sudo ./bootstrap.sh
+
 # Build
 ./build.sh native
 
