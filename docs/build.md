@@ -72,14 +72,27 @@ sudo apt install -y \
 ### Linux install (systemd)
 
 ```bash
-sudo cmake --install build --prefix /usr/local
+sudo cmake --install build              # equivalent: cd build && sudo make install
+```
+
+That places:
+
+- `/usr/local/bin/packetsonde` — CLI
+- `/usr/local/sbin/packetsonded` — agent
+- `/usr/local/sbin/packetsonde-priv` — privilege-separated worker
+- `/etc/packetsonded/packetsonded.toml.example` — annotated example config
+- `/etc/packetsonded/keys/authorized/` — empty dir for authorized CLI pubkeys
+- `/etc/systemd/system/packetsonded.service` — the unit file
+
+The install step prints a 5-line "next steps" block. The condensed
+version:
+
+```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin packetsonded
-sudo mkdir -p /etc/packetsonded/keys/authorized
-sudo cp packaging/packetsonded.toml /etc/packetsonded/
-sudo -u packetsonded packetsonde key generate --name agent
-sudo cp packaging/packetsonded.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now packetsonded
+sudo cp /etc/packetsonded/packetsonded.toml.example /etc/packetsonded/packetsonded.toml
+sudo PS_KEY_DIR=/etc/packetsonded/keys packetsonde key generate --name agent
+sudo cp ~/.config/packetsonde/keys/default.pub /etc/packetsonded/keys/authorized/
+sudo systemctl daemon-reload && sudo systemctl enable --now packetsonded
 ```
 
 The systemd unit grants `CAP_NET_RAW` + `CAP_NET_ADMIN` to the
