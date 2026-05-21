@@ -206,6 +206,12 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
+    add_test(NAME test_via_multihop
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_multihop.sh)
+    set_tests_properties(test_via_multihop PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
     # ---- coverage backfill for audit kinds that previously had no
     # integration test (review finding #14). Same Python+FIFO mock pattern
     # as the existing tests.
