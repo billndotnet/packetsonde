@@ -3,7 +3,7 @@
 # response without STLS. Asserts pop3.metadata and pop3.no_stls findings.
 set -e
 
-BUILD_DIR="${PS_BUILD_DIR:-/Users/billn/packetsonde/build}"
+BUILD_DIR="${PS_BUILD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/build}"
 CLI="$BUILD_DIR/src/cli/packetsonde"
 
 if [ ! -x "$CLI" ]; then

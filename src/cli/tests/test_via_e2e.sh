@@ -5,7 +5,7 @@
 # via_agent field set.
 set -e
 
-BUILD_DIR="${PS_BUILD_DIR:-/Users/billn/packetsonde/build}"
+BUILD_DIR="${PS_BUILD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/build}"
 CLI="$BUILD_DIR/src/cli/packetsonde"
 DRIVER="$BUILD_DIR/src/agent/test_network_listener_driver"
 
