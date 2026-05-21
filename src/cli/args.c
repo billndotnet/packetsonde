@@ -75,7 +75,19 @@ int ps_args_parse(int argc, char **argv, struct ps_args *out) {
             case OPT_QUIET:       out->fmt = PS_FMT_QUIET; break;
             case OPT_NO_COLOR:    out->no_color = true; break;
             case OPT_AUTO_APPEND: out->auto_append = true; break;
-            case OPT_VIA:         out->via = optarg; break;
+            case OPT_VIA:
+                /* Multiple --via flags compose a forwarding chain:
+                 *   --via bunker --via trunkbox
+                 * sends to bunker, which opens its own --via trunkbox
+                 * session, which actually runs the audit. */
+                if (out->via_count >= PS_ARGS_MAX_VIA_HOPS) {
+                    fprintf(stderr, "--via: too many hops (max %d)\n",
+                            PS_ARGS_MAX_VIA_HOPS);
+                    return -1;
+                }
+                if (out->via_count == 0) out->via = optarg;
+                out->via_chain[out->via_count++] = optarg;
+                break;
             case OPT_CONCURRENCY: out->concurrency = atoi(optarg); break;
             case OPT_RATE:        out->rate_pps = atoi(optarg); break;
             case OPT_SOCKET:      out->socket_path = optarg; break;
