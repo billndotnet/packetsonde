@@ -266,7 +266,7 @@ function(ps_add_audit_plugin name)
     )
     target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
     if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch"
-       OR name STREQUAL "proxmox")
+       OR name STREQUAL "proxmox" OR name STREQUAL "ssh")
         find_package(OpenSSL REQUIRED)
         target_link_libraries(audit-${name} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
