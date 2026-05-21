@@ -199,12 +199,32 @@ static void replay_purge_expired(struct ps_discovery_replay *r, uint64_t now_ms)
     r->count = w;
 }
 
+static void record_eviction(struct ps_discovery_replay *r,
+                            const uint8_t *pubkey, const uint8_t *nonce) {
+    struct ps_discovery_replay_evict *e = &r->evicted[r->evicted_head];
+    memcpy(e->pubkey, pubkey, PS_DISCOVERY_PUBKEY_SIZE);
+    memcpy(e->nonce,  nonce,  PS_DISCOVERY_NONCE_SIZE);
+    r->evicted_head = (r->evicted_head + 1) % PS_DISCOVERY_REPLAY_EVICT;
+    if (r->evicted_count < PS_DISCOVERY_REPLAY_EVICT) r->evicted_count++;
+}
+
+static int seen_in_evicted(const struct ps_discovery_replay *r,
+                           const uint8_t *pubkey, const uint8_t *nonce) {
+    for (size_t i = 0; i < r->evicted_count; i++) {
+        if (memcmp(r->evicted[i].pubkey, pubkey, PS_DISCOVERY_PUBKEY_SIZE) == 0 &&
+            memcmp(r->evicted[i].nonce,  nonce,  PS_DISCOVERY_NONCE_SIZE) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int ps_discovery_replay_check(struct ps_discovery_replay *r,
                               const uint8_t *pubkey,
                               const uint8_t *nonce,
                               uint64_t expires_at_ms,
                               uint64_t now_ms) {
-    /* O(N) scan for a duplicate. */
+    /* O(N) scan for a duplicate in the primary table. */
     for (size_t i = 0; i < r->count; i++) {
         if (r->entries[i].expires_at_ms <= now_ms) continue;
         if (memcmp(r->entries[i].pubkey, pubkey, PS_DISCOVERY_PUBKEY_SIZE) == 0 &&
@@ -212,6 +232,11 @@ int ps_discovery_replay_check(struct ps_discovery_replay *r,
             return 1; /* replay */
         }
     }
+    /* H-2: also reject any (pubkey,nonce) that we recently evicted from
+     * the primary table -- otherwise an attacker can flood the cache to
+     * force the eviction of a victim's nonce and then replay it. */
+    if (seen_in_evicted(r, pubkey, nonce)) return 1;
+
     /* Insert; purge expired first if we're at capacity. */
     if (r->count >= PS_DISCOVERY_REPLAY_CAP) {
         replay_purge_expired(r, now_ms);
@@ -222,8 +247,9 @@ int ps_discovery_replay_check(struct ps_discovery_replay *r,
         memcpy(e->nonce,  nonce,  PS_DISCOVERY_NONCE_SIZE);
         e->expires_at_ms = expires_at_ms;
     } else {
-        /* Cache full of unexpired entries. Best we can do is evict oldest
-         * by expiry to make room for the newest. */
+        /* Cache full of unexpired entries. Evict oldest-by-expiry to
+         * make room AND record the evicted (pubkey,nonce) in the
+         * tail ring so it can't be replayed. */
         size_t oldest = 0;
         for (size_t i = 1; i < r->count; i++) {
             if (r->entries[i].expires_at_ms < r->entries[oldest].expires_at_ms) {
@@ -231,6 +257,7 @@ int ps_discovery_replay_check(struct ps_discovery_replay *r,
             }
         }
         struct ps_discovery_replay_entry *e = &r->entries[oldest];
+        record_eviction(r, e->pubkey, e->nonce);
         memcpy(e->pubkey, pubkey, PS_DISCOVERY_PUBKEY_SIZE);
         memcpy(e->nonce,  nonce,  PS_DISCOVERY_NONCE_SIZE);
         e->expires_at_ms = expires_at_ms;

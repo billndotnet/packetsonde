@@ -88,7 +88,11 @@ int ps_discovery_random(uint8_t *out, size_t n);
  * Worst-case per-probe cost is one Ed25519 verify (~50 us) plus an O(N)
  * cache scan; N is small (4096) so this is a few microseconds.
  */
-#define PS_DISCOVERY_REPLAY_CAP 4096
+#define PS_DISCOVERY_REPLAY_CAP    4096
+/* H-2: tail ring of (pubkey,nonce) pairs evicted from the main LRU
+ * before their natural expiry. Re-presented entries are rejected even
+ * if their primary slot has been overwritten by flood traffic. */
+#define PS_DISCOVERY_REPLAY_EVICT  256
 
 struct ps_discovery_replay_entry {
     uint8_t  pubkey[PS_DISCOVERY_PUBKEY_SIZE];
@@ -96,9 +100,19 @@ struct ps_discovery_replay_entry {
     uint64_t expires_at_ms;
 };
 
+struct ps_discovery_replay_evict {
+    uint8_t pubkey[PS_DISCOVERY_PUBKEY_SIZE];
+    uint8_t nonce [PS_DISCOVERY_NONCE_SIZE];
+};
+
 struct ps_discovery_replay {
     struct ps_discovery_replay_entry entries[PS_DISCOVERY_REPLAY_CAP];
     size_t                           count;
+    /* Ring of recently-evicted (pubkey,nonce) pairs. No expiry; entries
+     * roll out the back of the ring as new evictions arrive. */
+    struct ps_discovery_replay_evict evicted[PS_DISCOVERY_REPLAY_EVICT];
+    size_t                           evicted_head;
+    size_t                           evicted_count;
 };
 
 void ps_discovery_replay_init  (struct ps_discovery_replay *r);
