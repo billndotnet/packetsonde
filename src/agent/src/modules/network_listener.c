@@ -1,0 +1,571 @@
+/*
+ * network_listener.c -- accepts inbound mTLS sessions from `packetsonde
+ * --via <agent>`, dispatches audit requests to the local `packetsonde`
+ * binary as a subprocess, and streams its JSONL findings back as
+ * agent_proto 'finding' frames.
+ *
+ * Per the brainstorm:
+ *   - TLS 1.3 with Ed25519 self-signed cert (agent_transport.c)
+ *   - mTLS, peer pubkey fingerprint must appear in PS_AGENT_AUTHORIZED_DIR
+ *   - length-prefixed JSON inside the tunnel (agent_proto.c)
+ *   - one connection per audit run, pthread per connection
+ *   - cap on concurrent sessions (default 64, PS_AGENT_MAX_CLIENTS)
+ *
+ * Configuration (env, defaults shown):
+ *   PS_AGENT_LISTEN_ENABLED      "0"        opt-in; default off
+ *   PS_AGENT_LISTEN_ADDR         "0.0.0.0"  bind address
+ *   PS_AGENT_LISTEN_PORT         "8442"
+ *   PS_KEY_DIR                   ~/.config/packetsonde/keys
+ *   PS_AGENT_LISTEN_KEY          "agent"    keypair name in PS_KEY_DIR
+ *   PS_AGENT_AUTHORIZED_DIR      "$PS_KEY_DIR/authorized"
+ *   PS_AGENT_MAX_CLIENTS         "64"
+ *   PS_PACKETSONDE_BIN           "packetsonde"
+ */
+
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "packetsonde/module_api.h"
+#include "agent_proto.h"
+#include "agent_transport.h"
+#include "keystore.h"
+#include "log.h"
+
+#define MAX_AUTHORIZED 64
+
+struct nl_state {
+    int                listen_fd;
+    struct ps_at_ctx   tctx;
+    struct ps_keypair  agent_kp;
+    uint8_t            authorized[MAX_AUTHORIZED][32];
+    size_t             authorized_n;
+    pthread_t          accept_tid;
+    int                running;
+    atomic_int         stop;
+    atomic_int         active_clients;
+    int                max_clients;
+    char               packetsonde_bin[256];
+};
+
+static struct nl_state *g_state = NULL; /* module userdata mirror */
+
+/* ---- authorized-keys discovery ----------------------------------- */
+
+static void load_authorized(struct nl_state *st, const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) {
+        ps_info("network_listener: authorized dir '%s' missing -- no clients can connect", dir);
+        return;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && st->authorized_n < MAX_AUTHORIZED) {
+        size_t n = strlen(de->d_name);
+        if (n < 5 || strcmp(de->d_name + n - 4, ".pub") != 0) continue;
+        char p[1100]; snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
+        FILE *f = fopen(p, "rb");
+        if (!f) continue;
+        if (fread(st->authorized[st->authorized_n], 1,
+                  PS_KEYSTORE_PUBKEY_SIZE, f) == PS_KEYSTORE_PUBKEY_SIZE) {
+            st->authorized_n++;
+        }
+        fclose(f);
+    }
+    closedir(d);
+    ps_info("network_listener: %zu authorized client pubkey(s) loaded from %s",
+            st->authorized_n, dir);
+}
+
+static int is_authorized(struct nl_state *st, SSL *ssl) {
+    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
+    if (ps_at_peer_fingerprint(ssl, fpr, sizeof(fpr)) != 0) return 0;
+    for (size_t i = 0; i < st->authorized_n; i++) {
+        char expected[PS_KEYSTORE_FPR_HEX_SIZE];
+        ps_keystore_fingerprint(st->authorized[i], expected);
+        if (strcmp(fpr, expected) == 0) return 1;
+    }
+    return 0;
+}
+
+/* ---- subprocess driver ------------------------------------------- */
+
+/* Read the audit request frame and pull out kind + args[]. Returns 0 on
+ * success, -1 on malformed. Caller-provided argv[] is filled with
+ * pointers into argbuf (a private scratch buffer). */
+static int parse_audit_request(const uint8_t *frame, size_t len,
+                               char *argbuf, size_t argbuf_sz,
+                               char **argv, int argv_cap, int *argc_out) {
+    /* The frame shape we emit on the CLI side:
+     *   {"type":"audit","kind":"<k>","args":["a","b",...]}
+     * Conservative scanner: find "kind" string, then "args" array, walk
+     * its strings. */
+    const uint8_t *p = frame;
+    const uint8_t *end = frame + len;
+    const char *kind_lit = "\"kind\"";
+    const char *args_lit = "\"args\"";
+
+    const uint8_t *kp = NULL, *ap = NULL;
+    for (const uint8_t *s = p; s + 6 <= end; s++) {
+        if (!kp && memcmp(s, kind_lit, 6) == 0) kp = s + 6;
+        if (!ap && memcmp(s, args_lit, 6) == 0) ap = s + 6;
+        if (kp && ap) break;
+    }
+    if (!kp) return -1;
+    while (kp < end && (*kp == ' ' || *kp == ':' || *kp == '\t')) kp++;
+    if (kp >= end || *kp != '"') return -1;
+    const uint8_t *kv = kp + 1;
+    const uint8_t *kve = kv;
+    while (kve < end && *kve != '"') {
+        if (*kve == '\\' && kve + 1 < end) kve += 2;
+        else kve++;
+    }
+    if (kve >= end) return -1;
+    size_t klen = (size_t)(kve - kv);
+    if (klen + 1 > argbuf_sz) return -1;
+    memcpy(argbuf, kv, klen); argbuf[klen] = '\0';
+    int argc = 0;
+    argv[argc++] = argbuf;
+    size_t off = klen + 1;
+
+    if (ap) {
+        while (ap < end && (*ap == ' ' || *ap == ':' || *ap == '\t')) ap++;
+        if (ap < end && *ap == '[') {
+            ap++;
+            while (ap < end && argc < argv_cap) {
+                while (ap < end && (*ap == ' ' || *ap == ',' || *ap == '\t')) ap++;
+                if (ap >= end || *ap == ']') break;
+                if (*ap != '"') return -1;
+                ap++;
+                const uint8_t *avs = ap;
+                while (ap < end && *ap != '"') {
+                    if (*ap == '\\' && ap + 1 < end) ap += 2;
+                    else ap++;
+                }
+                if (ap >= end) return -1;
+                size_t alen = (size_t)(ap - avs);
+                if (off + alen + 1 > argbuf_sz) return -1;
+                memcpy(argbuf + off, avs, alen);
+                argbuf[off + alen] = '\0';
+                argv[argc++] = argbuf + off;
+                off += alen + 1;
+                ap++;
+            }
+        }
+    }
+    *argc_out = argc;
+    return 0;
+}
+
+/* Drive the subprocess: build argv, fork, exec packetsonde, stream stdout
+ * line by line to the SSL session as finding frames. */
+static void run_subprocess(struct nl_state *st,
+                           const char *audit_kind,
+                           char **audit_argv, int audit_argc,
+                           const struct ps_ap_io *io) {
+    int pfd[2];
+    if (pipe(pfd) != 0) return;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return; }
+
+    if (pid == 0) {
+        /* child: stdout -> pipe write, stderr -> /dev/null */
+        dup2(pfd[1], 1);
+        int n = open("/dev/null", O_WRONLY); if (n >= 0) { dup2(n, 2); close(n); }
+        close(pfd[0]); close(pfd[1]);
+        /* argv: packetsonde --jsonl audit <kind> <args...> NULL */
+        const char *argv[16] = {0};
+        int i = 0;
+        argv[i++] = st->packetsonde_bin;
+        argv[i++] = "--jsonl";
+        argv[i++] = "audit";
+        argv[i++] = audit_kind;
+        for (int j = 1; j < audit_argc && i < 15; j++) argv[i++] = audit_argv[j];
+        argv[i] = NULL;
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    /* parent */
+    close(pfd[1]);
+
+    /* Read stdout line by line; each complete line becomes a finding frame. */
+    char buf[16384];
+    size_t bl = 0;
+    for (;;) {
+        ssize_t r = read(pfd[0], buf + bl, sizeof(buf) - bl - 1);
+        if (r <= 0) break;
+        bl += (size_t)r;
+        size_t scan_from = 0;
+        while (scan_from < bl) {
+            char *nl = memchr(buf + scan_from, '\n', bl - scan_from);
+            if (!nl) break;
+            size_t line_len = (size_t)(nl - (buf + scan_from));
+            if (line_len > 0 && buf[scan_from] == '{') {
+                /* Wrap in a "finding" frame: {"type":"finding","payload":<line>} */
+                char frame[20000];
+                int fn = snprintf(frame, sizeof(frame),
+                                  "{\"type\":\"finding\",\"payload\":%.*s}",
+                                  (int)line_len, buf + scan_from);
+                if (fn > 0 && (size_t)fn < sizeof(frame)) {
+                    if (ps_ap_write_frame(io, frame, (size_t)fn) != PS_AP_OK)
+                        goto done;
+                }
+            }
+            scan_from += line_len + 1;
+        }
+        /* shift remainder to front */
+        if (scan_from < bl) memmove(buf, buf + scan_from, bl - scan_from);
+        bl -= scan_from;
+        if (bl == sizeof(buf) - 1) bl = 0; /* avoid wedging on a pathological line */
+    }
+
+done:
+    close(pfd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    /* Send bye frame. */
+    char bye[128];
+    int bn = snprintf(bye, sizeof(bye),
+                      "{\"type\":\"bye\",\"status\":%d}",
+                      WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    if (bn > 0) ps_ap_write_frame(io, bye, (size_t)bn);
+}
+
+/* ---- per-session thread ----------------------------------------- */
+
+struct session_args {
+    struct nl_state *st;
+    SSL             *ssl;
+};
+
+static void *session_thread(void *arg) {
+    struct session_args *sa = arg;
+    struct nl_state *st = sa->st;
+    SSL *ssl = sa->ssl;
+    free(sa);
+
+    if (!is_authorized(st, ssl)) {
+        ps_warn("network_listener: rejected client; pubkey not authorized");
+        ps_at_close(ssl);
+        atomic_fetch_sub(&st->active_clients, 1);
+        return NULL;
+    }
+
+    struct ps_ap_io io; ps_at_make_io(ssl, &io);
+
+    /* Send our hello. */
+    char hello[256];
+    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
+    ps_keystore_fingerprint(st->agent_kp.pubkey, fpr);
+    int hn = snprintf(hello, sizeof(hello),
+                      "{\"type\":\"hello\",\"v\":%d,\"agent_fingerprint\":\"sha256:%s\"}",
+                      PS_AGENT_PROTO_VERSION, fpr);
+    if (hn < 0 || ps_ap_write_frame(&io, hello, (size_t)hn) != PS_AP_OK) goto out;
+
+    /* Expect hello + audit request from client. */
+    uint8_t buf[64 * 1024]; size_t blen;
+    int saw_hello = 0;
+    int dispatched = 0;
+    while (!dispatched) {
+        if (ps_ap_read_frame(&io, buf, sizeof(buf), &blen) != PS_AP_OK) goto out;
+        char type[32];
+        if (ps_ap_frame_type(buf, blen, type, sizeof(type)) != 0) continue;
+        if (strcmp(type, "hello") == 0) { saw_hello = 1; continue; }
+        if (strcmp(type, "audit") != 0) continue;
+        if (!saw_hello) {
+            const char *e = "{\"type\":\"error\",\"message\":\"audit before hello\"}";
+            ps_ap_write_frame(&io, e, strlen(e));
+            goto out;
+        }
+        /* Parse + dispatch. */
+        char argbuf[2048]; char *av[16] = {0}; int ac = 0;
+        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, 16, &ac) != 0 || ac < 1) {
+            const char *e = "{\"type\":\"error\",\"message\":\"bad audit request\"}";
+            ps_ap_write_frame(&io, e, strlen(e));
+            goto out;
+        }
+        run_subprocess(st, av[0], av, ac, &io);
+        dispatched = 1;
+    }
+
+out:
+    ps_at_close(ssl);
+    atomic_fetch_sub(&st->active_clients, 1);
+    return NULL;
+}
+
+/* ---- accept loop ------------------------------------------------- */
+
+static void *accept_thread_fn(void *arg) {
+    struct nl_state *st = arg;
+    while (!atomic_load(&st->stop)) {
+        struct sockaddr_in ca; socklen_t cal = sizeof(ca);
+        int cfd = accept(st->listen_fd, (struct sockaddr *)&ca, &cal);
+        if (cfd < 0) { if (errno == EINTR) continue; break; }
+
+        if (atomic_load(&st->active_clients) >= st->max_clients) {
+            close(cfd);
+            ps_warn("network_listener: at client cap (%d); dropping connection",
+                    st->max_clients);
+            continue;
+        }
+        /* Hand the fd to ps_at_accept-style handshake: pretend the accept
+         * already happened by setting up a one-shot listener. Simpler: do
+         * a manual SSL_new + SSL_accept here. */
+        SSL *ssl = SSL_new(st->tctx.ssl_ctx);
+        if (!ssl) { close(cfd); continue; }
+        SSL_set_fd(ssl, cfd);
+        if (SSL_accept(ssl) != 1) { SSL_free(ssl); close(cfd); continue; }
+
+        struct session_args *sa = calloc(1, sizeof(*sa));
+        if (!sa) { ps_at_close(ssl); continue; }
+        sa->st = st; sa->ssl = ssl;
+        atomic_fetch_add(&st->active_clients, 1);
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, session_thread, sa) != 0) {
+            atomic_fetch_sub(&st->active_clients, 1);
+            ps_at_close(ssl); free(sa);
+            continue;
+        }
+        pthread_detach(tid);
+    }
+    return NULL;
+}
+
+/* ---- init / shutdown -------------------------------------------- */
+
+static int nl_init(ps_module_ctx_t *ctx) {
+    /* Two modes:
+     *   PS_AGENT_LISTEN_MODE=persistent    open a TCP listener, accept loop
+     *   PS_AGENT_LISTEN_MODE=knock         no idle listener; sessions land
+     *                                       only via ps_nl_open_session_window
+     *                                       called from discovery_listener
+     *   PS_AGENT_LISTEN_MODE=both          both paths active
+     *
+     * Legacy: PS_AGENT_LISTEN_ENABLED=1 means 'persistent'. */
+    const char *mode_env = getenv("PS_AGENT_LISTEN_MODE");
+    const char *legacy   = getenv("PS_AGENT_LISTEN_ENABLED");
+    int do_persistent = 0, do_knock = 0;
+    if (mode_env && *mode_env) {
+        if      (strcmp(mode_env, "persistent") == 0) do_persistent = 1;
+        else if (strcmp(mode_env, "knock")      == 0) do_knock      = 1;
+        else if (strcmp(mode_env, "both")       == 0) { do_persistent = 1; do_knock = 1; }
+    } else if (legacy && strcmp(legacy, "1") == 0) {
+        do_persistent = 1;
+    }
+    if (!do_persistent && !do_knock) {
+        ps_info("network_listener: disabled (set PS_AGENT_LISTEN_MODE=persistent|knock|both)");
+        ctx->userdata = NULL;
+        return 0;
+    }
+
+    struct nl_state *st = calloc(1, sizeof(*st));
+    if (!st) return -1;
+    st->listen_fd = -1;
+    st->max_clients = 64;
+    const char *mc = getenv("PS_AGENT_MAX_CLIENTS");
+    if (mc && *mc) st->max_clients = atoi(mc);
+    const char *bin = getenv("PS_PACKETSONDE_BIN");
+    snprintf(st->packetsonde_bin, sizeof(st->packetsonde_bin),
+             "%s", (bin && *bin) ? bin : "packetsonde");
+
+    /* Identity key. */
+    char kdir[1024];
+    const char *kd = getenv("PS_KEY_DIR");
+    if (kd && *kd) snprintf(kdir, sizeof(kdir), "%s", kd);
+    else if (ps_keystore_default_dir(kdir, sizeof(kdir)) != 0) { free(st); return -1; }
+    const char *kname = getenv("PS_AGENT_LISTEN_KEY");
+    if (!kname || !*kname) kname = "agent";
+    if (ps_keystore_load(kdir, kname, &st->agent_kp) != 0) {
+        ps_warn("network_listener: cannot load '%s' from %s", kname, kdir);
+        free(st); return -1;
+    }
+    int has_sec = 0;
+    for (size_t i = 0; i < PS_KEYSTORE_SECKEY_SIZE; i++)
+        if (st->agent_kp.seckey[i]) { has_sec = 1; break; }
+    if (!has_sec) {
+        ps_warn("network_listener: agent key is pubkey-only");
+        free(st); return -1;
+    }
+
+    char auth_dir[1100];
+    const char *ad = getenv("PS_AGENT_AUTHORIZED_DIR");
+    if (ad && *ad) snprintf(auth_dir, sizeof(auth_dir), "%s", ad);
+    else snprintf(auth_dir, sizeof(auth_dir), "%s/authorized", kdir);
+    load_authorized(st, auth_dir);
+
+    if (ps_at_ctx_init(&st->tctx, PS_AT_SERVER, &st->agent_kp, NULL) != 0) {
+        free(st); return -1;
+    }
+
+    atomic_init(&st->stop, 0);
+    atomic_init(&st->active_clients, 0);
+
+    if (do_persistent) {
+        const char *addr = getenv("PS_AGENT_LISTEN_ADDR");
+        if (!addr || !*addr) addr = "0.0.0.0";
+        int port = 8442;
+        const char *ps = getenv("PS_AGENT_LISTEN_PORT");
+        if (ps && *ps) port = atoi(ps);
+
+        st->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (st->listen_fd < 0) { ps_at_ctx_destroy(&st->tctx); free(st); return -1; }
+        int one = 1;
+        setsockopt(st->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in la; memset(&la, 0, sizeof(la));
+        la.sin_family = AF_INET;
+        la.sin_port = htons((uint16_t)port);
+        inet_aton(addr, &la.sin_addr);
+        if (bind(st->listen_fd, (struct sockaddr *)&la, sizeof(la)) != 0) {
+            ps_warn("network_listener: bind %s:%d failed: %s", addr, port, strerror(errno));
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        if (listen(st->listen_fd, 16) != 0) {
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        if (pthread_create(&st->accept_tid, NULL, accept_thread_fn, st) != 0) {
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        st->running = 1;
+        ps_info("network_listener: persistent mode -- listening on %s:%d, max %d clients",
+                addr, port, st->max_clients);
+    } else {
+        ps_info("network_listener: knock-only mode -- no idle listener; "
+                "sessions land via discovery probes");
+    }
+    ctx->userdata = st;
+    g_state = st;
+    return 0;
+}
+
+static void nl_shutdown(ps_module_ctx_t *ctx) {
+    struct nl_state *st = ctx->userdata;
+    if (!st) return;
+    atomic_store(&st->stop, 1);
+    if (st->listen_fd >= 0) close(st->listen_fd);
+    if (st->running) pthread_join(st->accept_tid, NULL);
+    ps_at_ctx_destroy(&st->tctx);
+    free(st);
+    ctx->userdata = NULL;
+    g_state = NULL;
+}
+
+/* ---- Knock-mode one-shot session window ----------------------------
+ *
+ * Called from discovery_listener when a signed probe carrying
+ * PS_DISCOVERY_FLAG_REQUEST_SESSION arrives. We bind a fresh TCP socket
+ * on 0.0.0.0:0, hand it to a dedicated accept thread that lives for
+ * `timeout_secs`, and return the kernel-picked port so the discovery
+ * reply can advertise it.
+ *
+ * Beyond the window, the port is gone -- net effect: an external port
+ * scan sees nothing between knocks.
+ *
+ * Requires the network_listener module to be enabled (we reuse its
+ * SSL_CTX, authorized-keys list, and session_thread). If the module is
+ * disabled, returns -1.
+ */
+
+struct window_args {
+    int                listen_fd;
+    int                timeout_secs;
+};
+
+static void *window_thread(void *arg) {
+    struct window_args *wa = arg;
+    int lfd = wa->listen_fd;
+    int timeout = wa->timeout_secs;
+    free(wa);
+    if (!g_state) { close(lfd); return NULL; }
+
+    struct timeval tv = { timeout, 0 };
+    setsockopt(lfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in ca; socklen_t cal = sizeof(ca);
+    int cfd = accept(lfd, (struct sockaddr *)&ca, &cal);
+    close(lfd); /* one-shot: tear down the listener before doing TLS */
+    if (cfd < 0) return NULL;
+
+    if (atomic_load(&g_state->active_clients) >= g_state->max_clients) {
+        close(cfd);
+        return NULL;
+    }
+    SSL *ssl = SSL_new(g_state->tctx.ssl_ctx);
+    if (!ssl) { close(cfd); return NULL; }
+    SSL_set_fd(ssl, cfd);
+    if (SSL_accept(ssl) != 1) { SSL_free(ssl); close(cfd); return NULL; }
+
+    struct session_args *sa = calloc(1, sizeof(*sa));
+    if (!sa) { ps_at_close(ssl); return NULL; }
+    sa->st = g_state; sa->ssl = ssl;
+    atomic_fetch_add(&g_state->active_clients, 1);
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, session_thread, sa) != 0) {
+        atomic_fetch_sub(&g_state->active_clients, 1);
+        ps_at_close(ssl); free(sa);
+        return NULL;
+    }
+    pthread_detach(tid);
+    return NULL;
+}
+
+int ps_nl_open_session_window(int timeout_secs, uint16_t *out_port) {
+    if (!g_state) return -1;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in la; memset(&la, 0, sizeof(la));
+    la.sin_family = AF_INET;
+    la.sin_addr.s_addr = htonl(INADDR_ANY);
+    la.sin_port = 0;
+    if (bind(fd, (struct sockaddr *)&la, sizeof(la)) != 0) { close(fd); return -1; }
+    if (listen(fd, 1) != 0) { close(fd); return -1; }
+    socklen_t ll = sizeof(la);
+    if (getsockname(fd, (struct sockaddr *)&la, &ll) != 0) { close(fd); return -1; }
+    *out_port = ntohs(la.sin_port);
+
+    struct window_args *wa = calloc(1, sizeof(*wa));
+    if (!wa) { close(fd); return -1; }
+    wa->listen_fd = fd;
+    wa->timeout_secs = timeout_secs > 0 ? timeout_secs : 5;
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, window_thread, wa) != 0) {
+        close(fd); free(wa); return -1;
+    }
+    pthread_detach(tid);
+    return 0;
+}
+
+const ps_module_t network_listener_module = {
+    .name        = "network_listener",
+    .description = "Accept --via sessions over mTLS",
+    .version     = "1.0",
+    .flags       = 0,
+    .init        = nl_init,
+    .shutdown    = nl_shutdown,
+    .on_packet   = NULL,
+    .on_job      = NULL,
+    .on_response = NULL,
+    .tick        = NULL,
+};
+
+__attribute__((constructor))
+static void register_network_listener(void) {
+    ps_module_register(&network_listener_module);
+}

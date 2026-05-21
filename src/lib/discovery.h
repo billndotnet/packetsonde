@@ -32,6 +32,10 @@
 #define PS_DISCOVERY_DEFAULT_SKEW_MS  2000
 #define PS_DISCOVERY_HARDCAP_SKEW_MS 30000
 
+/* Probe `flags` byte. Bit 0 = "open a session listener and tell me the
+ * port" -- knock-then-listen stealth mode. Bits 1-7 reserved. */
+#define PS_DISCOVERY_FLAG_REQUEST_SESSION  0x01
+
 struct ps_discovery_probe {
     uint8_t  version;          /* PS_DISCOVERY_VERSION */
     uint8_t  flags;            /* reserved */
