@@ -29,6 +29,14 @@ int ps_module_register(const ps_module_t *mod) { (void)mod; return 0; }
 void ps_error(const char *fmt, ...) { (void)fmt; }
 void ps_debug(const char *fmt, ...) { (void)fmt; }
 
+/* Stub for the cross-module hook the discovery_listener now calls when
+ * a probe carries PS_DISCOVERY_FLAG_REQUEST_SESSION. The legacy tests
+ * here don't exercise that path; return -1 so any accidental hit yields
+ * a silent drop rather than touching the network. */
+int ps_nl_open_session_window(int timeout_secs, uint16_t *out_port) {
+    (void)timeout_secs; (void)out_port; return -1;
+}
+
 /* Pull the module source itself in. */
 #include "modules/discovery_listener.c"
 

@@ -350,9 +350,26 @@ static void *accept_thread_fn(void *arg) {
 /* ---- init / shutdown -------------------------------------------- */
 
 static int nl_init(ps_module_ctx_t *ctx) {
-    const char *enabled = getenv("PS_AGENT_LISTEN_ENABLED");
-    if (!enabled || strcmp(enabled, "1") != 0) {
-        ps_info("network_listener: disabled (set PS_AGENT_LISTEN_ENABLED=1)");
+    /* Two modes:
+     *   PS_AGENT_LISTEN_MODE=persistent    open a TCP listener, accept loop
+     *   PS_AGENT_LISTEN_MODE=knock         no idle listener; sessions land
+     *                                       only via ps_nl_open_session_window
+     *                                       called from discovery_listener
+     *   PS_AGENT_LISTEN_MODE=both          both paths active
+     *
+     * Legacy: PS_AGENT_LISTEN_ENABLED=1 means 'persistent'. */
+    const char *mode_env = getenv("PS_AGENT_LISTEN_MODE");
+    const char *legacy   = getenv("PS_AGENT_LISTEN_ENABLED");
+    int do_persistent = 0, do_knock = 0;
+    if (mode_env && *mode_env) {
+        if      (strcmp(mode_env, "persistent") == 0) do_persistent = 1;
+        else if (strcmp(mode_env, "knock")      == 0) do_knock      = 1;
+        else if (strcmp(mode_env, "both")       == 0) { do_persistent = 1; do_knock = 1; }
+    } else if (legacy && strcmp(legacy, "1") == 0) {
+        do_persistent = 1;
+    }
+    if (!do_persistent && !do_knock) {
+        ps_info("network_listener: disabled (set PS_AGENT_LISTEN_MODE=persistent|knock|both)");
         ctx->userdata = NULL;
         return 0;
     }
@@ -396,39 +413,43 @@ static int nl_init(ps_module_ctx_t *ctx) {
         free(st); return -1;
     }
 
-    /* Bind + listen. */
-    const char *addr = getenv("PS_AGENT_LISTEN_ADDR");
-    if (!addr || !*addr) addr = "0.0.0.0";
-    int port = 8442;
-    const char *ps = getenv("PS_AGENT_LISTEN_PORT");
-    if (ps && *ps) port = atoi(ps);
-
-    st->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (st->listen_fd < 0) { ps_at_ctx_destroy(&st->tctx); free(st); return -1; }
-    int one = 1;
-    setsockopt(st->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    struct sockaddr_in la; memset(&la, 0, sizeof(la));
-    la.sin_family = AF_INET;
-    la.sin_port = htons((uint16_t)port);
-    inet_aton(addr, &la.sin_addr);
-    if (bind(st->listen_fd, (struct sockaddr *)&la, sizeof(la)) != 0) {
-        ps_warn("network_listener: bind %s:%d failed: %s", addr, port, strerror(errno));
-        close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
-    }
-    if (listen(st->listen_fd, 16) != 0) {
-        close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
-    }
-
     atomic_init(&st->stop, 0);
     atomic_init(&st->active_clients, 0);
-    if (pthread_create(&st->accept_tid, NULL, accept_thread_fn, st) != 0) {
-        close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+
+    if (do_persistent) {
+        const char *addr = getenv("PS_AGENT_LISTEN_ADDR");
+        if (!addr || !*addr) addr = "0.0.0.0";
+        int port = 8442;
+        const char *ps = getenv("PS_AGENT_LISTEN_PORT");
+        if (ps && *ps) port = atoi(ps);
+
+        st->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (st->listen_fd < 0) { ps_at_ctx_destroy(&st->tctx); free(st); return -1; }
+        int one = 1;
+        setsockopt(st->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        struct sockaddr_in la; memset(&la, 0, sizeof(la));
+        la.sin_family = AF_INET;
+        la.sin_port = htons((uint16_t)port);
+        inet_aton(addr, &la.sin_addr);
+        if (bind(st->listen_fd, (struct sockaddr *)&la, sizeof(la)) != 0) {
+            ps_warn("network_listener: bind %s:%d failed: %s", addr, port, strerror(errno));
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        if (listen(st->listen_fd, 16) != 0) {
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        if (pthread_create(&st->accept_tid, NULL, accept_thread_fn, st) != 0) {
+            close(st->listen_fd); ps_at_ctx_destroy(&st->tctx); free(st); return -1;
+        }
+        st->running = 1;
+        ps_info("network_listener: persistent mode -- listening on %s:%d, max %d clients",
+                addr, port, st->max_clients);
+    } else {
+        ps_info("network_listener: knock-only mode -- no idle listener; "
+                "sessions land via discovery probes");
     }
-    st->running = 1;
     ctx->userdata = st;
     g_state = st;
-    ps_info("network_listener: enabled, listening on %s:%d, max %d clients",
-            addr, port, st->max_clients);
     return 0;
 }
 
@@ -442,6 +463,93 @@ static void nl_shutdown(ps_module_ctx_t *ctx) {
     free(st);
     ctx->userdata = NULL;
     g_state = NULL;
+}
+
+/* ---- Knock-mode one-shot session window ----------------------------
+ *
+ * Called from discovery_listener when a signed probe carrying
+ * PS_DISCOVERY_FLAG_REQUEST_SESSION arrives. We bind a fresh TCP socket
+ * on 0.0.0.0:0, hand it to a dedicated accept thread that lives for
+ * `timeout_secs`, and return the kernel-picked port so the discovery
+ * reply can advertise it.
+ *
+ * Beyond the window, the port is gone -- net effect: an external port
+ * scan sees nothing between knocks.
+ *
+ * Requires the network_listener module to be enabled (we reuse its
+ * SSL_CTX, authorized-keys list, and session_thread). If the module is
+ * disabled, returns -1.
+ */
+
+struct window_args {
+    int                listen_fd;
+    int                timeout_secs;
+};
+
+static void *window_thread(void *arg) {
+    struct window_args *wa = arg;
+    int lfd = wa->listen_fd;
+    int timeout = wa->timeout_secs;
+    free(wa);
+    if (!g_state) { close(lfd); return NULL; }
+
+    struct timeval tv = { timeout, 0 };
+    setsockopt(lfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in ca; socklen_t cal = sizeof(ca);
+    int cfd = accept(lfd, (struct sockaddr *)&ca, &cal);
+    close(lfd); /* one-shot: tear down the listener before doing TLS */
+    if (cfd < 0) return NULL;
+
+    if (atomic_load(&g_state->active_clients) >= g_state->max_clients) {
+        close(cfd);
+        return NULL;
+    }
+    SSL *ssl = SSL_new(g_state->tctx.ssl_ctx);
+    if (!ssl) { close(cfd); return NULL; }
+    SSL_set_fd(ssl, cfd);
+    if (SSL_accept(ssl) != 1) { SSL_free(ssl); close(cfd); return NULL; }
+
+    struct session_args *sa = calloc(1, sizeof(*sa));
+    if (!sa) { ps_at_close(ssl); return NULL; }
+    sa->st = g_state; sa->ssl = ssl;
+    atomic_fetch_add(&g_state->active_clients, 1);
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, session_thread, sa) != 0) {
+        atomic_fetch_sub(&g_state->active_clients, 1);
+        ps_at_close(ssl); free(sa);
+        return NULL;
+    }
+    pthread_detach(tid);
+    return NULL;
+}
+
+int ps_nl_open_session_window(int timeout_secs, uint16_t *out_port) {
+    if (!g_state) return -1;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in la; memset(&la, 0, sizeof(la));
+    la.sin_family = AF_INET;
+    la.sin_addr.s_addr = htonl(INADDR_ANY);
+    la.sin_port = 0;
+    if (bind(fd, (struct sockaddr *)&la, sizeof(la)) != 0) { close(fd); return -1; }
+    if (listen(fd, 1) != 0) { close(fd); return -1; }
+    socklen_t ll = sizeof(la);
+    if (getsockname(fd, (struct sockaddr *)&la, &ll) != 0) { close(fd); return -1; }
+    *out_port = ntohs(la.sin_port);
+
+    struct window_args *wa = calloc(1, sizeof(*wa));
+    if (!wa) { close(fd); return -1; }
+    wa->listen_fd = fd;
+    wa->timeout_secs = timeout_secs > 0 ? timeout_secs : 5;
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, window_thread, wa) != 0) {
+        close(fd); free(wa); return -1;
+    }
+    pthread_detach(tid);
+    return 0;
 }
 
 const ps_module_t network_listener_module = {

@@ -8,9 +8,11 @@
 
 struct ps_agent {
     char name[PS_AGENT_NAME_MAX];
-    char address[PS_AGENT_FIELD_MAX];
-    char key_fingerprint[PS_AGENT_FIELD_MAX];
+    char address[PS_AGENT_FIELD_MAX];          /* host:port for direct connect */
+    char key_fingerprint[PS_AGENT_FIELD_MAX];  /* sha256:<hex>, pinned */
     char tags[PS_AGENT_FIELD_MAX];
+    int  knock;                                 /* 1 = use knock-then-listen */
+    char broadcast[PS_AGENT_FIELD_MAX];         /* broadcast addr for knock */
 };
 
 struct ps_agents {
