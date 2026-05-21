@@ -187,7 +187,8 @@ static int smtp_run(int argc, char **argv,
                         "SMTP server does not advertise STARTTLS (plaintext only)");
         ps_finding_set_target_ip(&f, ip, port);
         ps_finding_set_target_hostname(&f, host, port);
-        ps_finding_set_evidence_json(&f, "{\"port\":25}");
+        char ev[32]; snprintf(ev, sizeof(ev), "{\"port\":%u}", port);
+        ps_finding_set_evidence_json(&f, ev);
         api->emit(&f);
     }
     return 0;

@@ -71,6 +71,12 @@ SSL *ps_at_connect(struct ps_at_ctx *ctx, const char *host, uint16_t port);
  * after the handshake to consult their own authorized set. */
 SSL *ps_at_accept(struct ps_at_ctx *ctx, int listen_fd);
 
+/* Run the TLS server-side handshake on an already-accepted fd. Same pin
+ * enforcement as ps_at_accept. Closes `client_fd` on failure. Use this
+ * when the caller already owns the accept loop -- it's the safe way to
+ * make sure enforce_pin() runs before any application data flows. */
+SSL *ps_at_accept_fd(struct ps_at_ctx *ctx, int client_fd);
+
 /* Fingerprint of the connected peer's pubkey, written as sha256:<64 hex>.
  * Returns 0 on success. */
 int  ps_at_peer_fingerprint(SSL *ssl, char *out_hex, size_t out_cap);
@@ -82,5 +88,14 @@ void ps_at_make_io(SSL *ssl, struct ps_ap_io *out);
 
 /* Send TLS close_notify, free the SSL, close the underlying fd. */
 void ps_at_close(SSL *ssl);
+
+/* Process-wide opt-in: install SIG_IGN for SIGPIPE so writes against a
+ * half-closed TLS connection surface as EPIPE / PS_AP_ERR_IO instead of
+ * killing the process. Callers should call this once at startup if they
+ * intend to use this library; it is a no-op on subsequent calls.
+ *
+ * Kept opt-in rather than implicit so embedders that manage their own
+ * signal disposition are not surprised. */
+void ps_at_block_sigpipe(void);
 
 #endif

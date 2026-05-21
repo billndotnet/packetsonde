@@ -113,11 +113,6 @@ int ps_at_ctx_init(struct ps_at_ctx *out,
                    enum ps_at_side side,
                    const struct ps_keypair *kp,
                    const char *expected_peer_fpr) {
-    /* Writes against a half-closed TLS connection would otherwise raise
-     * SIGPIPE and kill the process. The CLI and agent both have nontrivial
-     * cleanup paths we'd rather run. */
-    static int sigpipe_blocked = 0;
-    if (!sigpipe_blocked) { signal(SIGPIPE, SIG_IGN); sigpipe_blocked = 1; }
     memset(out, 0, sizeof(*out));
     out->side = side;
     if (expected_peer_fpr && *expected_peer_fpr) {
@@ -214,11 +209,16 @@ SSL *ps_at_accept(struct ps_at_ctx *ctx, int listen_fd) {
     struct sockaddr_storage ss; socklen_t sl = sizeof(ss);
     int fd = accept(listen_fd, (struct sockaddr *)&ss, &sl);
     if (fd < 0) return NULL;
+    return ps_at_accept_fd(ctx, fd);
+}
+
+SSL *ps_at_accept_fd(struct ps_at_ctx *ctx, int client_fd) {
+    if (client_fd < 0) return NULL;
     SSL *ssl = SSL_new(ctx->ssl_ctx);
-    if (!ssl) { close(fd); return NULL; }
-    SSL_set_fd(ssl, fd);
+    if (!ssl) { close(client_fd); return NULL; }
+    SSL_set_fd(ssl, client_fd);
     if (SSL_accept(ssl) != 1 || enforce_pin(ctx, ssl) != 0) {
-        SSL_free(ssl); close(fd); return NULL;
+        SSL_free(ssl); close(client_fd); return NULL;
     }
     return ssl;
 }
@@ -229,4 +229,11 @@ void ps_at_close(SSL *ssl) {
     SSL_shutdown(ssl);
     SSL_free(ssl);
     if (fd >= 0) close(fd);
+}
+
+void ps_at_block_sigpipe(void) {
+    static int blocked = 0;
+    if (blocked) return;
+    signal(SIGPIPE, SIG_IGN);
+    blocked = 1;
 }

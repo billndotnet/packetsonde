@@ -12,8 +12,10 @@
 int ps_verb_key_run(int argc, char **argv, const struct ps_args *opts);
 
 static int ensure_dir(const char *dir) {
-    /* mkdir -p style for one level, then the leaf. Good enough for the
-     * default $XDG_CONFIG_HOME/packetsonde/keys layout. */
+    /* mkdir -p style for one level, then the leaf. The leaf is the key
+     * directory itself, which must be 0700 (owner-only) to prevent
+     * symlink attacks on .sec files inside it -- see H-4 in the
+     * security review. Parent dirs stay at 0755. */
     char p[1024]; snprintf(p, sizeof(p), "%s", dir);
     size_t n = strlen(p);
     for (size_t i = 1; i < n; i++) {
@@ -23,10 +25,17 @@ static int ensure_dir(const char *dir) {
             p[i] = '/';
         }
     }
-    mkdir(p, 0755);
+    mkdir(p, 0700);
     struct stat st;
     if (stat(dir, &st) != 0) return -1;
-    return S_ISDIR(st.st_mode) ? 0 : -1;
+    if (!S_ISDIR(st.st_mode)) return -1;
+    /* If the directory already existed at a more-permissive mode, tighten
+     * it. Don't ignore the failure -- a world-readable key dir is the
+     * thing this whole subsystem is trying to prevent. */
+    if ((st.st_mode & 0777) != 0700) {
+        if (chmod(dir, 0700) != 0) return -1;
+    }
+    return 0;
 }
 
 static void usage(void) {
