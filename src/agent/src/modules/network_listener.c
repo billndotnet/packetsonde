@@ -228,7 +228,7 @@ static const char *AUDIT_KIND_ALLOWLIST[] = {
     "tls", "dns", "http", "ssh", "smb", "telnet", "ftp", "redis",
     "ntp", "memcached", "elasticsearch", "smtp", "mysql", "postgresql",
     "ldap", "imap", "pop3", "snmp", "rdp", "mssql", "kafka", "vnc",
-    "haproxy", "proxmox", "nginx", NULL
+    "haproxy", "proxmox", "nginx", "opnsense", NULL
 };
 
 static int kind_is_allowed(const char *kind) {
