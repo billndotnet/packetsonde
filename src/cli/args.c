@@ -5,14 +5,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Implemented in dispatch.c (or stubbed by unit tests that link args.c
+ * standalone). Letting args.c reach into the verb registry keeps the
+ * Verbs section of usage in sync with whatever's registered. */
+extern void ps_verbs_print_list(FILE *fp);
+
 void ps_args_usage(const char *prog) {
     fprintf(stderr,
         "Usage: %s [options] <verb> [args...]\n"
         "\n"
-        "Verbs (v1):\n"
-        "  version              Show version\n"
-        "  agent <subcmd>       Control / query the local packetsonded agent\n"
-        "  help                 Show help\n"
+        "Verbs:\n", prog);
+    ps_verbs_print_list(stderr);
+    fprintf(stderr,
         "\n"
         "Output:\n"
         "  --text               Force text output\n"
@@ -21,16 +25,17 @@ void ps_args_usage(const char *prog) {
         "  --quiet              Tab-separated minimal output\n"
         "  --no-color           Suppress color (also honors NO_COLOR)\n"
         "  --auto-append        Tee JSONL to ~/.local/state/packetsonde/findings-YYYY-MM-DD.jsonl\n"
+        "  --fail-on EXPR       Exit 3 if findings match (e.g. severity>=medium)\n"
         "\n"
         "Execution:\n"
-        "  --via <name>         Dispatch to a named agent (v1: only 'local')\n"
+        "  --via <agent>        Forward to a remote agent (repeatable for multi-hop)\n"
         "  --concurrency N      Worker pool size (default 16)\n"
         "  --rate PPS           Probe-rate cap\n"
         "  --socket PATH        Override local agent socket path\n"
         "  --config PATH        Override config file location\n"
         "\n"
         "Run `%s help` for command help, or `%s <verb> --help`.\n",
-        prog, prog, prog);
+        prog, prog);
 }
 
 enum {
