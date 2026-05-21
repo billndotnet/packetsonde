@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# rc.d script for packetsonded on FreeBSD / OPNsense / pfSense.
+#
+# Install:
+#   sudo cp packaging/freebsd/packetsonded.rc /usr/local/etc/rc.d/packetsonded
+#   sudo chmod +x /usr/local/etc/rc.d/packetsonded
+#   sudo sysrc packetsonded_enable="YES"
+#   sudo service packetsonded start
+#
+# Control:
+#   service packetsonded {start|stop|restart|status}
+#
+# Configuration (in /etc/rc.conf or via sysrc):
+#   packetsonded_enable      YES|NO     (default NO)
+#   packetsonded_config      path       (default /usr/local/etc/packetsonded/packetsonded.toml)
+#   packetsonded_user        user       (default packetsonded)
+#   packetsonded_flags       extras     (passed to packetsonded)
+
+# PROVIDE: packetsonded
+# REQUIRE: NETWORKING SYSLOG
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="packetsonded"
+rcvar="${name}_enable"
+
+load_rc_config "$name"
+
+: ${packetsonded_enable:="NO"}
+: ${packetsonded_config:="/usr/local/etc/packetsonded/packetsonded.toml"}
+: ${packetsonded_user:="packetsonded"}
+: ${packetsonded_flags:=""}
+
+command="/usr/local/sbin/packetsonded"
+command_args="-c ${packetsonded_config} ${packetsonded_flags}"
+pidfile="/var/run/${name}.pid"
+
+# Run under daemon(8) so we get a proper pidfile + background detach
+# without modifying the agent itself.
+command="/usr/sbin/daemon"
+command_args="-c -f -p ${pidfile} -u ${packetsonded_user} \
+    /usr/local/sbin/packetsonded -c ${packetsonded_config} ${packetsonded_flags}"
+
+run_rc_command "$1"
