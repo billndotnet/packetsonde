@@ -1,0 +1,48 @@
+# packetsonded -- example configuration.
+#
+# Sections map to env vars (see src/agent/src/config_to_env.c).
+# Pre-existing PS_* env vars always win over file values, so operator
+# overrides at launch take precedence.
+
+# ---- key storage -----------------------------------------------------
+[keys]
+# Where the agent looks for its identity keypair and the authorized/
+# subdirectory of client pubkeys.
+dir = "/etc/packetsonded/keys"
+
+# ---- discovery (knock listener) --------------------------------------
+# When enabled, the agent's pcap pipeline inspects every broadcast UDP
+# packet for a signed PSDP probe. Validated probes get a unicast reply.
+# No listening socket is bound -- the agent is invisible to port scans.
+[discovery]
+enabled              = "1"
+agent_key            = "agent"
+authorized_dir       = "/etc/packetsonded/keys/authorized"
+# IP advertised in replies. "auto" detects the primary v4.
+listen_ip            = "auto"
+# Port advertised when not running in knock-then-listen mode.
+listen_port          = "0"
+# Hard cap on probe.max_skew_ms. 30000 = 30 s.
+max_skew_ms_hard_cap = "30000"
+
+# ---- agent listen (--via channel) ------------------------------------
+# Mode controls how the inbound mTLS surface behaves:
+#   persistent -- always-on TCP listener (classic deployment)
+#   knock      -- no idle socket; sessions only via signed knocks
+#   both       -- both call patterns supported
+[agent_listen]
+mode             = "knock"
+addr             = "0.0.0.0"
+port             = "8442"
+key              = "agent"
+authorized_dir   = "/etc/packetsonded/keys/authorized"
+max_clients      = "64"
+packetsonde_bin  = "/usr/local/bin/packetsonde"
+
+# ---- NetFlow / IPFIX export ------------------------------------------
+# Sends expired flows to a collector. 5 = NetFlow v5, 9 = NetFlow v9,
+# 10 = IPFIX. All three carry IANA-standard field IDs.
+[netflow]
+collector = "127.0.0.1:2055"
+version   = "9"
+source_id = "20563"
