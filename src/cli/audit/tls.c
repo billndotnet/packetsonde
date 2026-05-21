@@ -1,4 +1,5 @@
 #include "audit_module.h"
+#include "audit_common.h"
 #include "../args.h"
 #include "finding.h"
 #include "ulid.h"
@@ -21,41 +22,18 @@
 #include <openssl/x509v3.h>
 
 static int parse_target(const char *spec, char *host, size_t host_sz, uint16_t *port) {
-    const char *colon = strrchr(spec, ':');
-    if (!colon) return -1;
-    size_t hl = (size_t)(colon - spec);
-    if (hl == 0 || hl >= host_sz) return -1;
-    memcpy(host, spec, hl); host[hl] = '\0';
-    long p = strtol(colon + 1, NULL, 10);
-    if (p <= 0 || p > 65535) return -1;
-    *port = (uint16_t)p;
+    /* TLS targets are always host:port (no implicit default port via the
+     * cipher_list paths), so require an explicit port. ps_audit_parse_target
+     * accepts a default but we pass 0 and reject post-parse if it stays 0. */
+    *port = 0;
+    if (ps_audit_parse_target(spec, host, host_sz, 0, port) != 0) return -1;
+    if (*port == 0) return -1;
     return 0;
 }
 
 static int tcp_connect(const char *host, uint16_t port, int timeout_ms,
                        char *ip_out, size_t ip_out_sz) {
-    char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
-    struct addrinfo hints; memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res = NULL;
-    if (getaddrinfo(host, portstr, &hints, &res) != 0) return -1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return -1; }
-    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        close(fd); freeaddrinfo(res); return -1;
-    }
-    if (ip_out && ip_out_sz) {
-        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
-        uint32_t a = sin->sin_addr.s_addr;
-        snprintf(ip_out, ip_out_sz, "%u.%u.%u.%u",
-                 (a >> 0) & 0xff, (a >> 8) & 0xff,
-                 (a >> 16) & 0xff, (a >> 24) & 0xff);
-    }
-    freeaddrinfo(res);
-    return fd;
+    return ps_audit_tcp_connect(host, port, timeout_ms, ip_out, ip_out_sz);
 }
 
 struct tls_attempt {
