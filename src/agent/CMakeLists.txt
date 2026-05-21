@@ -102,6 +102,10 @@ set(AGENT_CORE_SOURCES
 
 # Agent binary
 add_executable(packetsonde-agent src/main.c ${AGENT_CORE_SOURCES})
+# Brand name on disk is `packetsonded` (matches the README, systemd
+# unit, launchd plist, and rc.d script). The CMake target stays
+# `packetsonde-agent` for readability in build output.
+set_target_properties(packetsonde-agent PROPERTIES OUTPUT_NAME packetsonded)
 target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -123,6 +127,9 @@ if(HAVE_HIREDIS)
     target_link_libraries(packetsonde-agent PRIVATE ${HIREDIS_LIBRARY})
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_HIREDIS=1)
 endif()
+
+# (Install rules consolidated at the bottom of this file; the priv
+# worker target is declared just below so we install it there.)
 
 # Priv worker binary
 add_executable(packetsonde-priv src/priv_worker.c src/platform/unix.c)
@@ -288,30 +295,66 @@ add_test(NAME test_honeypot_listener COMMAND test_honeypot_listener)
 
 include(GNUInstallDirs)
 
+# Per-platform install layout, intended for `sudo make install` from a
+# from-source build. Default CMAKE_INSTALL_PREFIX is /usr/local.
+#
+#   /usr/local/sbin/packetsonded           agent daemon
+#   /usr/local/sbin/packetsonde-priv       priv worker (raw sockets / pcap)
+#   /usr/local/bin/packetsonde             CLI (installed by src/cli/CMakeLists.txt)
+#   /etc/packetsonded/packetsonded.toml    example config (installed if missing)
+#   /etc/packetsonded/keys/authorized/     directory only -- operator
+#                                          populates with client .pub files
+#   /etc/systemd/system/packetsonded.service   Linux only
+#   /usr/local/etc/rc.d/packetsonded           FreeBSD only
+
 install(TARGETS packetsonde-agent packetsonde-priv
         RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
 
-install(DIRECTORY DESTINATION ${SYSCONFDIR}/packetsonde)
-install(FILES conf/packetsonde.conf.default
-        DESTINATION ${SYSCONFDIR}/packetsonde
-        RENAME packetsonde.conf.example)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/conf/honeypot.conf.example")
-    install(FILES conf/honeypot.conf.example
-            DESTINATION ${SYSCONFDIR}/packetsonde)
+set(PS_CONFIG_DIR "/etc/packetsonded" CACHE PATH
+    "Where to install packetsonded's config + keys directory")
+
+# Config: install as <name>.toml.example so an existing config isn't
+# clobbered. Operator copies .example -> .toml on first deployment.
+install(DIRECTORY DESTINATION ${PS_CONFIG_DIR})
+install(DIRECTORY DESTINATION ${PS_CONFIG_DIR}/keys/authorized)
+install(FILES ${CMAKE_SOURCE_DIR}/packaging/packetsonded.toml
+        DESTINATION ${PS_CONFIG_DIR}
+        RENAME packetsonded.toml.example)
+
+# systemd unit (Linux). Installs to /etc/systemd/system regardless of
+# prefix because that's where systemd reads unconditionally; from-source
+# install at /usr/local/lib/systemd/system isn't picked up without an
+# operator step.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES ${CMAKE_SOURCE_DIR}/packaging/packetsonded.service
+            DESTINATION /etc/systemd/system)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/packetsonde-bridge-setup")
-    install(PROGRAMS scripts/packetsonde-bridge-setup
-            DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/debian/packetsonde-agent.service")
-    install(FILES debian/packetsonde-agent.service
-            DESTINATION lib/systemd/system)
-endif()
-
-if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/packetsonde-agent.rc")
-    install(FILES scripts/packetsonde-agent.rc
+# rc.d script (FreeBSD / OPNsense / pfSense).
+if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    install(PROGRAMS ${CMAKE_SOURCE_DIR}/packaging/freebsd/packetsonded.rc
             DESTINATION ${SYSCONFDIR}/rc.d
-            RENAME packetsonde-agent)
+            RENAME packetsonded)
 endif()
+
+# Post-install message: operator next-steps. Printed by CMake at the
+# end of `make install` -- helpful for first-deploy walk-through.
+install(CODE "
+message(STATUS \"\")
+message(STATUS \"=== packetsonded install complete ===\")
+message(STATUS \"\")
+message(STATUS \"Next steps:\")
+message(STATUS \"  1. Create the unprivileged service user (Linux):\")
+message(STATUS \"       sudo useradd --system --no-create-home --shell /usr/sbin/nologin packetsonded\")
+message(STATUS \"  2. Activate the config:\")
+message(STATUS \"       sudo cp ${PS_CONFIG_DIR}/packetsonded.toml.example ${PS_CONFIG_DIR}/packetsonded.toml\")
+message(STATUS \"  3. Generate the agent identity keypair (writes ${PS_CONFIG_DIR}/keys/agent.{pub,sec}):\")
+message(STATUS \"       sudo PS_KEY_DIR=${PS_CONFIG_DIR}/keys packetsonde key generate --name agent\")
+message(STATUS \"  4. Authorize a CLI pubkey:\")
+message(STATUS \"       sudo cp ~/.config/packetsonde/keys/default.pub ${PS_CONFIG_DIR}/keys/authorized/\")
+message(STATUS \"  5. Start the daemon:\")
+message(STATUS \"       Linux:   sudo systemctl daemon-reload && sudo systemctl enable --now packetsonded\")
+message(STATUS \"       macOS:   sudo launchctl bootstrap system /Library/LaunchDaemons/net.billn.packetsonded.plist\")
+message(STATUS \"       FreeBSD: sudo sysrc packetsonded_enable=YES && sudo service packetsonded start\")
+message(STATUS \"\")
+")
