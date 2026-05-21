@@ -1,5 +1,6 @@
 #include "audit_module.h"
 #include "../args.h"
+#include "audit_common.h"
 #include "finding.h"
 #include "ulid.h"
 
@@ -54,19 +55,10 @@ static int udp_query(const char *server, uint16_t port,
                      const uint8_t *q, size_t qlen,
                      uint8_t *resp, size_t resp_cap,
                      int timeout_ms) {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    int fd = ps_audit_udp_connect(server, port, timeout_ms, NULL, 0);
     if (fd < 0) return -1;
-    struct sockaddr_in dst; memset(&dst, 0, sizeof(dst));
-    dst.sin_family = AF_INET;
-    dst.sin_port = htons(port);
-    if (inet_pton(AF_INET, server, &dst.sin_addr) != 1) {
-        close(fd); return -1;
-    }
-    struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    if (sendto(fd, q, qlen, 0, (struct sockaddr *)&dst, sizeof(dst)) < 0) {
-        close(fd); return -1;
-    }
+    ssize_t s = send(fd, q, qlen, 0);
+    if (s != (ssize_t)qlen) { close(fd); return -1; }
     ssize_t n = recv(fd, resp, resp_cap, 0);
     close(fd);
     return (int)n;
@@ -118,15 +110,10 @@ static int dns_run(int argc, char **argv,
         fprintf(stderr, "Usage: packetsonde audit dns <resolver-ip>[:port]\n");
         return 2;
     }
-    char host[64] = ""; uint16_t port = 53;
-    const char *colon = strrchr(argv[1], ':');
-    if (colon) {
-        size_t hl = (size_t)(colon - argv[1]);
-        if (hl >= sizeof(host)) return 2;
-        memcpy(host, argv[1], hl); host[hl] = '\0';
-        port = (uint16_t)atoi(colon + 1);
-    } else {
-        snprintf(host, sizeof(host), "%s", argv[1]);
+    char host[256] = ""; uint16_t port = 53;
+    if (ps_audit_parse_target(argv[1], host, sizeof(host), 53, &port) != 0) {
+        fprintf(stderr, "audit dns: invalid target '%s'\n", argv[1]);
+        return 2;
     }
 
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
