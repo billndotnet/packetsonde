@@ -34,6 +34,7 @@ set(CLI_SOURCES
     audit/rdp.c
     audit/mssql.c
     audit/kafka.c
+    audit/audit_common.c
     probe/tcp.c
     probe/traceroute.c
     discover/neighbors.c
@@ -227,7 +228,11 @@ install(TARGETS packetsonde RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 set(_audit_plugin_dir ${CMAKE_BINARY_DIR}/src/cli/audit)
 
 function(ps_add_audit_plugin name)
-    add_library(audit-${name} MODULE audit/${name}.c)
+    # audit_common.c carries the shared parse_target + tcp_connect
+    # helpers; every audit module links it directly so plugins can be
+    # loaded standalone via dlopen without resolving CLI-internal
+    # symbols at runtime.
+    add_library(audit-${name} MODULE audit/${name}.c audit/audit_common.c)
     target_compile_definitions(audit-${name} PRIVATE PS_AUDIT_PLUGIN_BUILD=1)
     target_include_directories(audit-${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
