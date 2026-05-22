@@ -44,6 +44,8 @@
 #include "agent_proto.h"
 #include "agent_transport.h"
 #include "keystore.h"
+#include "relay_attest.h"
+#include "http_client.h"
 #include "log.h"
 
 #define MAX_AUTHORIZED 64
@@ -347,6 +349,90 @@ struct session_args {
     SSL             *ssl;
 };
 
+/* Relay role: forward an ingest frame's envelopes to central, appending this
+ * relay's signed attestation to each. peer_id = connecting peer (received_from).
+ * Writes an ack JSON into `ack`; returns the accepted count central reported.
+ * NOTE: appends a fresh relay_path per envelope — correct for single-hop; merging
+ * into a pre-existing relay_path (multi-hop) is a follow-up. */
+static int handle_ingest(struct nl_state *st, const char *peer_id,
+                         const uint8_t *frame, size_t len, char *ack, size_t ack_cap) {
+    (void)len;
+    const char *allow = getenv("PS_RELAY_ALLOW_SOURCES");
+    if (!allow || !peer_id[0] || !strstr(allow, peer_id)) {
+        snprintf(ack, ack_cap,
+                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"source not allowed\"}");
+        return 0;
+    }
+    const char *p = strstr((const char *)frame, "\"envelopes\":");
+    const char *arr = p ? strchr(p, '[') : NULL;
+    if (!arr) {
+        snprintf(ack, ack_cap,
+                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"no envelopes\"}");
+        return 0;
+    }
+
+    char self_id[256];
+    const char *cid = getenv("PS_CENTRAL_AGENT_ID");
+    if (cid && cid[0]) snprintf(self_id, sizeof self_id, "%s", cid);
+    else if (gethostname(self_id, sizeof self_id) != 0) snprintf(self_id, sizeof self_id, "relay");
+
+    static char fwd[262144];
+    size_t fo = 0;
+    fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo, "{\"envelopes\":[");
+    int depth = 0; const char *obj_start = NULL; int first = 1;
+    for (const char *c = arr; *c; c++) {
+        if (*c == '{') { if (depth == 0) obj_start = c; depth++; }
+        else if (*c == '}') {
+            depth--;
+            if (depth == 0 && obj_start) {
+                size_t objlen = (size_t)(c - obj_start) + 1;
+                char obj[20000];
+                if (objlen < sizeof obj) {
+                    memcpy(obj, obj_start, objlen); obj[objlen] = 0;
+                    char sig[128] = "";
+                    const char *sp = strstr(obj, "\"ed25519_sig\":\"");
+                    if (sp) {
+                        sp += 15; const char *se = strchr(sp, '"');
+                        if (se && (size_t)(se - sp) < sizeof sig) {
+                            memcpy(sig, sp, (size_t)(se - sp)); sig[se - sp] = 0;
+                        }
+                    }
+                    char entry[1024];
+                    if (ps_relay_attest_entry(&st->agent_kp, self_id, sig, peer_id,
+                                              entry, sizeof entry) > 0) {
+                        obj[objlen - 1] = 0;  /* drop trailing '}' */
+                        fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo,
+                                               "%s%s,\"relay_path\":[%s]}",
+                                               first ? "" : ",", obj, entry);
+                        first = 0;
+                    }
+                }
+                obj_start = NULL;
+                if (fo >= sizeof fwd - 64) break;
+            }
+        } else if (*c == ']' && depth == 0) break;
+    }
+    fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo, "]}");
+
+    const char *base = getenv("PS_CENTRAL_URL");
+    if (!base || !base[0]) {
+        snprintf(ack, ack_cap,
+                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"relay has no central url\"}");
+        return 0;
+    }
+    char url[640]; snprintf(url, sizeof url, "%s/api/v1/packetsonde/events", base);
+    char hdr[320]; snprintf(hdr, sizeof hdr, "X-Packetsonde-Relay: %s\r\n", self_id);
+    const char *verify = getenv("PS_CENTRAL_VERIFY");
+    struct ps_http_opts opts = { (verify && verify[0] == '0') ? 0 : 1,
+                                 getenv("PS_CENTRAL_CA_CERT"), 15 };
+    int status = 0; char resp[8192]; int accepted = 0;
+    if (ps_http_request_h("POST", url, fwd, hdr, &opts, &status, resp, sizeof resp) == 0) {
+        const char *a = strstr(resp, "\"accepted\":"); accepted = a ? atoi(a + 11) : 0;
+    }
+    snprintf(ack, ack_cap, "{\"type\":\"ack\",\"accepted\":%d,\"rejected\":0,\"detail\":\"\"}", accepted);
+    return accepted;
+}
+
 static void *session_thread(void *arg) {
     struct session_args *sa = arg;
     struct nl_state *st = sa->st;
@@ -380,6 +466,15 @@ static void *session_thread(void *arg) {
         char type[32];
         if (ps_ap_frame_type(buf, blen, type, sizeof(type)) != 0) continue;
         if (strcmp(type, "hello") == 0) { saw_hello = 1; continue; }
+        if (strcmp(type, "ingest") == 0) {
+            char peer_id[128] = "";
+            ps_at_peer_fingerprint(ssl, peer_id, sizeof peer_id);
+            char ack[1024];
+            handle_ingest(st, peer_id, buf, blen, ack, sizeof ack);
+            ps_ap_write_frame(&io, ack, strlen(ack));
+            dispatched = 1;
+            continue;
+        }
         if (strcmp(type, "audit") != 0) continue;
         if (!saw_hello) {
             const char *e = "{\"type\":\"error\",\"message\":\"audit before hello\"}";

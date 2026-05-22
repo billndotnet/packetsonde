@@ -111,14 +111,15 @@ static int io_exchange(int fd, SSL *ssl, const char *req, size_t reqlen,
     return (int)got;
 }
 
-int ps_http_request(const char *method, const char *url, const char *body,
-                    const struct ps_http_opts *opts, int *status_out,
-                    char *resp_buf, size_t resp_cap) {
+int ps_http_request_h(const char *method, const char *url, const char *body,
+                      const char *extra_headers,
+                      const struct ps_http_opts *opts, int *status_out,
+                      char *resp_buf, size_t resp_cap) {
     struct ps_url u;
     if (ps_url_parse(url, &u) != 0) return -1;
 
     char req[8192];
-    int reqlen = ps_http_build_request(req, sizeof req, method, &u, body, NULL);
+    int reqlen = ps_http_build_request(req, sizeof req, method, &u, body, extra_headers);
     if (reqlen < 0) return -1;
 
     int timeout_s = opts ? opts->timeout_s : 10;
@@ -163,5 +164,11 @@ done:
     if (ctx) SSL_CTX_free(ctx);
     close(fd);
     return rc;
+}
+
+int ps_http_request(const char *method, const char *url, const char *body,
+                    const struct ps_http_opts *opts, int *status_out,
+                    char *resp_buf, size_t resp_cap) {
+    return ps_http_request_h(method, url, body, NULL, opts, status_out, resp_buf, resp_cap);
 }
 

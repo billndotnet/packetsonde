@@ -112,6 +112,8 @@ int main(void) {
     if (test_short_buffer())       return 1;
     if (test_bad_json_payload())   return 1;
     if (test_frame_type())         return 1;
+    if (strcmp(PS_AP_MSG_INGEST, "ingest") != 0) return 1;
+    if (strcmp(PS_AP_MSG_ACK, "ack") != 0) return 1;
     fprintf(stderr, "test_agent_proto: OK\n");
     return 0;
 }

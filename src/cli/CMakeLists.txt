@@ -14,6 +14,7 @@ set(CLI_SOURCES
     verbs/report_central.c
     ../agent/src/config.c
     remote/audit_via.c
+    remote/ingest_via.c
     audit_loader.c
     registry/agents.c
     audit/tls.c
