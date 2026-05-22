@@ -48,4 +48,9 @@ int ps_keystore_load(const char *dir, const char *name,
  * Returns 0 on success. Does not create the directory. */
 int ps_keystore_default_dir(char *out, size_t outsz);
 
+/* Ed25519-sign msg with kp's secret key. sig64 receives the 64-byte signature.
+ * Returns 0 on success, -1 on any OpenSSL failure. */
+int ps_keystore_sign(const struct ps_keypair *kp, const uint8_t *msg,
+                     size_t msg_len, uint8_t sig64[64]);
+
 #endif
