@@ -112,9 +112,13 @@ int ps_verb_collect_run(int argc, char **argv, const struct ps_args *opts) {
         if (hn>0) ps_ap_write_frame(&io, hello, (size_t)hn);
 
         static uint8_t buf[256*1024]; size_t blen;
-        if (ps_ap_read_frame(&io, buf, sizeof buf, &blen) == PS_AP_OK) {
+        int handled = 0;
+        while (!handled && ps_ap_read_frame(&io, buf, sizeof buf, &blen) == PS_AP_OK) {
             char type[32];
-            if (ps_ap_frame_type(buf, blen, type, sizeof type) == 0 && strcmp(type,"ingest")==0) {
+            if (ps_ap_frame_type(buf, blen, type, sizeof type) != 0) continue;
+            if (strcmp(type, "hello") == 0) continue;   /* skip the client hello */
+            if (strcmp(type, "ingest") == 0) {
+                handled = 1;
                 buf[blen < sizeof buf ? blen : sizeof buf - 1] = 0;
                 int accepted = 0, total = 0;
                 const char *arr = strstr((char*)buf, "\"envelopes\":");
