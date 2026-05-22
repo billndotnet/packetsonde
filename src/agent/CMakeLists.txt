@@ -65,6 +65,7 @@ endif()
 set(AGENT_CORE_SOURCES
     src/config.c
     src/config_to_env.c
+    src/central_checkin.c
     src/module.c
     src/host_table.c
     src/ipc_server.c
