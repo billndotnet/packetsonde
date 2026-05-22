@@ -36,9 +36,9 @@ static int b64(const uint8_t *in, size_t n, char *out, size_t cap) {
     return (len < 0 || (size_t)len >= cap) ? -1 : len;
 }
 
-int ps_report_events(const struct ps_central_config *cc, const char *base_url,
-                     const char **event_jsons, size_t n, struct ps_report_result *out) {
-    if (!cc || !cc->url || !cc->url[0]) return -1;
+int ps_reporter_build_envelopes(const struct ps_central_config *cc,
+                                const char **event_jsons, size_t n,
+                                char *out, size_t cap) {
     const char *keydir = (cc->key_dir && cc->key_dir[0]) ? cc->key_dir : "/etc/packetsonded/keys";
     struct ps_keypair kp;
     if (ps_keystore_load(keydir, "agent", &kp) != 0) return -1;
@@ -47,11 +47,10 @@ int ps_report_events(const struct ps_central_config *cc, const char *base_url,
     const char *agent_id = (cc->agent_id && cc->agent_id[0]) ? cc->agent_id
                           : (gethostname(host, sizeof host) == 0 ? host : "unknown");
 
-    /* Assemble {"envelopes":[ {…}, … ]}. payload is embedded as an escaped string
-     * via ps_json so we get correct JSON-string quoting around the signed bytes. */
-    static char body[262144];   /* 256 KiB batch cap */
-    size_t bo = 0;
-    bo += (size_t)snprintf(body + bo, sizeof body - bo, "{\"envelopes\":[");
+    /* "[ {…}, … ]" — each envelope's payload embedded as an escaped string via
+     * ps_json so the signed bytes are correctly quoted. */
+    size_t o = 0;
+    o += (size_t)snprintf(out + o, cap - o, "[");
     for (size_t i = 0; i < n; i++) {
         char ts[40];
         if (ps_reporter_extract_ts(event_jsons[i], ts, sizeof ts) != 0)
@@ -73,10 +72,22 @@ int ps_report_events(const struct ps_central_config *cc, const char *base_url,
         ps_json_object_end(&j);
         if (ps_json_finish(&j) < 0) return -1;
 
-        bo += (size_t)snprintf(body + bo, sizeof body - bo, "%s%s", i ? "," : "", env);
-        if (bo >= sizeof body - 64) break;  /* batch full; caller can chunk */
+        o += (size_t)snprintf(out + o, cap - o, "%s%s", i ? "," : "", env);
+        if (o >= cap - 64) break;  /* batch full; caller can chunk */
     }
-    bo += (size_t)snprintf(body + bo, sizeof body - bo, "]}");
+    o += (size_t)snprintf(out + o, cap - o, "]");
+    return (int)o;
+}
+
+int ps_report_events(const struct ps_central_config *cc, const char *base_url,
+                     const char **event_jsons, size_t n, struct ps_report_result *out) {
+    if (!cc || !cc->url || !cc->url[0]) return -1;
+    static char arr[262144];
+    int alen = ps_reporter_build_envelopes(cc, event_jsons, n, arr, sizeof arr);
+    if (alen < 0) return -1;
+    static char body[262208];
+    int bn = snprintf(body, sizeof body, "{\"envelopes\":%s}", arr);
+    if (bn < 0 || (size_t)bn >= sizeof body) return -1;
 
     char url[640];
     snprintf(url, sizeof url, "%s/api/v1/packetsonde/events",

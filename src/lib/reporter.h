@@ -17,6 +17,12 @@ int ps_report_findings(const struct ps_central_config *cc, const char *base_url,
                        const struct ps_finding *findings, size_t n,
                        struct ps_report_result *out);
 
+/* Build the signed envelope array "[<env>,…]" (no outer key) for the events.
+ * Returns bytes written, or -1. Shared by the direct POST and the relay path. */
+int ps_reporter_build_envelopes(const struct ps_central_config *cc,
+                                const char **event_jsons, size_t n,
+                                char *out, size_t cap);
+
 /* Exposed for unit tests. */
 int ps_reporter_build_payload(char *buf, size_t cap, const char *agent_id,
                               const char *ts, const char *event_json);
