@@ -17,6 +17,9 @@ void ps_json_init(struct ps_json *j, char *buf, size_t cap);
 
 void ps_json_object_begin(struct ps_json *j);
 void ps_json_object_end(struct ps_json *j);
+/* Begin a nested object as the value of `key`: emits `"key":{`. Close with
+ * ps_json_object_end. (object_begin alone emits `{` for root / array elements.) */
+void ps_json_key_object_begin(struct ps_json *j, const char *key);
 void ps_json_array_begin(struct ps_json *j, const char *key);
 void ps_json_array_end(struct ps_json *j);
 

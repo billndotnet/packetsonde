@@ -131,44 +131,43 @@ struct ps_host_entry *ps_host_table_update(struct ps_host_table *ht,
     return entry;
 }
 
-int ps_host_entry_to_json(const struct ps_host_entry *entry, char *buf, size_t bufsz)
+/* Emit an entry's key/value fields onto j (no braces; caller wraps in an object). */
+static void ps_host_entry_emit(struct ps_json *j, const struct ps_host_entry *entry)
 {
-    struct ps_json j;
-    ps_json_init(&j, buf, bufsz);
-    ps_json_object_begin(&j);
-
-    /* MAC address as hex string */
     if (entry->has_mac) {
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
                  entry->mac[0], entry->mac[1], entry->mac[2],
                  entry->mac[3], entry->mac[4], entry->mac[5]);
-        ps_json_key_string(&j, "mac", mac_str);
+        ps_json_key_string(j, "mac", mac_str);
     } else {
-        ps_json_key_null(&j, "mac");
+        ps_json_key_null(j, "mac");
     }
 
-    /* IPs array */
-    ps_json_array_begin(&j, "ips");
-    for (int i = 0; i < entry->ip_count; i++) {
-        ps_json_array_string(&j, entry->ips[i]);
-    }
-    ps_json_array_end(&j);
+    ps_json_array_begin(j, "ips");
+    for (int i = 0; i < entry->ip_count; i++)
+        ps_json_array_string(j, entry->ips[i]);
+    ps_json_array_end(j);
 
-    ps_json_key_string(&j, "hostname",    entry->hostname[0]    ? entry->hostname    : "");
-    ps_json_key_string(&j, "device_type", entry->device_type[0] ? entry->device_type : "");
+    ps_json_key_string(j, "hostname",    entry->hostname[0]    ? entry->hostname    : "");
+    ps_json_key_string(j, "device_type", entry->device_type[0] ? entry->device_type : "");
 
-    /* Sources array */
-    ps_json_array_begin(&j, "sources");
-    for (int i = 0; i < entry->source_count; i++) {
-        ps_json_array_string(&j, entry->sources[i]);
-    }
-    ps_json_array_end(&j);
+    ps_json_array_begin(j, "sources");
+    for (int i = 0; i < entry->source_count; i++)
+        ps_json_array_string(j, entry->sources[i]);
+    ps_json_array_end(j);
 
-    ps_json_key_int(&j, "first_seen_usec", (int64_t)entry->first_seen_usec);
-    ps_json_key_int(&j, "last_seen_usec",  (int64_t)entry->last_seen_usec);
-    ps_json_key_int(&j, "event_count",     entry->event_count);
+    ps_json_key_int(j, "first_seen_usec", (int64_t)entry->first_seen_usec);
+    ps_json_key_int(j, "last_seen_usec",  (int64_t)entry->last_seen_usec);
+    ps_json_key_int(j, "event_count",     entry->event_count);
+}
 
+int ps_host_entry_to_json(const struct ps_host_entry *entry, char *buf, size_t bufsz)
+{
+    struct ps_json j;
+    ps_json_init(&j, buf, bufsz);
+    ps_json_object_begin(&j);
+    ps_host_entry_emit(&j, entry);
     ps_json_object_end(&j);
     return ps_json_finish(&j);
 }
@@ -183,29 +182,10 @@ int ps_host_table_to_json(const struct ps_host_table *ht, char *buf, size_t bufs
     ps_json_array_begin(&j, "hosts");
     for (int i = 0; i < PS_MAX_HOSTS; i++) {
         if (!ht->entries[i].valid) continue;
-
-        /* Inline the entry object into the array */
-        const struct ps_host_entry *e = &ht->entries[i];
-
-        /* We need to nest an object inside the array — use raw approach:
-         * open a nested object by emitting the comma + '{' via array_string
-         * trick won't work. Use a temp buffer and splice. */
-        char tmp[2048];
-        int tlen = ps_host_entry_to_json(e, tmp, sizeof(tmp));
-        if (tlen <= 0) continue;
-
-        /* Emit array element separator and raw object */
-        if (j.needs_comma && j.len < j.cap - 1) {
-            j.buf[j.len++] = ',';
-        }
-        size_t remaining = j.cap - j.len;
-        size_t copy = (size_t)tlen < remaining ? (size_t)tlen : remaining - 1;
-        if (copy > 0) {
-            memcpy(j.buf + j.len, tmp, copy);
-            j.len += copy;
-            if (j.len < j.cap) j.buf[j.len] = '\0';
-        }
-        j.needs_comma = 1;
+        /* object_begin handles the inter-element comma; no temp buffer / splice. */
+        ps_json_object_begin(&j);
+        ps_host_entry_emit(&j, &ht->entries[i]);
+        ps_json_object_end(&j);
     }
     ps_json_array_end(&j);
 
