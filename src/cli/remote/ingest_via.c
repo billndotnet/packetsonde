@@ -18,7 +18,11 @@ int ps_ingest_via(const char *relay_agent, const char *envelopes_array,
     if (fn > 0 && (size_t)fn < sizeof frame &&
         ps_ap_write_frame(&io, frame, (size_t)fn) == PS_AP_OK) {
         uint8_t buf[8192]; size_t blen = 0;
-        if (ps_ap_read_frame(&io, buf, sizeof buf, &blen) == PS_AP_OK) {
+        /* Read frames until the ack, skipping the terminal's hello. */
+        while (ps_ap_read_frame(&io, buf, sizeof buf, &blen) == PS_AP_OK) {
+            char type[32];
+            if (ps_ap_frame_type(buf, blen, type, sizeof type) == 0 &&
+                strcmp(type, "hello") == 0) continue;
             size_t z = blen < sizeof buf ? blen : sizeof buf - 1;
             buf[z] = 0;
             if (out) {
@@ -27,6 +31,7 @@ int ps_ingest_via(const char *relay_agent, const char *envelopes_array,
                 out->http_status = 200;
             }
             rc = 0;
+            break;
         }
     }
     ps_at_close(ssl);
