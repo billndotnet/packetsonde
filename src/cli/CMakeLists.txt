@@ -11,6 +11,7 @@ set(CLI_SOURCES
     verbs/report.c
     verbs/key.c
     verbs/register.c
+    verbs/report_central.c
     ../agent/src/config.c
     remote/audit_via.c
     audit_loader.c
