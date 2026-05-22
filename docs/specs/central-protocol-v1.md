@@ -132,8 +132,15 @@ Per-envelope `outcome` values:
 | `rejected_unknown_agent` | `origin_agent_id` not in the registry |
 | `rejected_not_validated` | origin agent is `pending` (operator hasn't validated it) |
 | `rejected_bad_sig` | signature does not verify over `payload`, or inner≠outer origin |
+| `rejected_stale` | `payload.ts` is older than the replay window (see below) |
 
 Dedup: the stored doc id is derived from `ed25519_sig`, so redelivery is idempotent.
+
+**Replay window.** Sig-dedup is the primary anti-replay; in addition, central rejects
+(`rejected_stale`) any envelope whose `ts` is older than an admin-adjustable window
+(`ps_settings.replay_window_days`, default 7, `0` disables). Normal clock skew
+(minutes–hours) still ingests and is drift-flagged — only ancient-capture replays past
+the dedup horizon are cut.
 
 ---
 
