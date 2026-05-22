@@ -49,6 +49,7 @@ void ps_json_init(struct ps_json *j, char *buf, size_t cap)
 
 void ps_json_object_begin(struct ps_json *j)  { maybe_comma(j); emit_str(j, "{"); j->needs_comma = 0; j->depth++; }
 void ps_json_object_end(struct ps_json *j)    { emit_str(j, "}"); j->depth--; j->needs_comma = 1; }
+void ps_json_key_object_begin(struct ps_json *j, const char *key) { maybe_comma(j); emit_quoted(j, key); emit_str(j, ":{"); j->needs_comma = 0; j->depth++; }
 void ps_json_array_begin(struct ps_json *j, const char *key) { maybe_comma(j); emit_quoted(j, key); emit_str(j, ":["); j->needs_comma = 0; }
 void ps_json_array_end(struct ps_json *j)     { emit_str(j, "]"); j->needs_comma = 1; }
 
