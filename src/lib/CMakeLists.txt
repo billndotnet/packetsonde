@@ -15,6 +15,7 @@ add_library(packetsonde_lib STATIC
     reporter.c
     relay_attest.c
     json_extract.c
+    collect.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -35,6 +36,10 @@ if(BUILD_TESTING)
     add_executable(test_json_extract tests/test_json_extract.c)
     target_link_libraries(test_json_extract PRIVATE packetsonde_lib)
     add_test(NAME test_json_extract COMMAND test_json_extract)
+
+    add_executable(test_collect tests/test_collect.c)
+    target_link_libraries(test_collect PRIVATE packetsonde_lib)
+    add_test(NAME test_collect COMMAND test_collect)
 
     add_executable(test_finding tests/test_finding.c)
     target_link_libraries(test_finding PRIVATE packetsonde_lib)
