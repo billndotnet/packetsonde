@@ -27,6 +27,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_ulid PRIVATE packetsonde_lib)
     add_test(NAME test_ulid COMMAND test_ulid)
 
+    add_executable(test_json tests/test_json.c)
+    target_link_libraries(test_json PRIVATE packetsonde_lib)
+    add_test(NAME test_json COMMAND test_json)
+
     add_executable(test_finding tests/test_finding.c)
     target_link_libraries(test_finding PRIVATE packetsonde_lib)
     add_test(NAME test_finding COMMAND test_finding)
