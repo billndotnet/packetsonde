@@ -33,8 +33,26 @@ static void test_payload_signs_and_verifies(void) {
     EVP_MD_CTX_free(m); EVP_PKEY_free(pub);
 }
 
+#include <stdlib.h>
+static void test_build_envelopes(void) {
+    struct ps_keypair kp; ps_keystore_generate(&kp);
+    char dir[] = "/tmp/ps_env_XXXXXX"; assert(mkdtemp(dir));
+    assert(ps_keystore_save(dir, "agent", &kp) == 0);
+    struct ps_central_config cc; memset(&cc, 0, sizeof cc);
+    cc.url = "http://x"; cc.agent_id = "edge-07"; cc.verify = 0; cc.key_dir = dir;
+    const char *events[] = { "{\"v\":1,\"kind\":\"tls\"}" };
+    char buf[8192];
+    int n = ps_reporter_build_envelopes(&cc, events, 1, buf, sizeof buf);
+    assert(n > 0);
+    assert(buf[0] == '[');
+    assert(strstr(buf, "\"origin_agent_id\":\"edge-07\""));
+    assert(strstr(buf, "\"payload\":\""));
+    assert(strstr(buf, "\"ed25519_sig\":\""));
+}
+
 int main(void) {
     test_extract_ts(); test_build_payload(); test_payload_signs_and_verifies();
+    test_build_envelopes();
     printf("test_reporter: OK\n");
     return 0;
 }

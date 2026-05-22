@@ -46,6 +46,8 @@
 #define PS_AP_MSG_LOG     "log"
 #define PS_AP_MSG_ERROR   "error"
 #define PS_AP_MSG_BYE     "bye"
+#define PS_AP_MSG_INGEST  "ingest"
+#define PS_AP_MSG_ACK     "ack"
 
 /* Frame I/O errors. */
 enum {

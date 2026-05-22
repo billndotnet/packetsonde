@@ -57,3 +57,12 @@ deployment_mode = "host"        # host | proxy | trunk | bridge
 verify          = "1"           # 0 to skip TLS verify (dev / self-signed)
 ca_cert         = ""            # optional internal CA pin
 checkin_seconds = "60"
+report_mode     = "direct"      # "relay" -> forward events through relay_via instead of POSTing central
+relay_via       = ""            # edge: relay agent name when report_mode = "relay"
+
+# ---- relay role ------------------------------------------------------
+# A relay accepts ingest frames from edge agents over the mTLS channel,
+# appends a signed chain-of-custody attestation, and forwards to central.
+[relay]
+role          = "0"             # "1" on a relay-capable agent
+allow_sources = ""              # comma-separated agent_ids/fingerprints this relay forwards for

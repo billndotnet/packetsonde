@@ -42,6 +42,12 @@ static const struct mapping MAPPINGS[] = {
     { "central", "verify",          "PS_CENTRAL_VERIFY" },
     { "central", "ca_cert",         "PS_CENTRAL_CA_CERT" },
     { "central", "checkin_seconds", "PS_CENTRAL_CHECKIN_SECONDS" },
+    { "central", "report_mode",     "PS_CENTRAL_REPORT_MODE" },
+    { "central", "relay_via",       "PS_CENTRAL_RELAY_VIA" },
+
+    /* relay role (this agent forwards others' envelopes to central) */
+    { "relay", "role",          "PS_RELAY_ROLE" },
+    { "relay", "allow_sources", "PS_RELAY_ALLOW_SOURCES" },
 
     { NULL, NULL, NULL }
 };
