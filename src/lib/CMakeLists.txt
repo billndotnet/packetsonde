@@ -12,6 +12,7 @@ add_library(packetsonde_lib STATIC
     agent_transport.c
     http_client.c
     registration.c
+    reporter.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -48,6 +49,10 @@ if(BUILD_TESTING)
     add_executable(test_keystore_sign tests/test_keystore_sign.c)
     target_link_libraries(test_keystore_sign PRIVATE packetsonde_lib)
     add_test(NAME test_keystore_sign COMMAND test_keystore_sign)
+
+    add_executable(test_reporter tests/test_reporter.c)
+    target_link_libraries(test_reporter PRIVATE packetsonde_lib)
+    add_test(NAME test_reporter COMMAND test_reporter)
 
     add_executable(test_agent_proto tests/test_agent_proto.c)
     target_link_libraries(test_agent_proto PRIVATE packetsonde_lib)
