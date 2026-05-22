@@ -107,3 +107,19 @@ int ps_keystore_default_dir(char *out, size_t outsz) {
     if (!home) home = "/tmp";
     return snprintf(out, outsz, "%s/.config/packetsonde/keys", home) < (int)outsz ? 0 : -1;
 }
+
+int ps_keystore_sign(const struct ps_keypair *kp, const uint8_t *msg,
+                     size_t msg_len, uint8_t sig64[64]) {
+    EVP_PKEY *pk = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                                                kp->seckey, PS_KEYSTORE_SECKEY_SIZE);
+    if (!pk) return -1;
+    EVP_MD_CTX *m = EVP_MD_CTX_new();
+    size_t sl = 64;
+    int ok = m
+        && EVP_DigestSignInit(m, NULL, NULL, NULL, pk) == 1
+        && EVP_DigestSign(m, sig64, &sl, msg, msg_len) == 1
+        && sl == 64;
+    if (m) EVP_MD_CTX_free(m);
+    EVP_PKEY_free(pk);
+    return ok ? 0 : -1;
+}
