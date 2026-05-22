@@ -14,4 +14,10 @@ int ps_http_parse_response(const char *raw, size_t len, int *status_out,
 int ps_http_request(const char *method, const char *url, const char *body,
                     const struct ps_http_opts *opts, int *status_out,
                     char *resp_buf, size_t resp_cap);
+
+/* Same, with an extra request header block (e.g. "X-Foo: bar\r\n"). */
+int ps_http_request_h(const char *method, const char *url, const char *body,
+                      const char *extra_headers,
+                      const struct ps_http_opts *opts, int *status_out,
+                      char *resp_buf, size_t resp_cap);
 #endif
