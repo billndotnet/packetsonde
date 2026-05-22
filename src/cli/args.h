@@ -22,6 +22,7 @@ struct ps_args {
     const char *socket_path;  /* --socket path (override), or NULL */
     bool no_color;
     bool auto_append;
+    bool report;              /* --report: send audit findings to central /events */
     int concurrency;          /* --concurrency, 0 = default */
     int rate_pps;             /* --rate, 0 = default */
     const char *fail_on;      /* --fail-on expression, or NULL */

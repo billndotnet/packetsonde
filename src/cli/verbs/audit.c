@@ -5,6 +5,10 @@
 #include "../util/fail_on.h"
 #include "audit_module.h"
 #include "finding.h"
+#include "config.h"
+#include "central_config.h"
+#include "reporter.h"
+#include "../cli_config_util.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -75,8 +79,44 @@ static const struct ps_audit_module *(*const BUILTIN_MODULES[])(void) = {
 static struct ps_output *g_run_out;
 static atomic_int        g_run_cancel;
 
+/* When --report is set, audit findings are also collected here and POSTed to
+ * central /events after the run completes (local audit path only). */
+#define PS_REPORT_BUF_MAX 256
+static struct ps_finding g_report_buf[PS_REPORT_BUF_MAX];
+static size_t g_report_n = 0;
+static int g_report_enabled = 0;
+
 static void api_emit(struct ps_finding *f) {
     if (g_run_out) ps_output_emit(g_run_out, f);
+    if (g_report_enabled && g_report_n < PS_REPORT_BUF_MAX) g_report_buf[g_report_n++] = *f;
+}
+
+/* Build [central] config from packetsonded.toml and POST the collected findings. */
+static void report_collected_findings(void) {
+    if (g_report_n == 0) { fprintf(stderr, "report: no findings to report\n"); return; }
+    struct ps_config cfg;
+    if (ps_config_parse_file(&cfg, "/etc/packetsonded/packetsonded.toml") != 0) {
+        fprintf(stderr, "report: cannot read /etc/packetsonded/packetsonded.toml\n");
+        return;
+    }
+    char ub_url[512], ub_id[256], ub_ca[512], ub_kd[512];
+    struct ps_central_config cc;
+    cc.url = ps_cli_unq(ps_config_get(&cfg, "central", "url"), ub_url, sizeof ub_url);
+    cc.agent_id = ps_cli_unq(ps_config_get(&cfg, "central", "agent_id"), ub_id, sizeof ub_id);
+    cc.deployment_mode = NULL;
+    const char *v = ps_config_get(&cfg, "central", "verify");
+    cc.verify = (v && strstr(v, "0")) ? 0 : 1;
+    cc.ca_cert = ps_cli_unq(ps_config_get(&cfg, "central", "ca_cert"), ub_ca, sizeof ub_ca);
+    cc.checkin_seconds = 60;
+    cc.key_dir = ps_cli_unq(ps_config_get(&cfg, "keys", "dir"), ub_kd, sizeof ub_kd);
+
+    struct ps_report_result rr = {0};
+    if (ps_report_findings(&cc, NULL, g_report_buf, g_report_n, &rr) == 0)
+        fprintf(stderr, "reported to central: accepted %d / rejected %d of %d\n",
+                rr.accepted, rr.rejected, rr.total);
+    else
+        fprintf(stderr, "report to central failed (unreachable / not configured)\n");
+    ps_config_free(&cfg);
 }
 static int api_cancelled(void) {
     return atomic_load(&g_run_cancel);
@@ -178,11 +218,15 @@ int ps_verb_audit_run(int argc, char **argv, const struct ps_args *opts) {
     ps_output_init(&out, &oopts);
     g_run_out = &out;
     atomic_store(&g_run_cancel, 0);
+    g_report_enabled = opts->report ? 1 : 0;
+    g_report_n = 0;
 
     int rc = m->run(argc - 1, argv + 1, opts, &API);
 
     ps_output_snapshot(&out, &g_last_run_counts);
     g_run_out = NULL;
     ps_output_close(&out);
+    if (opts->report) report_collected_findings();
+    g_report_enabled = 0;
     return rc;
 }
