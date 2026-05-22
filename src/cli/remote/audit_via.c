@@ -362,101 +362,96 @@ static int knock_for_session(const struct ps_keypair *kp, const char *pin,
     return -1;
 }
 
-int ps_audit_via_run(int argc, char **argv,
-                     const struct ps_args *opts,
-                     struct ps_output *out) {
-    /* Resolve the agent. */
+/* Connect to a registered via-agent over mTLS + exchange the client hello.
+ * Returns 0 with *ctx_out/*ssl_out/*io_out owned by the caller, or -1 (cleans up). */
+int ps_via_connect(const char *agent_name, struct ps_at_ctx *ctx_out,
+                   SSL **ssl_out, struct ps_ap_io *io_out) {
     struct ps_agents A;
     if (ps_agents_load(&A, ps_agents_default_path()) != 0 || A.count == 0) {
         fprintf(stderr, "--via: no agents registered (see 'packetsonde config show')\n");
-        return 1;
+        return -1;
     }
-    const struct ps_agent *ag = ps_agents_find(&A, opts->via);
+    const struct ps_agent *ag = ps_agents_find(&A, agent_name);
     if (!ag) {
-        fprintf(stderr, "--via: unknown agent '%s'\n", opts->via);
-        ps_agents_destroy(&A);
-        return 1;
+        fprintf(stderr, "--via: unknown agent '%s'\n", agent_name);
+        ps_agents_destroy(&A); return -1;
     }
     char host[256] = ""; uint16_t port = 0;
     if (!ag->knock) {
         if (split_addr(ag->address, host, sizeof(host), &port) != 0) {
-            fprintf(stderr, "--via: agent '%s' has bad address '%s'\n",
-                    ag->name, ag->address);
-            ps_agents_destroy(&A);
-            return 1;
+            fprintf(stderr, "--via: agent '%s' has bad address '%s'\n", ag->name, ag->address);
+            ps_agents_destroy(&A); return -1;
         }
     }
     if (!ag->key_fingerprint[0]) {
-        fprintf(stderr, "--via: agent '%s' has no key_fingerprint in registry\n",
-                ag->name);
-        ps_agents_destroy(&A);
-        return 1;
+        fprintf(stderr, "--via: agent '%s' has no key_fingerprint in registry\n", ag->name);
+        ps_agents_destroy(&A); return -1;
     }
-    /* Strip optional sha256: prefix from the pin -- agents.toml may use
-     * either form. */
     const char *pin = ag->key_fingerprint;
     if (strncmp(pin, "sha256:", 7) == 0) pin += 7;
 
-    /* Load our CLI key. */
     char kdir[1024];
-    if (ps_keystore_default_dir(kdir, sizeof(kdir)) != 0) {
-        ps_agents_destroy(&A); return 1;
-    }
+    if (ps_keystore_default_dir(kdir, sizeof(kdir)) != 0) { ps_agents_destroy(&A); return -1; }
     struct ps_keypair kp;
     if (ps_keystore_load(kdir, "default", &kp) != 0) {
         fprintf(stderr, "--via: no CLI key 'default' in %s\n"
                         "  (run: packetsonde key generate)\n", kdir);
-        ps_agents_destroy(&A); return 1;
+        ps_agents_destroy(&A); return -1;
     }
     int has_sec = 0;
     for (size_t i = 0; i < PS_KEYSTORE_SECKEY_SIZE; i++)
         if (kp.seckey[i]) { has_sec = 1; break; }
     if (!has_sec) {
         fprintf(stderr, "--via: CLI key is pubkey-only\n");
-        ps_agents_destroy(&A); return 1;
+        ps_agents_destroy(&A); return -1;
     }
 
-    /* Knock-mode: replace (host, port) with the ephemeral session window
-     * advertised by the agent in its discovery reply. */
     if (ag->knock) {
         const char *bcast = ag->broadcast[0] ? ag->broadcast : "255.255.255.255";
         if (knock_for_session(&kp, pin, bcast, host, sizeof(host), &port) != 0) {
-            fprintf(stderr, "--via: knock failed (no reply from authorized agent on %s)\n",
-                    bcast);
-            ps_agents_destroy(&A); return 1;
+            fprintf(stderr, "--via: knock failed (no reply from authorized agent on %s)\n", bcast);
+            ps_agents_destroy(&A); return -1;
         }
     }
 
-    /* Open the mTLS channel. SIGPIPE block is opt-in now (#11) so the
-     * library can be embedded without surprise. We want it set for any
-     * --via run so a half-closed peer doesn't kill us mid-stream. */
     ps_at_block_sigpipe();
-    struct ps_at_ctx tctx;
-    if (ps_at_ctx_init(&tctx, PS_AT_CLIENT, &kp, pin) != 0) {
+    if (ps_at_ctx_init(ctx_out, PS_AT_CLIENT, &kp, pin) != 0) {
         fprintf(stderr, "--via: TLS context init failed\n");
-        ps_agents_destroy(&A); return 1;
+        ps_agents_destroy(&A); return -1;
     }
-    SSL *ssl = ps_at_connect(&tctx, host, port);
+    /* ctx_out copied the fingerprint; A (and pin) are no longer needed. */
+    char namebuf[128]; snprintf(namebuf, sizeof namebuf, "%s", ag->name);
+    ps_agents_destroy(&A);
+
+    SSL *ssl = ps_at_connect(ctx_out, host, port);
     if (!ssl) {
         fprintf(stderr, "--via: cannot connect to agent '%s' at %s:%u "
                         "(network unreachable, refused, or fingerprint mismatch)\n",
-                ag->name, host, port);
-        ps_at_ctx_destroy(&tctx); ps_agents_destroy(&A); return 1;
+                namebuf, host, port);
+        ps_at_ctx_destroy(ctx_out); return -1;
     }
-    struct ps_ap_io io; ps_at_make_io(ssl, &io);
+    ps_at_make_io(ssl, io_out);
 
-    /* Hello + audit request. */
     char self_fpr[PS_KEYSTORE_FPR_HEX_SIZE];
     ps_keystore_fingerprint(kp.pubkey, self_fpr);
     char hello[256];
     int hn = snprintf(hello, sizeof(hello),
                       "{\"type\":\"hello\",\"v\":%d,\"client_fingerprint\":\"sha256:%s\"}",
                       PS_AGENT_PROTO_VERSION, self_fpr);
-    if (hn < 0 || ps_ap_write_frame(&io, hello, (size_t)hn) != PS_AP_OK) {
+    if (hn < 0 || ps_ap_write_frame(io_out, hello, (size_t)hn) != PS_AP_OK) {
         fprintf(stderr, "--via: hello write failed\n");
-        ps_at_close(ssl); ps_at_ctx_destroy(&tctx); ps_agents_destroy(&A);
-        return 1;
+        ps_at_close(ssl); ps_at_ctx_destroy(ctx_out); return -1;
     }
+    *ssl_out = ssl;
+    return 0;
+}
+
+int ps_audit_via_run(int argc, char **argv,
+                     const struct ps_args *opts,
+                     struct ps_output *out) {
+    struct ps_at_ctx tctx; SSL *ssl = NULL; struct ps_ap_io io;
+    if (ps_via_connect(opts->via, &tctx, &ssl, &io) != 0) return 1;
+
     char req[4096];
     /* opts->via_chain[0] is the hop we just connected to; the remaining
      * hops travel in the request so the receiving agent can forward. */
@@ -467,7 +462,7 @@ int ps_audit_via_run(int argc, char **argv,
                                  next_chain, next_count);
     if (rn < 0 || ps_ap_write_frame(&io, req, (size_t)rn) != PS_AP_OK) {
         fprintf(stderr, "--via: audit request write failed\n");
-        ps_at_close(ssl); ps_at_ctx_destroy(&tctx); ps_agents_destroy(&A);
+        ps_at_close(ssl); ps_at_ctx_destroy(&tctx);
         return 1;
     }
 
@@ -484,7 +479,7 @@ int ps_audit_via_run(int argc, char **argv,
         char type[32];
         if (ps_ap_frame_type(fbuf, flen, type, sizeof(type)) != 0) continue;
         if (strcmp(type, "finding") == 0) {
-            emit_finding_passthrough(out, ag->name, fbuf, flen);
+            emit_finding_passthrough(out, opts->via, fbuf, flen);
         } else if (strcmp(type, "log") == 0) {
             /* Log lines are agent-side diagnostics; forward to stderr. */
             fwrite(fbuf, 1, flen, stderr);
@@ -502,6 +497,5 @@ int ps_audit_via_run(int argc, char **argv,
 
     ps_at_close(ssl);
     ps_at_ctx_destroy(&tctx);
-    ps_agents_destroy(&A);
     return run_rc;
 }
