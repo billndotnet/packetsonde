@@ -123,3 +123,17 @@ int ps_keystore_sign(const struct ps_keypair *kp, const uint8_t *msg,
     EVP_PKEY_free(pk);
     return ok ? 0 : -1;
 }
+
+int ps_keystore_verify(const uint8_t *pubkey32, const uint8_t *msg,
+                       size_t msg_len, const uint8_t sig64[64]) {
+    EVP_PKEY *pk = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL,
+                                               pubkey32, PS_KEYSTORE_PUBKEY_SIZE);
+    if (!pk) return 0;
+    EVP_MD_CTX *m = EVP_MD_CTX_new();
+    int ok = m
+        && EVP_DigestVerifyInit(m, NULL, NULL, NULL, pk) == 1
+        && EVP_DigestVerify(m, sig64, 64, msg, msg_len) == 1;
+    if (m) EVP_MD_CTX_free(m);
+    EVP_PKEY_free(pk);
+    return ok ? 1 : 0;
+}
