@@ -291,97 +291,24 @@ static void publish_result(ps_module_ctx_t *ctx,
     ps_json_key_string(&j, "state",   state);
 
     if (tls_version || cert_cn || san_count > 0 || alpn) {
-        /* Emit "tls": { ... } sub-object.
-         * ps_json doesn't have a key_object_begin helper, so we emit
-         * the key manually and use ps_json_object_begin for the value. */
-
-        /* Append "tls": manually — peek at current state */
-        /* We use ps_json_key_null as a placeholder then patch — instead,
-         * directly write the sub-object using ps_json_array_begin pattern.
-         * The cleanest approach: emit key + begin object inline.           */
-
-        /* ps_json_array_begin writes `"key":[` — we need `"key":{`.
-         * Manually append by reusing the internal buffer approach.
-         * Since the API doesn't expose key_object_begin, we temporarily
-         * emit the key via key_null and then overwrite the "null" token
-         * by emitting the object open brace directly after.
-         *
-         * Actually the cleanest portable approach: use the fact that
-         * ps_json_key_string emits `"key":"value"` — we write two calls:
-         * key_string for each tls sub-field. But nesting requires object.
-         *
-         * Given the json.h API, use ps_json_array_begin which adds `"key":[`
-         * then emit an inner object manually via ps_json_object_begin —
-         * but that writes `{` not inside the array properly.
-         *
-         * Best approach: write a flat-ish structure. Actually re-reading
-         * json.h, ps_json_object_begin writes "{" (no key), and
-         * ps_json_key_string writes "\"key\":\"val\"". The nesting mechanism
-         * is depth/needs_comma tracking. We can write:
-         *   ps_json_array_begin(j, "tls")  → "tls":[
-         *   ps_json_object_begin(j)        → {   (array element)
-         *   ps_json_key_string(...)
-         *   ps_json_object_end(j)          → }
-         *   ps_json_array_end(j)           → ]
-         *
-         * But the spec shows "tls" as an object, not an array of one object.
-         * The json.h API has no key_object_begin. We'll use a separate
-         * ps_json instance to build the tls sub-object string, then splice
-         * it in as a raw key+value using snprintf on the outer buffer. */
-
-        /* Strategy: build tls object in a separate buffer, then splice */
-        char tls_buf[1024];
-        struct ps_json tj;
-        ps_json_init(&tj, tls_buf, sizeof(tls_buf));
-
-        ps_json_object_begin(&tj);
+        /* "tls": { ... } sub-object, built inline on j via key_object_begin. */
+        ps_json_key_object_begin(&j, "tls");
         if (tls_version && tls_version[0])
-            ps_json_key_string(&tj, "version",  tls_version);
+            ps_json_key_string(&j, "version", tls_version);
         if (cert_cn && cert_cn[0])
-            ps_json_key_string(&tj, "cert_cn",  cert_cn);
+            ps_json_key_string(&j, "cert_cn", cert_cn);
         if (san_count > 0) {
-            ps_json_array_begin(&tj, "cert_san");
+            ps_json_array_begin(&j, "cert_san");
             for (int i = 0; i < san_count; i++)
-                ps_json_array_string(&tj, san_list[i]);
-            ps_json_array_end(&tj);
+                ps_json_array_string(&j, san_list[i]);
+            ps_json_array_end(&j);
         }
         if (alpn && alpn[0]) {
-            ps_json_array_begin(&tj, "alpn");
-            ps_json_array_string(&tj, alpn);
-            ps_json_array_end(&tj);
+            ps_json_array_begin(&j, "alpn");
+            ps_json_array_string(&j, alpn);
+            ps_json_array_end(&j);
         }
-        ps_json_object_end(&tj);
-        ps_json_finish(&tj);
-
-        /* Splice: the outer json j currently has needs_comma potentially set.
-         * Emit the "tls" key + the tls_buf value as a raw JSON fragment.
-         * We do this by appending directly to j.buf after finishing the
-         * object manually. Instead, re-build the entire outer JSON with
-         * tls embedded as a raw string, using snprintf:                     */
-
-        /* Discard j and rebuild with snprintf for reliability */
-        ps_json_finish(&j);
-        /* Strip trailing '}' from buf — it was closed by ps_json_object_end
-         * but we haven't called object_end yet on outer j. Actually j has
-         * NOT been closed yet (we haven't called ps_json_object_end on j).
-         * So j.len points just before the closing brace.                     */
-
-        /* Just build outer manually since ps_json doesn't support nesting: */
-        ps_json_key_string(&j, "__tls_raw_marker__", "");  /* unused, discard */
-
-        /* Restart: build the whole message with snprintf */
-        size_t needed = (size_t)snprintf(buf, sizeof(buf),
-            "{\"job_id\":\"%s\",\"address\":\"%s\","
-            "\"port\":%d,\"proto\":\"tcp\",\"state\":\"%s\","
-            "\"tls\":%s}",
-            job_id, address, port, state, tls_buf);
-
-        if (needed < sizeof(buf)) {
-            ctx->publish(ctx, "probe.result", buf, (uint32_t)needed);
-        } else {
-            ps_warn("tls_probe: publish buffer overflow for job '%s'", job_id);
-        }
-        return;
+        ps_json_object_end(&j);  /* close "tls" */
     }
 
     ps_json_object_end(&j);
