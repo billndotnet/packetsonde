@@ -2,8 +2,7 @@
 #define PS_REGISTRATION_H
 #include <stddef.h>
 #include <stdint.h>
-
-struct ps_config;  /* forward decl; from config.h */
+#include "central_config.h"
 
 struct ps_reg_input {
     const char *agent_id;
@@ -21,6 +20,9 @@ int ps_sha256_file(const char *path, char *out_hex /* >= 65 */);
 int ps_reg_marker_read(const char *path, char *agent_id_out, size_t cap);
 int ps_reg_marker_write(const char *path, const char *agent_id, const char *status);
 
-enum ps_reg_result ps_register(const struct ps_config *cfg,
+/* Enroll with central using resolved settings cc (cc->url required; cc->key_dir
+ * for the keystore 'agent' identity). Idempotent via the on-disk marker unless
+ * force. */
+enum ps_reg_result ps_register(const struct ps_central_config *cc,
                                const char *provenance, int force);
 #endif
