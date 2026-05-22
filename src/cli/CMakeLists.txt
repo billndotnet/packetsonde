@@ -38,6 +38,7 @@ set(CLI_SOURCES
     audit/haproxy.c
     audit/proxmox.c
     audit/nginx.c
+    audit/opnsense.c
     audit/audit_common.c
     probe/tcp.c
     probe/icmp.c
@@ -266,7 +267,8 @@ function(ps_add_audit_plugin name)
     )
     target_link_libraries(audit-${name} PRIVATE packetsonde_lib)
     if(name STREQUAL "tls" OR name STREQUAL "http" OR name STREQUAL "elasticsearch"
-       OR name STREQUAL "proxmox" OR name STREQUAL "ssh")
+       OR name STREQUAL "proxmox" OR name STREQUAL "ssh"
+       OR name STREQUAL "opnsense")
         find_package(OpenSSL REQUIRED)
         target_link_libraries(audit-${name} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
@@ -285,6 +287,6 @@ endfunction()
 # at a higher-priority path overrides a built-in.
 foreach(_a tls dns http ssh smb telnet ftp redis ntp memcached
         elasticsearch smtp mysql postgresql ldap imap pop3 snmp rdp mssql kafka vnc
-        haproxy proxmox nginx)
+        haproxy proxmox nginx opnsense)
     ps_add_audit_plugin(${_a})
 endforeach()
