@@ -28,6 +28,16 @@ int main(void) {
     assert(EVP_DigestVerify(m2, sig, 64, (const uint8_t*)msg, strlen(msg)) != 1);
 
     EVP_MD_CTX_free(m); EVP_MD_CTX_free(m2); EVP_PKEY_free(pub);
+
+    /* ps_keystore_verify round-trip */
+    struct ps_keypair kp2; ps_keystore_generate(&kp2);
+    uint8_t sig2[64];
+    assert(ps_keystore_sign(&kp2, (const uint8_t*)"hello", 5, sig2) == 0);
+    assert(ps_keystore_verify(kp2.pubkey, (const uint8_t*)"hello", 5, sig2) == 1);
+    assert(ps_keystore_verify(kp2.pubkey, (const uint8_t*)"hellp", 5, sig2) == 0);
+    sig2[0] ^= 0xff;
+    assert(ps_keystore_verify(kp2.pubkey, (const uint8_t*)"hello", 5, sig2) == 0);
+
     printf("test_keystore_sign: OK\n");
     return 0;
 }

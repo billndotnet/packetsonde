@@ -53,4 +53,8 @@ int ps_keystore_default_dir(char *out, size_t outsz);
 int ps_keystore_sign(const struct ps_keypair *kp, const uint8_t *msg,
                      size_t msg_len, uint8_t sig64[64]);
 
+/* Verify an Ed25519 signature over msg. Returns 1 if valid, 0 otherwise. */
+int ps_keystore_verify(const uint8_t *pubkey32, const uint8_t *msg,
+                       size_t msg_len, const uint8_t sig64[64]);
+
 #endif
