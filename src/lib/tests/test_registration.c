@@ -40,5 +40,13 @@ static void test_marker(void) {
     unlink(tmp);
 }
 
+static void test_register_disabled_when_no_url(void) {
+    /* No central url -> ps_register must NOT touch the network, returns LOCAL_ERR. */
+    struct ps_central_config cc; memset(&cc, 0, sizeof cc);
+    cc.url = "";  cc.verify = 1;
+    assert(ps_register(&cc, "direct", 0) == PS_REG_LOCAL_ERR);
+}
+
 int main(void) { test_payload(); test_sha256_file(); test_marker();
+    test_register_disabled_when_no_url();
     printf("test_registration: OK\n"); return 0; }
