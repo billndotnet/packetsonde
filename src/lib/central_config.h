@@ -12,6 +12,8 @@ struct ps_central_config {
     const char *ca_cert;         /* "" -> system CAs */
     int checkin_seconds;         /* default 60 */
     const char *key_dir;         /* keystore dir for the 'agent' identity */
+    const char *report_mode;     /* "direct" (default) | "relay" */
+    const char *relay_via;       /* edge: relay agent name when report_mode=relay */
 };
 
 #include <stdlib.h>
@@ -29,6 +31,9 @@ static inline struct ps_central_config ps_central_config_from_env(void) {
     const char *ci     = getenv("PS_CENTRAL_CHECKIN_SECONDS");
     cc.checkin_seconds = (ci && ci[0]) ? atoi(ci) : 60;
     cc.key_dir         = getenv("PS_KEY_DIR");
+    cc.report_mode     = getenv("PS_CENTRAL_REPORT_MODE");
+    if (!cc.report_mode || !cc.report_mode[0]) cc.report_mode = "direct";
+    cc.relay_via       = getenv("PS_CENTRAL_RELAY_VIA");
     return cc;
 }
 
