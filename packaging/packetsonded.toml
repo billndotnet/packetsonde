@@ -46,3 +46,14 @@ packetsonde_bin  = "/usr/local/bin/packetsonde"
 collector = "127.0.0.1:2055"
 version   = "9"
 source_id = "20563"
+
+# ---- central management (rna-packetsonde) ----------------------------
+# When url is set, the agent enrolls with central on first boot and checks
+# in periodically. http:// is fine for dev; use https:// + verify in prod.
+[central]
+url             = ""            # e.g. https://central.example:8700  (empty = disabled)
+agent_id        = ""            # empty -> hostname
+deployment_mode = "host"        # host | proxy | trunk | bridge
+verify          = "1"           # 0 to skip TLS verify (dev / self-signed)
+ca_cert         = ""            # optional internal CA pin
+checkin_seconds = "60"

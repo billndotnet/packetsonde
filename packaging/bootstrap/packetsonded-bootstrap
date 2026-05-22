@@ -1,0 +1,57 @@
+#!/bin/bash
+# packetsonded-bootstrap: write the [central] config block, ensure the agent
+# identity key, and self-enroll with central. For manual / off-fleet / home-lab
+# installs (config-mgmt fleets use the rna-salt state instead).
+#
+# Usage:
+#   packetsonded-bootstrap --central URL --mode host \
+#       [--agent-id NAME] [--ca-cert FILE | --insecure] [--relay-via AGENT] \
+#       [--config /etc/packetsonded/packetsonded.toml]
+set -e
+
+CONF="/etc/packetsonded/packetsonded.toml"
+MODE="host"; AID=""; CENTRAL=""; VERIFY="1"; CA=""; RELAY=""
+PS_BIN="${PACKETSONDE_BIN:-packetsonde}"
+
+while [ $# -gt 0 ]; do case "$1" in
+  --central)   CENTRAL="$2"; shift 2 ;;
+  --mode)      MODE="$2"; shift 2 ;;
+  --agent-id)  AID="$2"; shift 2 ;;
+  --ca-cert)   CA="$2"; shift 2 ;;
+  --insecure)  VERIFY="0"; shift ;;
+  --relay-via) RELAY="$2"; shift 2 ;;   # recorded for the operator; relay wiring is a later phase
+  --config)    CONF="$2"; shift 2 ;;
+  -h|--help)   grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "unknown arg: $1" >&2; exit 2 ;;
+esac; done
+
+[ -n "$CENTRAL" ] || { echo "--central URL required" >&2; exit 2; }
+
+mkdir -p "$(dirname "$CONF")"
+[ -f "$CONF" ] || : > "$CONF"
+
+# Idempotent: drop any existing [central] block, then append a fresh one.
+awk 'BEGIN{s=0}
+     /^\[central\]/{s=1; next}
+     /^\[/{s=0}
+     s==0{print}' "$CONF" > "$CONF.tmp"
+{
+  echo "[central]"
+  echo "url             = \"$CENTRAL\""
+  echo "agent_id        = \"$AID\""
+  echo "deployment_mode = \"$MODE\""
+  echo "verify          = \"$VERIFY\""
+  echo "ca_cert         = \"$CA\""
+  echo "checkin_seconds = \"60\""
+} >> "$CONF.tmp"
+mv "$CONF.tmp" "$CONF"
+echo "wrote [central] to $CONF (mode=$MODE central=$CENTRAL${RELAY:+ relay-via=$RELAY})"
+
+# Enroll. Key generation happens inside `packetsonde register` if needed.
+"$PS_BIN" register --config "$CONF" --provenance direct || \
+  echo "note: enrollment did not complete (central unreachable?); daemon will retry on boot"
+
+echo "bootstrap complete. Enable the service:"
+echo "  Linux:   systemctl enable --now packetsonded"
+echo "  FreeBSD: service packetsonded enable && service packetsonded start"
+echo "  macOS:   launchctl load /Library/LaunchDaemons/net.billn.packetsonded.plist"

@@ -10,6 +10,9 @@
 #include "log.h"
 #include "config.h"
 #include "config_to_env.h"
+#include "central_config.h"
+#include "registration.h"
+#include "central_checkin.h"
 #include "json.h"
 #include "ipc_server.h"
 #include "module.h"
@@ -776,6 +779,17 @@ int main(int argc, char **argv)
     int env_set = ps_config_to_env(&cfg);
     if (env_set > 0) {
         ps_info("main: applied %d config keys to environment", env_set);
+    }
+
+    /* --- Central management: self-enroll on first boot + start checkin --- */
+    {
+        struct ps_central_config cc = ps_central_config_from_env();
+        if (cc.url && cc.url[0]) {
+            enum ps_reg_result r = ps_register(&cc, "direct", 0);
+            ps_info("central: enroll result=%d (0=ok 1=already 2=http 3=local)", (int)r);
+            if (ps_central_checkin_start() == 0)
+                ps_info("central: checkin loop started (%ds)", cc.checkin_seconds);
+        }
     }
 
     /* --- Configure log level from config --- */

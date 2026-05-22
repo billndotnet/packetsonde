@@ -35,6 +35,14 @@ static const struct mapping MAPPINGS[] = {
     /* keystore */
     { "keys", "dir", "PS_KEY_DIR" },
 
+    /* central management (rna-packetsonde) */
+    { "central", "url",             "PS_CENTRAL_URL" },
+    { "central", "agent_id",        "PS_CENTRAL_AGENT_ID" },
+    { "central", "deployment_mode", "PS_CENTRAL_DEPLOYMENT_MODE" },
+    { "central", "verify",          "PS_CENTRAL_VERIFY" },
+    { "central", "ca_cert",         "PS_CENTRAL_CA_CERT" },
+    { "central", "checkin_seconds", "PS_CENTRAL_CHECKIN_SECONDS" },
+
     { NULL, NULL, NULL }
 };
 

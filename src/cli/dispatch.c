@@ -13,6 +13,7 @@ int  ps_verb_discover_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_scan_run    (int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_report_run  (int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_key_run     (int argc, char **argv, const struct ps_args *opts);
+int  ps_verb_register_run(int argc, char **argv, const struct ps_args *opts);
 
 static const struct ps_verb VERBS[] = {
     { "version",  ps_verb_version_run,  "Show packetsonde version" },
@@ -25,6 +26,7 @@ static const struct ps_verb VERBS[] = {
     { "config",   ps_verb_config_run,   "Show resolved configuration" },
     { "agent",    ps_verb_agent_run,    "Control / query the local agent" },
     { "key",      ps_verb_key_run,      "Manage Ed25519 keys (generate/list/fingerprint/revoke)" },
+    { "register", ps_verb_register_run, "Enroll this host with central management" },
     { "help",     ps_verb_help_run,     "Show this help" },
     { NULL, NULL, NULL }
 };
