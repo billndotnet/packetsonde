@@ -14,4 +14,22 @@ struct ps_central_config {
     const char *key_dir;         /* keystore dir for the 'agent' identity */
 };
 
+#include <stdlib.h>
+
+/* Build from PS_CENTRAL_* / PS_KEY_DIR env (set by config_to_env, already
+ * quote-stripped). Pointers reference the process environment. */
+static inline struct ps_central_config ps_central_config_from_env(void) {
+    struct ps_central_config cc;
+    cc.url             = getenv("PS_CENTRAL_URL");
+    cc.agent_id        = getenv("PS_CENTRAL_AGENT_ID");
+    cc.deployment_mode = getenv("PS_CENTRAL_DEPLOYMENT_MODE");
+    const char *v      = getenv("PS_CENTRAL_VERIFY");
+    cc.verify          = (v && v[0] == '0') ? 0 : 1;
+    cc.ca_cert         = getenv("PS_CENTRAL_CA_CERT");
+    const char *ci     = getenv("PS_CENTRAL_CHECKIN_SECONDS");
+    cc.checkin_seconds = (ci && ci[0]) ? atoi(ci) : 60;
+    cc.key_dir         = getenv("PS_KEY_DIR");
+    return cc;
+}
+
 #endif
