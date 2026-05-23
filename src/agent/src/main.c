@@ -17,6 +17,8 @@
 #include "ipc_server.h"
 #include "module.h"
 #include "host_table.h"
+#include "obs_queue.h"
+#include "iso8601.h"
 #include "priv_client.h"
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
@@ -166,6 +168,22 @@ static int ctx_publish(ps_module_ctx_t *ctx,
     }
 
     int rc = ps_ipc_server_broadcast(&g_ipc, channel, json, json_len);
+
+    /* Phase-0: queue passive findings for continuous shipping to central.
+     * Filter to passive discovery + interface-state channels; active-probe
+     * results (probe.* / traceroute.*) are shipped via their own report path. */
+    if (strncmp(channel, "discovery.", 10) == 0 ||
+        strncmp(channel, "net.iface.", 10) == 0) {
+        char ts_iso[24];
+        if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof(ts_iso)) > 0) {
+            char event_json[PS_OBS_ITEM_MAX];
+            size_t evlen = ps_obs_build_event(event_json, sizeof(event_json),
+                                              channel, ts_iso, json, json_len);
+            if (evlen > 0)
+                ps_obs_queue_push(event_json, evlen);
+        }
+    }
+
 #ifdef HAVE_HIREDIS
     if (g_redis_br) {
         ps_redis_bridge_publish(g_redis_br, channel, json, (int)json_len);
@@ -943,6 +961,7 @@ int main(int argc, char **argv)
     /* --- Init module registry and host table --- */
     ps_module_registry_init(&g_registry);
     ps_host_table_init(&g_hosts);
+    ps_obs_queue_init();
 
     /* Register modules */
     if (ps_module_registry_add(&g_registry, &ps_icmp_traceroute_module) < 0) {
