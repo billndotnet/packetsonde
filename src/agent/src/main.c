@@ -186,6 +186,37 @@ static void ctx_log(ps_module_ctx_t *ctx, int level, const char *fmt, ...)
     ps_log((enum ps_log_level)level, "%s", buf);
 }
 
+static int ctx_close_pcap(ps_module_ctx_t *ctx, int handle)
+{
+    (void)ctx;
+    return ps_priv_client_close_pcap(&g_priv, (uint16_t)handle);
+}
+
+static int ctx_capture_add(ps_module_ctx_t *ctx, const char *iface)
+{
+    (void)ctx;
+    if (!iface || !iface[0]) return -1;
+
+    if (ps_iface_excluded(iface, getenv("PS_CAPTURE_EXCLUDE"))) {
+        ps_info("capture: not adding %s (excluded / loopback)", iface);
+        return -1;
+    }
+    /* Already captured? Idempotent no-op. */
+    for (int i = 0; i < g_capture.count; i++)
+        if (strcmp(g_capture.iface_names[i], iface) == 0)
+            return 0;
+
+    return ps_capture_open(&g_capture, (ps_open_pcap_fn)ctx_open_pcap, NULL, iface);
+}
+
+static int ctx_capture_remove(ps_module_ctx_t *ctx, const char *iface)
+{
+    (void)ctx;
+    if (!iface || !iface[0]) return -1;
+    return ps_capture_close_iface(&g_capture, iface,
+                                  (ps_close_pcap_fn)ctx_close_pcap, NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* IPC frame handler                                                    */
 /* ------------------------------------------------------------------ */
@@ -977,6 +1008,9 @@ int main(int argc, char **argv)
         ctx->send_raw          = ctx_send_raw;
         ctx->publish           = ctx_publish;
         ctx->log               = ctx_log;
+        ctx->close_pcap        = ctx_close_pcap;
+        ctx->capture_add       = ctx_capture_add;
+        ctx->capture_remove    = ctx_capture_remove;
     }
 
     /* Shared capture handle — one pcap per interface for all passive modules */

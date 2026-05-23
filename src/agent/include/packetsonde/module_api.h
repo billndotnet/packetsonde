@@ -39,6 +39,11 @@ struct ps_module_ctx {
                               uint32_t len, uint64_t ts_usec);
 
     void (*log)(ps_module_ctx_t *ctx, int level, const char *fmt, ...);
+
+    /* Capture lifecycle (wired by main to operate on the shared capture set). */
+    int  (*close_pcap)(ps_module_ctx_t *ctx, int handle);
+    int  (*capture_add)(ps_module_ctx_t *ctx, const char *iface);
+    int  (*capture_remove)(ps_module_ctx_t *ctx, const char *iface);
 };
 
 struct ps_module {
