@@ -133,7 +133,7 @@ static int broadcast_init(ps_module_ctx_t *ctx)
 	if (!st) return -1;
 
 	const char *iface = getenv("PS_CAPTURE_INTERFACE");
-	if (!iface || iface[0] == '\0') iface = "en0";
+	if (!iface) iface = "";
 	strncpy(st->iface, iface, sizeof(st->iface) - 1);
 
 	ctx->userdata = st;

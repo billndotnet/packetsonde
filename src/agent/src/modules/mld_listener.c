@@ -34,7 +34,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define MLD_DEFAULT_IFACE        "en0"
+#define MLD_DEFAULT_IFACE        ""
 #define MLD_SNAPLEN              512
 
 /* Header lengths */

@@ -25,7 +25,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define DHCP_DEFAULT_IFACE       "en0"
+#define DHCP_DEFAULT_IFACE       ""
 #define DHCP_SNAPLEN             1500
 
 /* Ethernet header */
