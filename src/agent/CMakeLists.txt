@@ -96,6 +96,7 @@ set(AGENT_CORE_SOURCES
     src/modules/ospf_listener.c
     src/modules/vrrp_listener.c
     src/modules/broadcast_listener.c
+    src/modules/iface_monitor.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
     src/modules/network_listener.c
