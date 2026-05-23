@@ -146,7 +146,7 @@ static int ctx_publish(ps_module_ctx_t *ctx,
         strncpy(source, channel, sizeof(source) - 1);
 
         if (ip[0] != '\0' || has_mac) {
-            uint64_t now = ps_platform_now_usec();
+            uint64_t now = ps_platform_wall_usec();
             ps_host_table_update(&g_hosts, ip[0] ? ip : NULL,
                                  has_mac ? mac_bytes : NULL,
                                  hostname[0] ? hostname : NULL,

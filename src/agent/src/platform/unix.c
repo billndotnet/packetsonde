@@ -13,6 +13,7 @@
 #ifdef __APPLE__
 #  include <mach/mach_time.h>
 #  include <mach-o/dyld.h>
+#  include <sys/time.h>
 #else
 #  include <time.h>
 #  include <linux/limits.h>
@@ -97,6 +98,19 @@ uint64_t ps_platform_now_usec(void)
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
+#endif
+}
+
+uint64_t ps_platform_wall_usec(void)
+{
+#ifdef __APPLE__
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 #endif
 }
