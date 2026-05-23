@@ -74,6 +74,7 @@ set(AGENT_CORE_SOURCES
     src/flow_tracker.c
     src/netflow_export.c
     src/redis_bridge.c
+    src/iface_enum.c
     src/modules/icmp_traceroute.c
     src/modules/tcp_traceroute.c
     src/modules/udp_traceroute.c
@@ -293,6 +294,12 @@ target_include_directories(test_honeypot_listener PRIVATE
 target_link_libraries(test_honeypot_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_honeypot_listener PRIVATE PS_HONEYPOT_LISTENER_TESTING=1)
 add_test(NAME test_honeypot_listener COMMAND test_honeypot_listener)
+
+# Test: interface enumeration (getifaddrs + prefix-exclude logic — no pcap or network needed)
+add_executable(test_iface_enum tests/test_iface_enum.c src/iface_enum.c)
+target_include_directories(test_iface_enum PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME test_iface_enum COMMAND test_iface_enum)
 
 include(GNUInstallDirs)
 
