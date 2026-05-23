@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int ps_central_checkin_once(long uptime_seconds) {
@@ -25,6 +26,10 @@ int ps_central_checkin_once(long uptime_seconds) {
     ps_json_key_string(&j, "config_version", "none");
     ps_json_key_string(&j, "agent_version", PS_VERSION);
     ps_json_key_string(&j, "key_rotation_status", "none");
+    {
+        const char *lm = getenv("PS_AGENT_LISTEN_MODE");
+        ps_json_key_string(&j, "listen_mode", (lm && lm[0]) ? lm : "persistent");
+    }
     ps_json_object_end(&j);
     if (ps_json_finish(&j) < 0) return -1;
 

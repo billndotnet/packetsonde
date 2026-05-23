@@ -59,6 +59,7 @@ Liveness + status. Sent periodically once registered.
 | `config_version` | string | `"none"` if unmanaged |
 | `agent_version` | string | build version |
 | `key_rotation_status` | string | `"none"` (rotation is a future contract addition) |
+| `listen_mode` | string | `"persistent"` if unset; the agent's mode (`persistent` \| `knock` \| `both`) |
 
 Response `200`: `{ "ok": true }`. Drives the collector's online/offline view.
 
