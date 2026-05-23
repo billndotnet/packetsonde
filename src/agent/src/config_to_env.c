@@ -27,6 +27,9 @@ static const struct mapping MAPPINGS[] = {
     { "agent_listen", "max_clients",     "PS_AGENT_MAX_CLIENTS" },
     { "agent_listen", "packetsonde_bin", "PS_PACKETSONDE_BIN" },
 
+    /* capture -- passive pcap interface selection */
+    { "capture", "exclude", "PS_CAPTURE_EXCLUDE" },
+
     /* netflow / IPFIX exporter */
     { "netflow", "collector", "PS_NETFLOW_COLLECTOR" },
     { "netflow", "version",   "PS_NETFLOW_VERSION" },
