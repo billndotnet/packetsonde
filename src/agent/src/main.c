@@ -21,6 +21,7 @@
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
 #include "capture/protocol_demux.h"
+#include "iface_enum.h"
 #ifdef HAVE_HIREDIS
 #include "redis_bridge.h"
 #endif
@@ -979,28 +980,33 @@ int main(int argc, char **argv)
     ps_capture_init(&g_capture);
     ps_demux_init(&g_demux);
 
-    /* Interface priority: config file > env var > platform default */
-    const char *capture_iface = ps_config_get(&cfg, "agent", "interface");
-    if (!capture_iface || capture_iface[0] == '\0')
-        capture_iface = getenv("PS_CAPTURE_INTERFACE");
-    if (!capture_iface || capture_iface[0] == '\0') {
-#ifdef __FreeBSD__
-        capture_iface = "em0";
-#elif defined(__APPLE__)
-        capture_iface = "en0";
-#else
-        capture_iface = "eth0";
-#endif
+    /* Capture targets: explicit [agent] interface (or $PS_CAPTURE_INTERFACE) pins a
+     * single iface; otherwise capture every real interface (all minus lo minus
+     * [capture] exclude). No interface names are hardcoded. */
+    char cap_ifaces[PS_CAPTURE_MAX_INTERFACES][64];
+    int  cap_n = 0;
+    const char *pin = ps_config_get(&cfg, "agent", "interface");
+    if (!pin || !pin[0]) pin = getenv("PS_CAPTURE_INTERFACE");
+    if (pin && pin[0]) {
+        snprintf(cap_ifaces[0], sizeof cap_ifaces[0], "%s", pin);
+        cap_n = 1;
+    } else {
+        cap_n = ps_iface_enumerate(getenv("PS_CAPTURE_EXCLUDE"),
+                                   cap_ifaces, PS_CAPTURE_MAX_INTERFACES);
     }
-    ps_info("main: capture interface: %s (config > $PS_CAPTURE_INTERFACE > default)",
-            capture_iface);
 
-    ps_capture_open(&g_capture,
-        (ps_open_pcap_fn)ctx_open_pcap, NULL,
-        capture_iface);
-
-    ps_info("main: shared capture on %s with filter: %s",
-            capture_iface, ps_capture_get_bpf_filter());
+    if (cap_n <= 0) {
+        ps_warn("main: no capture interfaces resolved — passive capture disabled");
+    } else {
+        for (int i = 0; i < cap_n; i++) {
+            if (ps_capture_open(&g_capture, (ps_open_pcap_fn)ctx_open_pcap, NULL,
+                                cap_ifaces[i]) != 0)
+                ps_warn("main: capture open failed for %s — continuing", cap_ifaces[i]);
+            else
+                ps_info("main: shared capture on %s", cap_ifaces[i]);
+        }
+        ps_info("main: capture BPF filter: %s", ps_capture_get_bpf_filter());
+    }
 
     /* Init all modules */
     ps_module_registry_init_all(&g_registry);

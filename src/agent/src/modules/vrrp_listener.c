@@ -178,7 +178,7 @@ static int vrrp_init(ps_module_ctx_t *ctx)
     }
 
     const char *iface = getenv("PS_CAPTURE_INTERFACE");
-    if (!iface || iface[0] == '\0') iface = "en0";
+    if (!iface) iface = "";
     snprintf(st->iface, sizeof(st->iface), "%s", iface);
 
     ctx->userdata = st;

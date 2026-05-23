@@ -25,7 +25,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define STP_DEFAULT_IFACE        "en0"
+#define STP_DEFAULT_IFACE        ""
 #define STP_SNAPLEN              128
 
 /* Ethernet header length */
