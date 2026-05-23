@@ -309,6 +309,13 @@ target_include_directories(test_iface_snapshot PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 add_test(NAME test_iface_snapshot COMMAND test_iface_snapshot)
 
+# Test: capture handle close (single-iface teardown — no pcap or network needed)
+add_executable(test_capture_close tests/test_capture_close.c src/capture/capture_handle.c)
+target_include_directories(test_capture_close PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_capture_close PRIVATE packetsonde_lib)
+add_test(NAME test_capture_close COMMAND test_capture_close)
+
 include(GNUInstallDirs)
 
 # Per-platform install layout, intended for `sudo make install` from a

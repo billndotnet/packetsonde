@@ -47,6 +47,29 @@ int ps_capture_open(struct ps_capture_handle *ch,
     return 0;
 }
 
+int ps_capture_close_iface(struct ps_capture_handle *ch, const char *iface,
+                           ps_close_pcap_fn close_fn, void *ctx)
+{
+    for (int i = 0; i < ch->count; i++) {
+        if (strcmp(ch->iface_names[i], iface) != 0) continue;
+
+        int handle = ch->handle_ids[i];
+        if (close_fn) close_fn(ctx, handle);
+
+        /* Compact the arrays: shift everything after i down by one. */
+        for (int k = i; k < ch->count - 1; k++) {
+            ch->handle_ids[k] = ch->handle_ids[k + 1];
+            strncpy(ch->iface_names[k], ch->iface_names[k + 1],
+                    sizeof(ch->iface_names[k]) - 1);
+            ch->iface_names[k][sizeof(ch->iface_names[k]) - 1] = '\0';
+        }
+        ch->count--;
+        ps_info("capture_handle: closed handle=%d on %s", handle, iface);
+        return 0;
+    }
+    return -1;
+}
+
 const char *ps_capture_get_bpf_filter(void)
 {
     return COMBINED_BPF_FILTER;
