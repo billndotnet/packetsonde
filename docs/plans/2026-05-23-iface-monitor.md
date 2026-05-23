@@ -1004,7 +1004,7 @@ Expected: 100% of tests pass, including `test_iface_snapshot`, `test_capture_clo
 
 ```bash
 cd /data/opt/repo/packetsonde
-grep -rEn '"(en0|em0|eth0|ens18|ens19|enp[0-9]|eth1)"' src/agent/src/iface_snapshot.c \
+grep -rEn '"(en0|em0|eth0|eth1|enp[0-9]|ens[0-9]|wlan[0-9])"' src/agent/src/iface_snapshot.c \
      src/agent/src/modules/iface_monitor.c && echo "FOUND HARDCODED NAME (fail)" || echo "OK: no hardcoded iface names"
 ```
 
