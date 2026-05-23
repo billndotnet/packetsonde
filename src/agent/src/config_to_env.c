@@ -30,6 +30,9 @@ static const struct mapping MAPPINGS[] = {
     /* capture -- passive pcap interface selection */
     { "capture", "exclude", "PS_CAPTURE_EXCLUDE" },
 
+    /* iface_monitor -- interface change detection poll interval (seconds) */
+    { "iface_monitor", "interval", "PS_IFACE_MONITOR_INTERVAL" },
+
     /* netflow / IPFIX exporter */
     { "netflow", "collector", "PS_NETFLOW_COLLECTOR" },
     { "netflow", "version",   "PS_NETFLOW_VERSION" },
