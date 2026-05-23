@@ -75,6 +75,7 @@ set(AGENT_CORE_SOURCES
     src/netflow_export.c
     src/redis_bridge.c
     src/iface_enum.c
+    src/iface_snapshot.c
     src/modules/icmp_traceroute.c
     src/modules/tcp_traceroute.c
     src/modules/udp_traceroute.c
@@ -95,6 +96,7 @@ set(AGENT_CORE_SOURCES
     src/modules/ospf_listener.c
     src/modules/vrrp_listener.c
     src/modules/broadcast_listener.c
+    src/modules/iface_monitor.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
     src/modules/network_listener.c
@@ -300,6 +302,19 @@ add_executable(test_iface_enum tests/test_iface_enum.c src/iface_enum.c)
 target_include_directories(test_iface_enum PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 add_test(NAME test_iface_enum COMMAND test_iface_enum)
+
+# Test: interface snapshot + pure diff (synthetic snapshots — no pcap or network needed)
+add_executable(test_iface_snapshot tests/test_iface_snapshot.c src/iface_snapshot.c)
+target_include_directories(test_iface_snapshot PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME test_iface_snapshot COMMAND test_iface_snapshot)
+
+# Test: capture handle close (single-iface teardown — no pcap or network needed)
+add_executable(test_capture_close tests/test_capture_close.c src/capture/capture_handle.c)
+target_include_directories(test_capture_close PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_capture_close PRIVATE packetsonde_lib)
+add_test(NAME test_capture_close COMMAND test_capture_close)
 
 include(GNUInstallDirs)
 
