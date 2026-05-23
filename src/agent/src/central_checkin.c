@@ -66,7 +66,7 @@ static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
 
     struct ps_report_result rr;
     memset(&rr, 0, sizeof(rr));
-    int rc = ps_report_events(cc, NULL, jsons, (size_t)n, &rr);
+    int rc = ps_report_observations(cc, NULL, jsons, (size_t)n, &rr);
     if (rc != 0)
         ps_warn("central: observation ship failed rc=%d (dropped %d)", rc, n);
     else

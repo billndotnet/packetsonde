@@ -79,8 +79,11 @@ int ps_reporter_build_envelopes(const struct ps_central_config *cc,
     return (int)o;
 }
 
-int ps_report_events(const struct ps_central_config *cc, const char *base_url,
-                     const char **event_jsons, size_t n, struct ps_report_result *out) {
+/* Shared: sign + POST a {envelopes:[…]} batch to `endpoint_path` under the host. */
+static int ps_report_to(const struct ps_central_config *cc, const char *base_url,
+                        const char *endpoint_path,
+                        const char **event_jsons, size_t n,
+                        struct ps_report_result *out) {
     if (!cc || !cc->url || !cc->url[0]) return -1;
     static char arr[262144];
     int alen = ps_reporter_build_envelopes(cc, event_jsons, n, arr, sizeof arr);
@@ -90,8 +93,8 @@ int ps_report_events(const struct ps_central_config *cc, const char *base_url,
     if (bn < 0 || (size_t)bn >= sizeof body) return -1;
 
     char url[640];
-    snprintf(url, sizeof url, "%s/api/v1/packetsonde/events",
-             (base_url && base_url[0]) ? base_url : cc->url);
+    snprintf(url, sizeof url, "%s%s",
+             (base_url && base_url[0]) ? base_url : cc->url, endpoint_path);
     struct ps_http_opts opts = { cc->verify, cc->ca_cert, 15 };
     int status = 0; char resp[8192];
     if (ps_http_request("POST", url, body, &opts, &status, resp, sizeof resp) != 0) return -1;
@@ -104,6 +107,16 @@ int ps_report_events(const struct ps_central_config *cc, const char *base_url,
         out->rejected = out->total - out->accepted;
     }
     return 0;
+}
+
+int ps_report_events(const struct ps_central_config *cc, const char *base_url,
+                     const char **event_jsons, size_t n, struct ps_report_result *out) {
+    return ps_report_to(cc, base_url, "/api/v1/packetsonde/events", event_jsons, n, out);
+}
+
+int ps_report_observations(const struct ps_central_config *cc, const char *base_url,
+                           const char **event_jsons, size_t n, struct ps_report_result *out) {
+    return ps_report_to(cc, base_url, "/api/v1/packetsonde/observations", event_jsons, n, out);
 }
 
 int ps_report_findings(const struct ps_central_config *cc, const char *base_url,
