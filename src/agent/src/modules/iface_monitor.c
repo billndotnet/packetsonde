@@ -8,7 +8,9 @@
  * Detection is poll-on-tick (no netlink / event loop). Interval is
  * PS_IFACE_MONITOR_INTERVAL seconds (default 5; 0 disables diffing).
  *
- * (Dynamic re-capture is wired in a later task; this revision only reports.)
+ * On a change it also adjusts the shared capture set via ctx->capture_add /
+ * ctx->capture_remove: added or recovered interfaces start being captured;
+ * removed or downed interfaces stop. Re-capture honors [capture] exclude.
  */
 #include "packetsonde/module_api.h"
 #include "iface_snapshot.h"
@@ -110,8 +112,29 @@ static void iface_monitor_tick(ps_module_ctx_t *ctx, uint64_t now_usec)
     int nchg = ps_iface_diff(st->prev, st->nprev, cur, ncur,
                              changes, PS_IFACE_SNAP_MAX);
 
-    for (int i = 0; i < nchg; i++)
-        emit_finding(ctx, &changes[i]);
+    for (int i = 0; i < nchg; i++) {
+        const struct ps_iface_change *c = &changes[i];
+        emit_finding(ctx, c);
+
+        switch (c->kind) {
+        case PS_IFC_ADDED:
+            if (ctx->capture_add) ctx->capture_add(ctx, c->name);
+            break;
+        case PS_IFC_STATE:
+            if (c->new_up && !c->old_up) {
+                if (ctx->capture_add) ctx->capture_add(ctx, c->name);
+            } else if (!c->new_up && c->old_up) {
+                if (ctx->capture_remove) ctx->capture_remove(ctx, c->name);
+            }
+            break;
+        case PS_IFC_REMOVED:
+            if (ctx->capture_remove) ctx->capture_remove(ctx, c->name);
+            break;
+        case PS_IFC_ADDR:
+        default:
+            break; /* address change alone doesn't change the capture set */
+        }
+    }
 
     memcpy(st->prev, cur, sizeof(cur[0]) * (size_t)ncur);
     st->nprev = ncur;
