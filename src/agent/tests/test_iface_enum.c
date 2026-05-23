@@ -7,8 +7,8 @@ int main(void) {
     assert(ps_iface_excluded("lo", NULL) == 1);
     assert(ps_iface_excluded("lo", "") == 1);
     assert(ps_iface_excluded("lo", "docker") == 1);
-    assert(ps_iface_excluded("ens18", NULL) == 0);
-    assert(ps_iface_excluded("ens18", "") == 0);
+    assert(ps_iface_excluded("enp3s0", NULL) == 0);
+    assert(ps_iface_excluded("enp3s0", "") == 0);
     assert(ps_iface_excluded("veth1a2b", "veth") == 1);
     assert(ps_iface_excluded("docker0", "docker,veth") == 1);
     assert(ps_iface_excluded("br-abc", "docker,veth") == 0);
