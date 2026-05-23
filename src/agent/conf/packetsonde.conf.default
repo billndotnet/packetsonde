@@ -16,9 +16,13 @@
 # Drop privileges to this user after startup
 # user = packetsonde
 
-# Capture interface — set to br0 for bridge deployments
-# Priority: config file > PS_CAPTURE_INTERFACE env var > platform default
-# interface = en0
+# interface: pin capture to ONE interface. If unset, the agent captures on ALL
+# real interfaces (all minus lo minus [capture] exclude). Leave unset for auto.
+# interface = "<iface-name>"
+
+[capture]
+# exclude: comma-separated interface-name prefixes to skip (e.g. "docker,veth,br-").
+# exclude = ""
 
 [modules]
 # ── Passive discovery (safe defaults) ──

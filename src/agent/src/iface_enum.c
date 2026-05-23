@@ -12,7 +12,9 @@ int ps_iface_excluded(const char *name, const char *exclude_csv) {
         while (*p == ',' || *p == ' ') p++;
         const char *start = p;
         while (*p && *p != ',') p++;
-        size_t len = (size_t)(p - start);
+        const char *end = p;
+        while (end > start && *(end - 1) == ' ') end--;
+        size_t len = (size_t)(end - start);
         if (len > 0 && strncmp(name, start, len) == 0) return 1;
     }
     return 0;

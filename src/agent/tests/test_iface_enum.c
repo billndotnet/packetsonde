@@ -14,6 +14,9 @@ int main(void) {
     assert(ps_iface_excluded("br-abc", "docker,veth") == 0);
     assert(ps_iface_excluded("br-abc", "docker,veth,br-") == 1);
     assert(ps_iface_excluded("enp3s0", "docker,veth") == 0);
+    assert(ps_iface_excluded("docker0", "docker , veth") == 1);
+    assert(ps_iface_excluded("veth9", "docker , veth") == 1);
+    assert(ps_iface_excluded("enp3s0", "docker , veth") == 0);
 
     char names[8][64];
     int n = ps_iface_enumerate(NULL, names, 8);
