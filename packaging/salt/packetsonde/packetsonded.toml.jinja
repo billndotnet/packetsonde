@@ -1,0 +1,25 @@
+{#- Rendered packetsonded config. Central settings come from pillar; agent_id
+    is the minion id. config_to_env strips the wrapping quotes at load. -#}
+[keys]
+dir = "/etc/packetsonded/keys"
+
+[central]
+url             = "{{ salt['pillar.get']('packetsonde:central_url', '') }}"
+agent_id        = "{{ grains['id'] }}"
+deployment_mode = "{{ salt['pillar.get']('packetsonde:deployment_mode', 'host') }}"
+verify          = "{{ salt['pillar.get']('packetsonde:verify', '1') }}"
+ca_cert         = "{{ salt['pillar.get']('packetsonde:ca_cert', '') }}"
+checkin_seconds = "{{ salt['pillar.get']('packetsonde:checkin_seconds', '60') }}"
+
+[agent_listen]
+mode = "{{ salt['pillar.get']('packetsonde:agent_listen_mode', 'persistent') }}"
+addr = "{{ salt['pillar.get']('packetsonde:agent_listen_addr', '0.0.0.0') }}"
+port = "{{ salt['pillar.get']('packetsonde:agent_listen_port', '8442') }}"
+key  = "agent"
+{% if salt['pillar.get']('packetsonde:discovery_enabled', '0') == '1' %}
+
+[discovery]
+enabled     = "1"
+listen_ip   = "{{ salt['pillar.get']('packetsonde:discovery_listen_ip', grains['id']) }}"
+listen_port = "{{ salt['pillar.get']('packetsonde:discovery_listen_port', '8442') }}"
+{% endif %}
