@@ -108,9 +108,11 @@ static void iface_monitor_tick(ps_module_ctx_t *ctx, uint64_t now_usec)
         return;
     }
 
-    struct ps_iface_change changes[PS_IFACE_SNAP_MAX];
+    /* Worst case is a fully-disjoint prev/cur: up to nprev REMOVED plus ncur
+     * ADDED/STATE/ADDR, so size for both walks (2 * the per-snapshot cap). */
+    struct ps_iface_change changes[2 * PS_IFACE_SNAP_MAX];
     int nchg = ps_iface_diff(st->prev, st->nprev, cur, ncur,
-                             changes, PS_IFACE_SNAP_MAX);
+                             changes, 2 * PS_IFACE_SNAP_MAX);
 
     for (int i = 0; i < nchg; i++) {
         const struct ps_iface_change *c = &changes[i];

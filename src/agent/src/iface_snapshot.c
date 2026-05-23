@@ -4,6 +4,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 
 /* FNV-1a over a byte range. */
 static uint32_t fnv1a(const unsigned char *p, unsigned long n, uint32_t h) {
@@ -41,9 +42,16 @@ int ps_iface_snapshot(struct ps_iface_snap out[], int max) {
          * never produces a false ADDR change). */
         if (ifa->ifa_addr) {
             const unsigned char *sa = (const unsigned char *)ifa->ifa_addr;
-            /* sa_family is the first field across platforms we target; hash the
-             * family plus a fixed window of the sockaddr payload. */
-            uint32_t one = fnv1a(sa, sizeof(struct sockaddr), 2166136261u);
+            /* Hash the family-correct length so the whole address is covered —
+             * sizeof(struct sockaddr) (16) would truncate an IPv6 address and
+             * miss interface-identifier changes (e.g. privacy-extension rotation). */
+            size_t salen;
+            switch (ifa->ifa_addr->sa_family) {
+            case AF_INET:  salen = sizeof(struct sockaddr_in);  break;
+            case AF_INET6: salen = sizeof(struct sockaddr_in6); break;
+            default:       salen = sizeof(struct sockaddr);     break;
+            }
+            uint32_t one = fnv1a(sa, salen, 2166136261u);
             out[idx].addr_hash ^= one;
         }
     }
