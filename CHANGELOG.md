@@ -4,6 +4,9 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added — TLS fingerprints
+- **JA4 (client) + JA4S (server)** (FoxIO 2023) emitted alongside the existing JA3 / JA3S / JA4X in `tls.metadata` evidence. JA4 surfaces real TLS version via `supported_versions`, drops GREASE, sorts ciphers and extensions for stability under Chrome-style extension shuffling, and includes signature_algorithms in original order. Pure parser on the already-captured `client_hello` / `server_hello` — no new deps, no probe behavior changes.
+
 ## [v1.6] — 2026-05-20
 
 ### Added — agent network protocol

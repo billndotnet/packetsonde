@@ -65,6 +65,13 @@ struct tls_result {
      * Useful for clustering hosts that share a cert *template* (same CA,
      * same template settings) regardless of CN / SAN content. */
     char         ja4x  [40];   /* 12+1+12+1+12+1 */
+    /* JA4  -- client TLS fingerprint (FoxIO 2023).
+     *   <q|t><ver><d|i><cc><ec><alpn>_<sha256-12 sorted ciphers>_
+     *   <sha256-12 sorted exts (no SNI/ALPN) + sigalgs in original order>
+     * JA4S -- server-side counterpart, computed from the ServerHello:
+     *   <q|t><ver><ec><alpn>_<chosen cipher 4hex>_<sha256-12 exts in order> */
+    char         ja4   [40];
+    char         ja4s  [40];
 };
 
 /* TLS handshake bytes captured via SSL_CTX_set_msg_callback. We keep the
@@ -327,6 +334,239 @@ static void ja3_from_client_hello(const uint8_t *hs, size_t hs_len,
     out[off] = '\0';
 }
 
+/* ----- JA4 / JA4S helpers ------------------------------------------------ */
+
+static int u16_cmp(const void *a, const void *b) {
+    uint16_t x = *(const uint16_t *)a, y = *(const uint16_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* Map a TLS version number to JA4's two-character version code. */
+static void ja4_ver_chars(uint16_t v, char out[3]) {
+    out[2] = '\0';
+    switch (v) {
+        case 0x0304: out[0] = '1'; out[1] = '3'; return; /* TLS 1.3 */
+        case 0x0303: out[0] = '1'; out[1] = '2'; return; /* TLS 1.2 */
+        case 0x0302: out[0] = '1'; out[1] = '1'; return; /* TLS 1.1 */
+        case 0x0301: out[0] = '1'; out[1] = '0'; return; /* TLS 1.0 */
+        case 0x0300: out[0] = 's'; out[1] = '3'; return; /* SSL 3.0 */
+        case 0x0002: out[0] = 's'; out[1] = '2'; return; /* SSL 2.0 */
+        case 0xfeff: out[0] = 'd'; out[1] = '1'; return; /* DTLS 1.0 */
+        case 0xfefd: out[0] = 'd'; out[1] = '2'; return; /* DTLS 1.2 */
+        case 0xfefc: out[0] = 'd'; out[1] = '3'; return; /* DTLS 1.3 */
+        default:     out[0] = '0'; out[1] = '0'; return;
+    }
+}
+
+/* Pick JA4's two ALPN characters from the first protocol in an ALPN extension
+ * body. Body shape: u16 list_len, then [u8 proto_len][proto bytes]+. If the
+ * first or last byte of the first protocol isn't ASCII alphanumeric, JA4
+ * substitutes the high nibble of the first byte and the low nibble of the
+ * last byte (so opaque protocols still produce a stable two-char tag). */
+static int is_alnum_byte(uint8_t c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+static void ja4_alpn_chars(const uint8_t *ext_body, size_t ext_len, char out[3]) {
+    out[0] = '0'; out[1] = '0'; out[2] = '\0';
+    if (ext_len < 3) return;
+    size_t list_len = ((size_t)ext_body[0] << 8) | ext_body[1];
+    if (list_len + 2 > ext_len || list_len < 2) return;
+    uint8_t proto_len = ext_body[2];
+    if (proto_len < 1 || (size_t)proto_len + 3 > ext_len) return;
+    const uint8_t *p = ext_body + 3;
+    uint8_t first = p[0];
+    uint8_t last  = p[proto_len - 1];
+    if (is_alnum_byte(first) && is_alnum_byte(last)) {
+        out[0] = (char)first;
+        out[1] = (char)last;
+    } else {
+        static const char H[] = "0123456789abcdef";
+        out[0] = H[(first >> 4) & 0x0f];
+        out[1] = H[last & 0x0f];
+    }
+}
+
+/* Build a comma-joined lowercase 4-hex CSV from a u16 array. */
+static size_t u16s_csv4(const uint16_t *v, size_t n, char *out, size_t outsz) {
+    size_t off = 0;
+    for (size_t i = 0; i < n; i++) {
+        int w = snprintf(out + off, outsz - off, "%s%04x", i ? "," : "", v[i]);
+        if (w < 0 || (size_t)w >= outsz - off) break;
+        off += (size_t)w;
+    }
+    out[off] = '\0';
+    return off;
+}
+
+/* Compute JA4 from a captured ClientHello. */
+static void ja4_from_client_hello(const uint8_t *hs, size_t hs_len,
+                                  char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) return;
+
+    uint16_t legacy_version = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 2 > blen) return;
+    p += sid_len;
+    uint16_t cs_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    if (p + cs_len + 1 > blen) return;
+    const uint8_t *ciphers_raw = b + p;
+    size_t ciphers_raw_n = cs_len;
+    p += cs_len;
+    uint8_t cm_len = b[p++];
+    if (p + cm_len + 2 > blen) return;
+    p += cm_len;
+    uint16_t ext_total = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    size_t ext_end = p + ext_total;
+    if (ext_end > blen) ext_end = blen;
+
+    /* Collect non-GREASE extension types in order; pluck supported_versions,
+     * signature_algorithms, ALPN, SNI presence. */
+    uint16_t exts_all[128];   size_t exts_all_n = 0;
+    uint16_t exts_hash[128];  size_t exts_hash_n = 0;  /* excludes SNI(0) + ALPN(16) */
+    uint16_t sigalgs[64];     size_t sigalgs_n  = 0;
+    int sni_present = 0;
+    char alpn_cc[3] = {'0','0',0};
+    uint16_t sv_max = 0; int sv_seen = 0;
+
+    size_t q = p;
+    while (q + 4 <= ext_end) {
+        uint16_t et = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        uint16_t el = ((uint16_t)b[q] << 8) | b[q + 1]; q += 2;
+        if (q + el > ext_end) break;
+        const uint8_t *body = b + q;
+        if (!is_grease(et)) {
+            if (exts_all_n < 128) exts_all[exts_all_n++] = et;
+            if (et != 0x0000 && et != 0x0010 && exts_hash_n < 128) {
+                exts_hash[exts_hash_n++] = et;
+            }
+            if (et == 0x0000) sni_present = 1;
+            if (et == 0x0010) ja4_alpn_chars(body, el, alpn_cc);
+            if (et == 0x002b && el >= 1) {
+                /* supported_versions in ClientHello: u8 list_len, then u16s */
+                uint8_t llen = body[0];
+                if ((size_t)llen + 1 <= el) {
+                    for (size_t i = 0; i + 1 < llen; i += 2) {
+                        uint16_t v = ((uint16_t)body[1 + i] << 8) | body[2 + i];
+                        if (is_grease(v)) continue;
+                        if (!sv_seen || v > sv_max) { sv_max = v; sv_seen = 1; }
+                    }
+                }
+            }
+            if (et == 0x000d && el >= 2) {
+                /* signature_algorithms: u16 list_len, then u16 entries */
+                size_t llen = ((size_t)body[0] << 8) | body[1];
+                if (llen + 2 > el) llen = el - 2;
+                for (size_t i = 0; i + 1 < llen && sigalgs_n < 64; i += 2) {
+                    uint16_t v = ((uint16_t)body[2 + i] << 8) | body[3 + i];
+                    if (is_grease(v)) continue;
+                    sigalgs[sigalgs_n++] = v;
+                }
+            }
+        }
+        q += el;
+    }
+
+    /* Collect non-GREASE ciphers as u16 array. */
+    uint16_t ciphers[128]; size_t ciphers_n = 0;
+    for (size_t i = 0; i + 1 < ciphers_raw_n && ciphers_n < 128; i += 2) {
+        uint16_t v = ((uint16_t)ciphers_raw[i] << 8) | ciphers_raw[i + 1];
+        if (is_grease(v)) continue;
+        ciphers[ciphers_n++] = v;
+    }
+
+    /* JA4_a: t<ver><d|i><cc 2d><ec 2d><alpn 2c>  (TCP transport — only kind
+     * the audit speaks today; QUIC would flip to 'q' here.) */
+    uint16_t real_ver = sv_seen ? sv_max : legacy_version;
+    char ver_cc[3]; ja4_ver_chars(real_ver, ver_cc);
+    size_t cc_d = ciphers_n   > 99 ? 99 : ciphers_n;
+    size_t ec_d = exts_all_n  > 99 ? 99 : exts_all_n;
+
+    char ja4_a[16];
+    snprintf(ja4_a, sizeof(ja4_a), "t%s%c%02zu%02zu%s",
+             ver_cc, sni_present ? 'd' : 'i', cc_d, ec_d, alpn_cc);
+
+    /* JA4_b: sha256-12 of sorted-ciphers CSV (4-hex lowercase). */
+    qsort(ciphers, ciphers_n, sizeof(ciphers[0]), u16_cmp);
+    char ciphers_csv[8 * 128];
+    u16s_csv4(ciphers, ciphers_n, ciphers_csv, sizeof(ciphers_csv));
+    char hb[13]; sha256_hex12(ciphers_csv, hb);
+
+    /* JA4_c: sha256-12 of "<sorted exts CSV>_<sigalgs CSV in original order>".
+     * If no sigalgs were sent, the spec joins with just "" after the '_' — we
+     * follow that and trail with the underscore. */
+    qsort(exts_hash, exts_hash_n, sizeof(exts_hash[0]), u16_cmp);
+    char exts_csv[8 * 128];
+    u16s_csv4(exts_hash, exts_hash_n, exts_csv, sizeof(exts_csv));
+    char sigs_csv[8 * 64];
+    u16s_csv4(sigalgs, sigalgs_n, sigs_csv, sizeof(sigs_csv));
+    char c_input[sizeof(exts_csv) + sizeof(sigs_csv) + 2];
+    snprintf(c_input, sizeof(c_input), "%s_%s", exts_csv, sigs_csv);
+    char hc[13]; sha256_hex12(c_input, hc);
+
+    snprintf(out, outsz, "%s_%s_%s", ja4_a, hb, hc);
+}
+
+/* Compute JA4S from a captured ServerHello. */
+static void ja4s_from_server_hello(const uint8_t *hs, size_t hs_len,
+                                   char *out, size_t outsz) {
+    out[0] = '\0';
+    size_t blen = 0;
+    const uint8_t *b = hs_body(hs, hs_len, &blen);
+    if (!b || blen < 38) return;
+
+    uint16_t legacy_version = ((uint16_t)b[0] << 8) | b[1];
+    size_t p = 2 + 32;
+    uint8_t sid_len = b[p++];
+    if (p + sid_len + 3 > blen) return;
+    p += sid_len;
+    uint16_t cipher = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+    p += 1; /* compression */
+
+    uint16_t exts[64]; size_t exts_n = 0;
+    char alpn_cc[3] = {'0','0',0};
+    uint16_t sv = 0; int sv_seen = 0;
+
+    if (p + 2 <= blen) {
+        uint16_t ext_len = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+        size_t end = p + ext_len;
+        if (end > blen) end = blen;
+        while (p + 4 <= end) {
+            uint16_t et = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+            uint16_t el = ((uint16_t)b[p] << 8) | b[p + 1]; p += 2;
+            if (p + el > end) break;
+            const uint8_t *body = b + p;
+            if (!is_grease(et)) {
+                if (exts_n < 64) exts[exts_n++] = et;
+                if (et == 0x0010) ja4_alpn_chars(body, el, alpn_cc);
+                if (et == 0x002b && el >= 2) {
+                    /* In ServerHello, supported_versions is a single u16. */
+                    sv = ((uint16_t)body[0] << 8) | body[1];
+                    sv_seen = 1;
+                }
+            }
+            p += el;
+        }
+    }
+
+    uint16_t real_ver = sv_seen ? sv : legacy_version;
+    char ver_cc[3]; ja4_ver_chars(real_ver, ver_cc);
+    size_t ec_d = exts_n > 99 ? 99 : exts_n;
+
+    char ja4s_a[12];
+    snprintf(ja4s_a, sizeof(ja4s_a), "t%s%02zu%s", ver_cc, ec_d, alpn_cc);
+
+    /* JA4S_c: SHA-256-12 over extensions in *original* order. */
+    char exts_csv[8 * 64];
+    u16s_csv4(exts, exts_n, exts_csv, sizeof(exts_csv));
+    char hc[13]; sha256_hex12(exts_csv, hc);
+
+    snprintf(out, outsz, "%s_%04x_%s", ja4s_a, cipher, hc);
+}
+
 static void msg_cb(int write_p, int version, int content_type,
                    const void *buf, size_t len, SSL *ssl, void *arg) {
     (void)version; (void)ssl;
@@ -381,11 +621,15 @@ static int do_handshake(const char *host, uint16_t port,
             ja3_from_client_hello(cap.client_hello, cap.client_hello_len,
                                   out->ja3_str, sizeof(out->ja3_str));
             if (out->ja3_str[0]) md5_hex(out->ja3_str, out->ja3_md5);
+            ja4_from_client_hello(cap.client_hello, cap.client_hello_len,
+                                  out->ja4, sizeof(out->ja4));
         }
         if (cap.server_hello_len) {
             ja3s_from_server_hello(cap.server_hello, cap.server_hello_len,
                                    out->ja3s_str, sizeof(out->ja3s_str));
             if (out->ja3s_str[0]) md5_hex(out->ja3s_str, out->ja3s_md5);
+            ja4s_from_server_hello(cap.server_hello, cap.server_hello_len,
+                                   out->ja4s, sizeof(out->ja4s));
         }
     }
     SSL_free(ssl);
@@ -633,11 +877,13 @@ static void check_certificate(struct emit_ctx *e, const char *target_host) {
             "\"cert_sha256\":\"%s\",\"sans\":%s,"
             "\"ja3\":\"%s\",\"ja3_str\":\"%s\","
             "\"ja3s\":\"%s\",\"ja3s_str\":\"%s\","
+            "\"ja4\":\"%s\",\"ja4s\":\"%s\","
             "\"ja4x\":\"%s\"}",
             proto_str(r.protocol_version), r.cipher,
             subj_e, issu_e, nb_e, na_e, sha256, sans,
             r.ja3_md5,  r.ja3_str,
             r.ja3s_md5, r.ja3s_str,
+            r.ja4,      r.ja4s,
             r.ja4x);
         char title[320];
         snprintf(title, sizeof(title), "%s (%s) CN=%s",

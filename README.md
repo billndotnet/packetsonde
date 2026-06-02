@@ -155,5 +155,5 @@ See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on
 
 1. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT to the agent over the v1.6 `--via` channel; agent stays a primitive-runner with zero offensive content at rest.
 2. **Multi-hop `--via`** (`CLI → bunker → trunkbox`). Single-hop landed in v1.6.
-3. **GeoIP + ASN + JA4** enrichments (JA3 / JA3S landed in v1.5).
+3. **GeoIP + ASN** enrichments (JA3 / JA3S landed in v1.5; JA4 / JA4S / JA4X now ship in `tls.metadata`).
 4. **IPv6 + UDP audit-common helpers** — the TCP path is shared; UDP and TLS/HTTP modules still hand-roll their connect blocks.
