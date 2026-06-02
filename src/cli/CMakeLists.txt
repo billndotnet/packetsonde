@@ -13,6 +13,8 @@ set(CLI_SOURCES
     verbs/register.c
     verbs/report_central.c
     verbs/collect.c
+    verbs/recipe.c
+    recipe/runner.c
     ../agent/src/config.c
     remote/audit_via.c
     remote/ingest_via.c

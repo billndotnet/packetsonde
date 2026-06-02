@@ -16,6 +16,9 @@ add_library(packetsonde_lib STATIC
     relay_attest.c
     json_extract.c
     collect.c
+    recipe_parse.c
+    recipe_verify.c
+    recipe_engine.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -80,4 +83,12 @@ if(BUILD_TESTING)
     add_executable(test_agent_transport tests/test_agent_transport.c)
     target_link_libraries(test_agent_transport PRIVATE packetsonde_lib pthread)
     add_test(NAME test_agent_transport COMMAND test_agent_transport)
+
+    add_executable(test_recipe tests/test_recipe.c)
+    target_link_libraries(test_recipe PRIVATE packetsonde_lib)
+    add_test(NAME test_recipe COMMAND test_recipe)
+
+    add_executable(test_recipe_engine tests/test_recipe_engine.c)
+    target_link_libraries(test_recipe_engine PRIVATE packetsonde_lib)
+    add_test(NAME test_recipe_engine COMMAND test_recipe_engine)
 endif()
