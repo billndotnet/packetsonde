@@ -106,6 +106,7 @@ set(AGENT_CORE_SOURCES
     src/obs_queue.c
     src/activity_ring.c
     src/proc_enrich.c
+    src/sock_snapshot.c
 )
 
 # Agent binary
@@ -346,6 +347,13 @@ target_include_directories(test_proc_enrich PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_proc_enrich PRIVATE packetsonde_lib)
 add_test(NAME test_proc_enrich COMMAND test_proc_enrich)
+
+# Test: socket snapshot (/proc/<pid>/fd inode -> /proc/net endpoints)
+add_executable(test_sock_snapshot tests/test_sock_snapshot.c src/sock_snapshot.c)
+target_include_directories(test_sock_snapshot PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_sock_snapshot PRIVATE packetsonde_lib)
+add_test(NAME test_sock_snapshot COMMAND test_sock_snapshot)
 
 include(GNUInstallDirs)
 
