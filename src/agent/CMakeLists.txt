@@ -377,6 +377,12 @@ target_include_directories(test_fan_event PRIVATE
 target_link_libraries(test_fan_event PRIVATE packetsonde_lib)
 add_test(NAME test_fan_event COMMAND test_fan_event)
 
+add_executable(test_overwatch_core tests/test_overwatch_core.c src/modules/policy_overwatch.c)
+target_include_directories(test_overwatch_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+target_link_libraries(test_overwatch_core PRIVATE packetsonde_lib)
+add_test(NAME test_overwatch_core COMMAND test_overwatch_core)
+
 include(GNUInstallDirs)
 
 # Per-platform install layout, intended for `sudo make install` from a
