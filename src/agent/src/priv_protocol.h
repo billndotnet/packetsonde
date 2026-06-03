@@ -18,6 +18,7 @@
 #define PS_OP_PACKET_DATA         0x81
 #define PS_OP_RAW_RESPONSE        0x82
 #define PS_OP_ERROR               0x83
+#define PS_OP_ACTIVITY_DATA       0x84   /* async priv -> brain: one activity record JSON */
 
 /* Status codes */
 #define PS_STATUS_OK              0x00
@@ -156,6 +157,19 @@ static inline size_t ps_priv_encode_packet_data(uint8_t *buf, size_t bufsz,
     uint8_t *p = buf + sizeof(hdr);
     memcpy(p, &ts_usec, 8); p += 8;
     memcpy(p, pkt, pkt_len);
+    return total;
+}
+
+static inline size_t ps_priv_encode_activity(uint8_t *buf, size_t bufsz,
+                                             const char *json, size_t json_len)
+{
+    size_t total = sizeof(struct ps_priv_msg) + json_len;
+    if (total > bufsz) return 0;
+    struct ps_priv_msg hdr = {0};
+    hdr.opcode = PS_OP_ACTIVITY_DATA;
+    hdr.payload_len = (uint32_t)json_len;
+    memcpy(buf, &hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), json, json_len);
     return total;
 }
 

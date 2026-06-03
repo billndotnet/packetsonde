@@ -83,6 +83,20 @@ int main(void)
     test_encode_decode_open_pcap();
     test_encode_decode_send_raw();
     test_encode_create_raw_socket_v6();
+
+    /* activity async frame encode round-trip */
+    {
+        uint8_t ab[256];
+        const char *j = "{\"v\":1}";
+        size_t an = ps_priv_encode_activity(ab, sizeof ab, j, strlen(j));
+        assert(an == sizeof(struct ps_priv_msg) + strlen(j));
+        struct ps_priv_msg ahdr;
+        memcpy(&ahdr, ab, sizeof ahdr);
+        assert(ahdr.opcode == PS_OP_ACTIVITY_DATA);
+        assert(ahdr.payload_len == strlen(j));
+        assert(memcmp(ab + sizeof ahdr, j, strlen(j)) == 0);
+    }
+
     printf("All tests passed.\n");
     return 0;
 }
