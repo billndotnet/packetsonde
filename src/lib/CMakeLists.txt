@@ -121,4 +121,8 @@ if(BUILD_TESTING)
     add_executable(test_systemd_policy tests/test_systemd_policy.c)
     target_link_libraries(test_systemd_policy PRIVATE packetsonde_lib)
     add_test(NAME test_systemd_policy COMMAND test_systemd_policy)
+
+    add_executable(test_systemd_policy_cache tests/test_systemd_policy_cache.c)
+    target_link_libraries(test_systemd_policy_cache PRIVATE packetsonde_lib)
+    add_test(NAME test_systemd_policy_cache COMMAND test_systemd_policy_cache)
 endif()
