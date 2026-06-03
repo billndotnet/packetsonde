@@ -23,8 +23,10 @@
 #endif
 
 #include "priv_protocol.h"
+#include "fan_monitor.h"
 #include "log.h"
 #include "build_config.h"
+#include <pthread.h>
 
 /* ------------------------------------------------------------------ */
 /* Slot arrays                                                          */
@@ -46,6 +48,36 @@ static struct raw_slot g_raw[PS_MAX_RAW_HANDLES];
 
 /* The socketpair fd connecting us to the brain */
 static int g_brain_fd = -1;
+
+/* Mutex that serialises all writes to g_brain_fd: both the poll-loop
+ * paths (send_response, pcap/raw data) and the fanotify thread. */
+static pthread_mutex_t g_write_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Forward declaration — defined in "Write helpers" section below. */
+static int write_all(int fd, const uint8_t *buf, size_t n);
+
+/* ------------------------------------------------------------------ */
+/* Fanotify emit callback + thread (wired when PS_DETECT_ENABLED=1)    */
+/* ------------------------------------------------------------------ */
+
+static void emit_activity(const char *json, size_t len, void *ctx)
+{
+    (void)ctx;
+    if (len > PS_MAX_MSG_PAYLOAD) return;
+    uint8_t frame[PS_MAX_MSG_PAYLOAD + 16];
+    size_t n = ps_priv_encode_activity(frame, sizeof frame, json, len);
+    if (!n) return;
+    pthread_mutex_lock(&g_write_mu);
+    write_all(g_brain_fd, frame, n);
+    pthread_mutex_unlock(&g_write_mu);
+}
+
+static void *fan_thread(void *arg)
+{
+    struct ps_fan_cfg *cfg = arg;
+    ps_fan_monitor_run(cfg, emit_activity, NULL);
+    return NULL;
+}
 
 /* ------------------------------------------------------------------ */
 /* Write helpers                                                        */
@@ -101,7 +133,10 @@ static void send_response(uint8_t opcode, uint8_t status, uint16_t handle_id,
         ps_error("priv_worker: response encode overflow");
         return;
     }
-    if (write_all(g_brain_fd, buf, n) < 0) {
+    pthread_mutex_lock(&g_write_mu);
+    int wr = write_all(g_brain_fd, buf, n);
+    pthread_mutex_unlock(&g_write_mu);
+    if (wr < 0) {
         ps_error("priv_worker: write response failed: %s", strerror(errno));
     }
 }
@@ -484,7 +519,9 @@ static void run_loop(void)
                                                            pktdata, pkthdr->caplen);
                     if (n > 0) {
                         /* Non-blocking write — drop packet if brain buffer full */
+                        pthread_mutex_lock(&g_write_mu);
                         ssize_t wr = write(g_brain_fd, pkt_buf, n);
+                        pthread_mutex_unlock(&g_write_mu);
                         (void)wr; /* EAGAIN is acceptable — packet dropped */
                     }
                 }
@@ -517,7 +554,9 @@ static void run_loop(void)
                     if (out_n > 0) {
                         (void)ts_usec;
                         /* Non-blocking write — drop if brain buffer full */
+                        pthread_mutex_lock(&g_write_mu);
                         ssize_t wr = write(g_brain_fd, pkt_buf, out_n);
+                        pthread_mutex_unlock(&g_write_mu);
                         (void)wr;
                     }
                 }
@@ -567,6 +606,20 @@ int main(int argc, char **argv)
     for (int i = 0; i < PS_MAX_RAW_HANDLES; i++) g_raw[i].fd = -1;
 
     ps_info("priv_worker: started (fd=%d)", fd);
+
+    /* Start fanotify collection thread if PS_DETECT_ENABLED is set */
+    static struct ps_fan_cfg fan_cfg;
+    const char *detect_enabled = getenv("PS_DETECT_ENABLED");
+    if (detect_enabled && atoi(detect_enabled)) {
+        const char *max_depth_str     = getenv("PS_DETECT_MAX_DEPTH");
+        const char *max_events_ps_str = getenv("PS_DETECT_MAX_EVENTS_PS");
+        fan_cfg.watch_paths   = getenv("PS_DETECT_WATCH_PATHS");
+        fan_cfg.suppress      = getenv("PS_DETECT_SUPPRESS_PATHS");
+        fan_cfg.max_depth     = max_depth_str     ? atoi(max_depth_str)     : 16;
+        fan_cfg.max_events_ps = max_events_ps_str ? atoi(max_events_ps_str) : 2000;
+        pthread_t t; pthread_create(&t, NULL, fan_thread, &fan_cfg);
+        pthread_detach(t);
+    }
 
     run_loop();
 

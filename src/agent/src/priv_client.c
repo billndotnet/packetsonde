@@ -62,7 +62,8 @@ static int send_and_recv(struct ps_priv_client *pc,
             return -1;
         }
 
-        if (hdr.opcode == PS_OP_PACKET_DATA || hdr.opcode == PS_OP_RAW_RESPONSE) {
+        if (hdr.opcode == PS_OP_PACKET_DATA || hdr.opcode == PS_OP_RAW_RESPONSE ||
+            hdr.opcode == PS_OP_ACTIVITY_DATA) {
             /* Async message — buffer it for later event loop processing */
             if (hdr.payload_len > 0) {
                 if (pc->async_count < PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE) {

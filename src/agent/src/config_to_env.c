@@ -55,6 +55,14 @@ static const struct mapping MAPPINGS[] = {
     { "relay", "role",          "PS_RELAY_ROLE" },
     { "relay", "allow_sources", "PS_RELAY_ALLOW_SOURCES" },
 
+    /* detect -- process/file/socket collection (Linux) */
+    { "detect", "enabled",        "PS_DETECT_ENABLED" },
+    { "detect", "watch_paths",    "PS_DETECT_WATCH_PATHS" },
+    { "detect", "suppress_paths", "PS_DETECT_SUPPRESS_PATHS" },
+    { "detect", "max_depth",      "PS_DETECT_MAX_DEPTH" },
+    { "detect", "max_events_ps",  "PS_DETECT_MAX_EVENTS_PS" },
+    { "detect", "sink",           "PS_DETECT_SINK" },
+
     { NULL, NULL, NULL }
 };
 

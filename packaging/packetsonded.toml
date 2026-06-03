@@ -66,3 +66,18 @@ relay_via       = ""            # edge: relay agent name when report_mode = "rel
 [relay]
 role          = "0"             # "1" on a relay-capable agent
 allow_sources = ""              # comma-separated agent_ids/fingerprints this relay forwards for
+
+# ---- detect -- process/file/socket collection (Linux) -----------------
+# Process/file/socket collection (Linux). Off by default. See
+# docs/specs/2026-06-03-process-collection-primitives-design.md
+[detect]
+enabled        = "0"
+# host baseline default; SERVICE ROLE template adds drop zones + role data dirs, e.g.
+#   watch_paths = "/etc,/home,/tmp,/dev/shm,/var/tmp,/var/www"
+watch_paths    = "/etc,/home"   # comma-separated; configurable + role-templated
+suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/prefix" allowed)
+max_depth      = "16"           # ancestry-walk cap
+max_events_ps  = "2000"         # global events/sec cap (drop + count over)
+# sink = "/var/lib/packetsonde/activity.jsonl"   # where collected records are written
+# A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
+# watch_paths) so any execve is caught — see the spec Detection-boundary section.

@@ -6,7 +6,7 @@
 #include "priv_protocol.h"
 
 #define PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE 64
-#define PS_PRIV_CLIENT_ASYNC_MSG_MAX   2048  /* Max packet from pcap/raw (> MTU) */
+#define PS_PRIV_CLIENT_ASYNC_MSG_MAX   8192  /* Max async payload: activity records (8KB) */
 
 struct ps_async_msg {
     struct ps_priv_msg hdr;

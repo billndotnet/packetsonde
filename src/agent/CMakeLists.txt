@@ -104,6 +104,10 @@ set(AGENT_CORE_SOURCES
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
     src/obs_queue.c
+    src/activity_ring.c
+    src/proc_enrich.c
+    src/sock_snapshot.c
+    src/fan_monitor.c
 )
 
 # Agent binary
@@ -118,7 +122,7 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib)
+target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-agent PRIVATE ${PCAP_INCLUDE_DIR})
@@ -138,13 +142,19 @@ endif()
 # worker target is declared just below so we install it there.)
 
 # Priv worker binary
-add_executable(packetsonde-priv src/priv_worker.c src/platform/unix.c)
+add_executable(packetsonde-priv
+    src/priv_worker.c
+    src/platform/unix.c
+    src/fan_monitor.c
+    src/proc_enrich.c
+    src/sock_snapshot.c
+)
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib)
+target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-priv PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-priv PRIVATE ${PCAP_INCLUDE_DIR})
@@ -330,6 +340,35 @@ target_include_directories(test_obs_queue PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_obs_queue PRIVATE pthread)
 add_test(NAME test_obs_queue COMMAND test_obs_queue)
+
+# Test: bounded activity ring
+add_executable(test_activity_ring tests/test_activity_ring.c src/activity_ring.c)
+target_include_directories(test_activity_ring PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_activity_ring PRIVATE pthread)
+add_test(NAME test_activity_ring COMMAND test_activity_ring)
+
+# Test: process enrichment (meta + ancestry walk)
+add_executable(test_proc_enrich tests/test_proc_enrich.c src/proc_enrich.c)
+target_include_directories(test_proc_enrich PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_proc_enrich PRIVATE packetsonde_lib)
+add_test(NAME test_proc_enrich COMMAND test_proc_enrich)
+
+# Test: socket snapshot (/proc/<pid>/fd inode -> /proc/net endpoints)
+add_executable(test_sock_snapshot tests/test_sock_snapshot.c src/sock_snapshot.c)
+target_include_directories(test_sock_snapshot PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_sock_snapshot PRIVATE packetsonde_lib)
+add_test(NAME test_sock_snapshot COMMAND test_sock_snapshot)
+
+# Test: fan_build_record (suppress-gate -> enrich -> snapshot -> json)
+add_executable(test_fan_build tests/test_fan_build.c
+    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+target_include_directories(test_fan_build PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_fan_build PRIVATE packetsonde_lib)
+add_test(NAME test_fan_build COMMAND test_fan_build)
 
 include(GNUInstallDirs)
 

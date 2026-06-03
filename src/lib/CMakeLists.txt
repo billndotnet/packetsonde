@@ -19,6 +19,10 @@ add_library(packetsonde_lib STATIC
     recipe_parse.c
     recipe_verify.c
     recipe_engine.c
+    suppress.c
+    proc_parse.c
+    sock_parse.c
+    activity_record.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -43,6 +47,10 @@ if(BUILD_TESTING)
     add_executable(test_collect tests/test_collect.c)
     target_link_libraries(test_collect PRIVATE packetsonde_lib)
     add_test(NAME test_collect COMMAND test_collect)
+
+    add_executable(test_suppress tests/test_suppress.c)
+    target_link_libraries(test_suppress PRIVATE packetsonde_lib)
+    add_test(NAME test_suppress COMMAND test_suppress)
 
     add_executable(test_finding tests/test_finding.c)
     target_link_libraries(test_finding PRIVATE packetsonde_lib)
@@ -91,4 +99,16 @@ if(BUILD_TESTING)
     add_executable(test_recipe_engine tests/test_recipe_engine.c)
     target_link_libraries(test_recipe_engine PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_engine COMMAND test_recipe_engine)
+
+    add_executable(test_proc_parse tests/test_proc_parse.c)
+    target_link_libraries(test_proc_parse PRIVATE packetsonde_lib)
+    add_test(NAME test_proc_parse COMMAND test_proc_parse)
+
+    add_executable(test_sock_parse tests/test_sock_parse.c)
+    target_link_libraries(test_sock_parse PRIVATE packetsonde_lib)
+    add_test(NAME test_sock_parse COMMAND test_sock_parse)
+
+    add_executable(test_activity_record tests/test_activity_record.c)
+    target_link_libraries(test_activity_record PRIVATE packetsonde_lib)
+    add_test(NAME test_activity_record COMMAND test_activity_record)
 endif()

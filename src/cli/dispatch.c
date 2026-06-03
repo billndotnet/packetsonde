@@ -17,6 +17,7 @@ int  ps_verb_register_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_report_central_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_collect_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_recipe_run  (int argc, char **argv, const struct ps_args *opts);
+int  ps_verb_watch_run   (int argc, char **argv, const struct ps_args *opts);
 
 static const struct ps_verb VERBS[] = {
     { "version",  ps_verb_version_run,  "Show packetsonde version" },
@@ -33,6 +34,7 @@ static const struct ps_verb VERBS[] = {
     { "report-central", ps_verb_report_central_run, "Report findings JSONL to central /events" },
     { "collect",  ps_verb_collect_run,  "Receive + present signed findings (no central)" },
     { "recipe",   ps_verb_recipe_run,   "Run / manage signed declarative audit recipes" },
+    { "watch",    ps_verb_watch_run,    "Tail process/file/socket activity records (JSONL)" },
     { "help",     ps_verb_help_run,     "Show this help" },
     { NULL, NULL, NULL }
 };
