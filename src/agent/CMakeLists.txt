@@ -122,7 +122,7 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib)
+target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-agent PRIVATE ${PCAP_INCLUDE_DIR})
@@ -142,13 +142,19 @@ endif()
 # worker target is declared just below so we install it there.)
 
 # Priv worker binary
-add_executable(packetsonde-priv src/priv_worker.c src/platform/unix.c)
+add_executable(packetsonde-priv
+    src/priv_worker.c
+    src/platform/unix.c
+    src/fan_monitor.c
+    src/proc_enrich.c
+    src/sock_snapshot.c
+)
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib)
+target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-priv PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-priv PRIVATE ${PCAP_INCLUDE_DIR})

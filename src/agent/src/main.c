@@ -18,6 +18,7 @@
 #include "module.h"
 #include "host_table.h"
 #include "obs_queue.h"
+#include "activity_ring.h"
 #include "iso8601.h"
 #include "priv_client.h"
 #include "platform/platform.h"
@@ -709,6 +710,10 @@ static void dispatch_priv_msg(const struct ps_priv_msg *hdr,
                                                   now, (int)hdr->handle_id);
             break;
         }
+        case PS_OP_ACTIVITY_DATA:
+            if (hdr->payload_len > 0)
+                ps_act_ring_push((const char *)payload, hdr->payload_len);
+            break;
         case PS_OP_ERROR:
             ps_warn("main: priv worker error status=%d handle=%d",
                     hdr->status, hdr->handle_id);
@@ -962,6 +967,7 @@ int main(int argc, char **argv)
     ps_module_registry_init(&g_registry);
     ps_host_table_init(&g_hosts);
     ps_obs_queue_init();
+    ps_act_ring_init();
 
     /* Register modules */
     if (ps_module_registry_add(&g_registry, &ps_icmp_traceroute_module) < 0) {
