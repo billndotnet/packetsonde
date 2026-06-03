@@ -21,6 +21,7 @@ add_library(packetsonde_lib STATIC
     recipe_engine.c
     suppress.c
     proc_parse.c
+    sock_parse.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -101,4 +102,8 @@ if(BUILD_TESTING)
     add_executable(test_proc_parse tests/test_proc_parse.c)
     target_link_libraries(test_proc_parse PRIVATE packetsonde_lib)
     add_test(NAME test_proc_parse COMMAND test_proc_parse)
+
+    add_executable(test_sock_parse tests/test_sock_parse.c)
+    target_link_libraries(test_sock_parse PRIVATE packetsonde_lib)
+    add_test(NAME test_sock_parse COMMAND test_sock_parse)
 endif()
