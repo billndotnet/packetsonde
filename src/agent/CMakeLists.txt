@@ -107,6 +107,7 @@ set(AGENT_CORE_SOURCES
     src/activity_ring.c
     src/proc_enrich.c
     src/sock_snapshot.c
+    src/fan_monitor.c
 )
 
 # Agent binary
@@ -354,6 +355,14 @@ target_include_directories(test_sock_snapshot PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_sock_snapshot PRIVATE packetsonde_lib)
 add_test(NAME test_sock_snapshot COMMAND test_sock_snapshot)
+
+# Test: fan_build_record (suppress-gate -> enrich -> snapshot -> json)
+add_executable(test_fan_build tests/test_fan_build.c
+    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+target_include_directories(test_fan_build PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_fan_build PRIVATE packetsonde_lib)
+add_test(NAME test_fan_build COMMAND test_fan_build)
 
 include(GNUInstallDirs)
 
