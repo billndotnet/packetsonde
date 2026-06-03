@@ -18,7 +18,10 @@ static const char TOML[] =
     "collector = \"collector.lab:2055\"\n"
     "version = \"10\"\n"
     "[iface_monitor]\n"
-    "interval = \"5\"\n";
+    "interval = \"5\"\n"
+    "[detect]\n"
+    "enabled = \"1\"\n"
+    "watch_paths = \"/etc,/home\"\n";
 
 int main(void) {
     unsetenv("PS_DISCOVERY_ENABLED");
@@ -33,7 +36,7 @@ int main(void) {
     CHECK(ps_config_parse_string(&cfg, TOML) == 0);
 
     int n = ps_config_to_env(&cfg);
-    CHECK(n == 7);
+    CHECK(n == 9);
     CHECK(strcmp(getenv("PS_DISCOVERY_ENABLED"),        "1")                  == 0);
     CHECK(strcmp(getenv("PS_DISCOVERY_AGENT_KEY"),      "prod")               == 0);
     CHECK(strcmp(getenv("PS_AGENT_LISTEN_MODE"),        "knock")              == 0);
@@ -43,6 +46,11 @@ int main(void) {
     /* iface_monitor interval maps to PS_IFACE_MONITOR_INTERVAL */
     CHECK(getenv("PS_IFACE_MONITOR_INTERVAL") != NULL);
     CHECK(strcmp(getenv("PS_IFACE_MONITOR_INTERVAL"),  "5")                  == 0);
+    /* detect section maps enabled and watch_paths */
+    CHECK(getenv("PS_DETECT_ENABLED") != NULL);
+    CHECK(strcmp(getenv("PS_DETECT_ENABLED"),          "1")                  == 0);
+    CHECK(getenv("PS_DETECT_WATCH_PATHS") != NULL);
+    CHECK(strcmp(getenv("PS_DETECT_WATCH_PATHS"),      "/etc,/home")         == 0);
 
     /* Env wins: pre-existing PS_* should NOT be overwritten by a fresh
      * translation pass. Clear everything except DISCOVERY_ENABLED, then
@@ -53,11 +61,13 @@ int main(void) {
     unsetenv("PS_NETFLOW_COLLECTOR");
     unsetenv("PS_NETFLOW_VERSION");
     unsetenv("PS_IFACE_MONITOR_INTERVAL");
+    unsetenv("PS_DETECT_ENABLED");
+    unsetenv("PS_DETECT_WATCH_PATHS");
     setenv  ("PS_DISCOVERY_ENABLED", "0", 1);
     struct ps_config cfg2; memset(&cfg2, 0, sizeof(cfg2));
     CHECK(ps_config_parse_string(&cfg2, TOML) == 0);
     int n2 = ps_config_to_env(&cfg2);
-    CHECK(n2 == 6); /* DISCOVERY_ENABLED already in env, other 6 get set */
+    CHECK(n2 == 8); /* DISCOVERY_ENABLED already in env, other 8 get set */
     CHECK(strcmp(getenv("PS_DISCOVERY_ENABLED"), "0") == 0);
 
     fprintf(stderr, "test_config_to_env: OK\n");
