@@ -3,6 +3,7 @@
 #include "sock_snapshot.h"
 #include "suppress.h"
 #include "activity_record.h"
+#include "log.h"
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
@@ -85,6 +86,7 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
             int n = ps_fan_build_record("", (int)m->pid, path, event, is_read,
                                         cfg->suppress, max_depth, json, sizeof json);
             if (n > 0 && emit) emit(json, (size_t)n, ctx);
+            else if (n < 0) ps_warn("fan: activity record overflow, dropped (pid=%d path=%s)", (int)m->pid, path);
         }
     }
     return 0;

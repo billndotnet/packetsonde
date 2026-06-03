@@ -78,5 +78,6 @@ watch_paths    = "/etc,/home"   # comma-separated; configurable + role-templated
 suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/prefix" allowed)
 max_depth      = "16"           # ancestry-walk cap
 max_events_ps  = "2000"         # global events/sec cap (drop + count over)
+# sink = "/var/lib/packetsonde/activity.jsonl"   # where collected records are written
 # A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
 # watch_paths) so any execve is caught — see the spec Detection-boundary section.

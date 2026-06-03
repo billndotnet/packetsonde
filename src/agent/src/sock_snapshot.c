@@ -54,7 +54,8 @@ int ps_sock_snapshot(const char *proc_root, const int *pids, int npids,
         for (int k = 0; k < ni && count < max; k++) {
             struct ps_sock_ep ep;
             if (ps_sock_find_by_inode(eps, neps, inodes[k], &ep) != 0) continue;
-            /* dedup: skip if this inode already recorded */
+            /* dedup: skip if this laddr+raddr pair was already recorded
+             * (collapses the same endpoint seen across multiple ancestor pids) */
             int dup = 0;
             for (int j = 0; j < count; j++)
                 if (out[j].owner_pid && strcmp(out[j].raddr, ep.raddr) == 0 &&

@@ -61,6 +61,7 @@ static const struct mapping MAPPINGS[] = {
     { "detect", "suppress_paths", "PS_DETECT_SUPPRESS_PATHS" },
     { "detect", "max_depth",      "PS_DETECT_MAX_DEPTH" },
     { "detect", "max_events_ps",  "PS_DETECT_MAX_EVENTS_PS" },
+    { "detect", "sink",           "PS_DETECT_SINK" },
 
     { NULL, NULL, NULL }
 };

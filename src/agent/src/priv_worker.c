@@ -609,11 +609,14 @@ int main(int argc, char **argv)
 
     /* Start fanotify collection thread if PS_DETECT_ENABLED is set */
     static struct ps_fan_cfg fan_cfg;
-    if (getenv("PS_DETECT_ENABLED") && atoi(getenv("PS_DETECT_ENABLED"))) {
+    const char *detect_enabled = getenv("PS_DETECT_ENABLED");
+    if (detect_enabled && atoi(detect_enabled)) {
+        const char *max_depth_str     = getenv("PS_DETECT_MAX_DEPTH");
+        const char *max_events_ps_str = getenv("PS_DETECT_MAX_EVENTS_PS");
         fan_cfg.watch_paths   = getenv("PS_DETECT_WATCH_PATHS");
         fan_cfg.suppress      = getenv("PS_DETECT_SUPPRESS_PATHS");
-        fan_cfg.max_depth     = getenv("PS_DETECT_MAX_DEPTH") ? atoi(getenv("PS_DETECT_MAX_DEPTH")) : 16;
-        fan_cfg.max_events_ps = getenv("PS_DETECT_MAX_EVENTS_PS") ? atoi(getenv("PS_DETECT_MAX_EVENTS_PS")) : 2000;
+        fan_cfg.max_depth     = max_depth_str     ? atoi(max_depth_str)     : 16;
+        fan_cfg.max_events_ps = max_events_ps_str ? atoi(max_events_ps_str) : 2000;
         pthread_t t; pthread_create(&t, NULL, fan_thread, &fan_cfg);
         pthread_detach(t);
     }
