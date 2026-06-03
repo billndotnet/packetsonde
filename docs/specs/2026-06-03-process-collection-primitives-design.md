@@ -43,6 +43,40 @@ access to process context and concurrent socket activity") on **Linux only**.
 the expensive work; bounded ring) and *collect ground truth, surface anomalies* — this
 sub-project collects ground truth with full attribution; surfacing is SP2/SP3.
 
+### Detection boundary — what this can and cannot see
+
+This is a **post-exploitation** sensor, not an exploit detector. It observes the
+filesystem/process/socket *effects* of activity; it is blind to logic-level compromise
+that never leaves the interpreter or kernel.
+
+- **Native file-load exploits** (e.g. EternalRed / SambaCry, §12): seen directly — the
+  malicious `dlopen`/write is a file event.
+- **In-interpreter RCE** (e.g. CVE-2025-55182 "React2Shell" — arbitrary JS in a Node
+  process via RSC deserialization; CVE-2025-68613 — n8n expression-injection sandbox
+  escape): the **initial exploit is invisible** (no file open, no process spawn at the
+  moment of compromise). We catch the **post-exploitation** stage when the payload must
+  touch the OS:
+  - *React2Shell* — the downloader/miner stage (SNOWLIGHT, XMRIG): `node` opens an
+    outbound socket, **writes** the implant to a drop dir, and **`execve`s** it →
+    `FAN_OPEN_EXEC` (never suppressed); the dropped binary runs as a non-`node` **child**
+    whose file/socket activity the ancestry walk attributes to the `node` parent holding
+    the attacker's HTTP socket.
+  - *n8n* — the sandbox escape spawns `/bin/sh -c …` → `FAN_OPEN_EXEC` on the shell; the
+    `sh` lineage attributes back through the ancestry walk to the n8n `node` process and
+    its inbound attacker socket.
+- **Blind spot (stated):** a *fileless, in-process* payload that reads secrets from
+  memory/env and exfiltrates over the **already-open** request socket — no write, no
+  exec, no new socket — produces no new record here. Network **flow accounting**
+  (`flow_tracker`, separate subsystem) is the complementary layer for that case
+  (anomalous outbound volume/destination on the existing connection).
+
+**Unifying signal for in-interpreter RCE:** a long-running interpreter service that
+legitimately *never* execs at runtime suddenly `FAN_OPEN_EXEC`-ing a new program or
+spawning a shell. This is the highest-value, lowest-false-positive post-exploitation
+detector and motivates the mount-wide `FAN_OPEN_EXEC` mark (§2 D-PATHS) and the
+drop-zone watch paths (§10); SP3 turns "this service has zero baseline exec events" into
+the alert.
+
 ---
 
 ## 2. Decisions captured (from brainstorming)
@@ -56,7 +90,7 @@ sub-project collects ground truth with full attribution; surfacing is SP2/SP3.
 | D-OUT | Output goes to a **local bounded ring + a `watch` inspect verb**. **No raw activity is shipped to central.** | §4 reports *flagged* events, not everything; raw shipping would make central a firehose and isn't lightweight. SP2/SP3 consume the ring and emit only findings. |
 | D-SUP | A **coarse static suppression list** (path-prefix [+ optional comm], **reads only**) is checked in `priv_worker` **before** enrichment. Never suppresses writes or `FAN_OPEN_EXEC`. | Volume control that makes broad watch coverage affordable, and it gates the expensive `/proc` walk. The expressive per-process envelope is SP2/SP3, *not* here — keeps "what's permissible" logic in one place. Never whitelisting writes/exec-opens preserves the EternalRed signal. |
 | D-HOOK | The record captures **cgroup/systemd unit** (`/proc/<pid>/cgroup`) and **MAC label + mode** (`/proc/<pid>/attr/current`) in process metadata now. | Cheap single reads; they are the enabling hooks for SP2 overwatch (map an access to a unit; explain *why* enforcement didn't stop it). The schema is the SP2/SP3 contract, so add them at the source. |
-| D-PATHS | Watch paths are **configurable + role-templated**; fanotify mask includes `FAN_OPEN_EXEC`. | A service's risky dirs differ by role (e.g. a Samba share, a web root); `FAN_OPEN_EXEC` is a cheap complementary signal on `execve` (note: `dlopen` is `open`+`mmap`, not `execve`, so library loads are caught via `FAN_OPEN`). |
+| D-PATHS | Watch paths are **configurable + role-templated** (service roles include drop zones `/tmp`, `/dev/shm`, `/var/tmp`); the per-path mask includes `FAN_OPEN_EXEC`, **plus a mount-wide `FAN_OPEN_EXEC` mark** (`FAN_MARK_MOUNT`) so *any* `execve` is seen regardless of directory. | A service's risky dirs differ by role (a Samba share, a web root, payload drop zones); `FAN_OPEN_EXEC` is a cheap complementary signal on `execve` (note: `dlopen` is `open`+`mmap`, not `execve`, so library loads are still caught via `FAN_OPEN` on watched paths). The mount-wide exec mark is the common thread through SambaCry, React2Shell, and n8n — a service that never execs suddenly exec'ing is the unifying post-exploitation signal (§1 Detection boundary). |
 
 ---
 
@@ -231,7 +265,12 @@ max_events_ps = "2000"              # global events/sec cap (drop + count over)
 `PS_DETECT_SUPPRESS_PATHS`, `PS_DETECT_MAX_DEPTH`, `PS_DETECT_MAX_EVENTS_PS` (same
 quote-stripping idiom as existing keys). Role-templated path sets are expressed as named
 bundles the operator/salt selects; the templating lives in config/bootstrap, not the
-agent (the agent only sees the resolved `watch_paths`).
+agent (the agent only sees the resolved `watch_paths`). The default `/etc,/home` is the
+minimal host baseline; the **service role template adds payload drop zones**
+`/tmp,/dev/shm,/var/tmp` plus the role's data dirs (e.g. a web root, a Samba share) —
+this is what makes the React2Shell drop-then-exec stage (§1 Detection boundary) visible.
+The mount-wide `FAN_OPEN_EXEC` mark (§2 D-PATHS) is independent of `watch_paths` and is
+always set when `enabled=1`, so an `execve` from an *unwatched* dir is still caught.
 
 ---
 

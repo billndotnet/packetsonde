@@ -1389,10 +1389,14 @@ Expected: FAIL — no mapping for `detect/enabled`.
 # Process/file/socket collection (Linux). Off by default. See
 # docs/specs/2026-06-03-process-collection-primitives-design.md
 enabled        = "0"
+# host baseline default; SERVICE ROLE template adds drop zones + role data dirs, e.g.
+#   watch_paths = "/etc,/home,/tmp,/dev/shm,/var/tmp,/var/www"
 watch_paths    = "/etc,/home"   # comma-separated; configurable + role-templated
 suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/prefix" allowed)
 max_depth      = "16"           # ancestry-walk cap
 max_events_ps  = "2000"         # global events/sec cap (drop + count over)
+# A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
+# watch_paths) so any execve is caught — see the spec Detection-boundary section.
 ```
 
 - [ ] **Step 5: Run to verify it passes**
@@ -1435,6 +1439,11 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
         fanotify_mark(fan, FAN_MARK_ADD,
                       FAN_OPEN | FAN_ACCESS | FAN_OPEN_EXEC, AT_FDCWD, p);
     }
+    /* Mount-wide exec mark: catch ANY execve regardless of dir (the unifying
+     * post-exploitation signal — SambaCry, React2Shell, n8n). Independent of
+     * watch_paths. "/" mark covers the root mount; on multi-mount hosts add a
+     * mark per mount (future: enumerate /proc/mounts). */
+    fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_OPEN_EXEC, AT_FDCWD, "/");
     int max_depth = cfg->max_depth > 0 ? cfg->max_depth : 16;
     for (;;) {
         struct pollfd pfd = { fan, POLLIN, 0 };
