@@ -4,6 +4,8 @@
 #include "json.h"             /* lib */
 #include "log.h"
 #include "build_config.h"     /* PS_VERSION */
+#include "obs_queue.h"
+#include "reporter.h"         /* ps_report_events, ps_report_result */
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -11,12 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-int ps_central_checkin_once(long uptime_seconds) {
-    struct ps_central_config cc = ps_central_config_from_env();
-    if (!cc.url || !cc.url[0]) return -1;
+/* Post one heartbeat using an already-resolved config.  Returns 0 on HTTP 200,
+ * -1 on transport / non-200 error or when no url is present. */
+static int ps_checkin_post_heartbeat(const struct ps_central_config *cc,
+                                     long uptime_seconds) {
+    if (!cc->url || !cc->url[0]) return -1;
 
     char host[256];
-    const char *agent_id = (cc.agent_id && cc.agent_id[0]) ? cc.agent_id
+    const char *agent_id = (cc->agent_id && cc->agent_id[0]) ? cc->agent_id
                           : (gethostname(host, sizeof host) == 0 ? host : "unknown");
 
     char body[512]; struct ps_json j; ps_json_init(&j, body, sizeof body);
@@ -33,11 +37,47 @@ int ps_central_checkin_once(long uptime_seconds) {
     ps_json_object_end(&j);
     if (ps_json_finish(&j) < 0) return -1;
 
-    char url[640]; snprintf(url, sizeof url, "%s/api/v1/packetsonde/checkin", cc.url);
-    struct ps_http_opts opts = { cc.verify, cc.ca_cert, 10 };
+    char url[640]; snprintf(url, sizeof url, "%s/api/v1/packetsonde/checkin", cc->url);
+    struct ps_http_opts opts = { cc->verify, cc->ca_cert, 10 };
     int status = 0; char resp[1024];
     if (ps_http_request("POST", url, body, &opts, &status, resp, sizeof resp) != 0) return -1;
     return status == 200 ? 0 : -1;
+}
+
+int ps_central_checkin_once(long uptime_seconds) {
+    struct ps_central_config cc = ps_central_config_from_env();
+    return ps_checkin_post_heartbeat(&cc, uptime_seconds);
+}
+
+/* Drain queued observations and ship them to central in bounded batches.
+ * Batching by PS_OBS_SHIP_BATCH keeps each signed POST well under the reporter's
+ * envelope buffer even when the queue is full of large findings; the per-cycle
+ * batch cap bounds work. Best-effort: a failed batch's items are already
+ * dequeued (dropped) — Phase-1 reconciliation backstops gaps; we never block
+ * the daemon on central availability. */
+#define PS_OBS_SHIP_BATCH        50   /* envelopes per POST (fits the 256 KiB buffer) */
+#define PS_OBS_SHIP_MAX_BATCHES  16   /* up to 800 observations drained per cycle */
+static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
+    if (!cc->url || !cc->url[0]) return;
+
+    static char items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];
+    const char *jsons[PS_OBS_SHIP_BATCH];
+    int shipped = 0, dropped = 0;
+
+    for (int batch = 0; batch < PS_OBS_SHIP_MAX_BATCHES; batch++) {
+        int n = ps_obs_queue_drain(items, PS_OBS_SHIP_BATCH);
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) jsons[i] = items[i];
+
+        struct ps_report_result rr;
+        memset(&rr, 0, sizeof(rr));
+        if (ps_report_observations(cc, NULL, jsons, (size_t)n, &rr) != 0)
+            dropped += n;
+        else
+            shipped += n;
+    }
+    if (shipped > 0) ps_info("central: shipped %d observations", shipped);
+    if (dropped > 0) ps_warn("central: observation ship failed (dropped %d)", dropped);
 }
 
 static volatile int g_stop = 0;
@@ -48,8 +88,10 @@ static long g_start = 0;
 static void *checkin_loop(void *arg) {
     (void)arg;
     while (!g_stop) {
-        if (ps_central_checkin_once(time(NULL) - g_start) != 0)
+        struct ps_central_config cc = ps_central_config_from_env();
+        if (ps_checkin_post_heartbeat(&cc, time(NULL) - g_start) != 0)
             ps_warn("central: checkin failed");
+        ps_checkin_ship_observations(&cc);
         for (int i = 0; i < g_interval && !g_stop; i++) sleep(1);
     }
     return NULL;

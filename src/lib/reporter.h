@@ -8,9 +8,14 @@ struct ps_report_result { int accepted; int rejected; int total; int http_status
 
 /* Sign + POST raw event-JSON strings to central as one {envelopes:[…]} batch.
  * base_url NULL -> cc->url. Returns 0 on a completed HTTP exchange (inspect out),
- * -1 on transport/local error. */
+ * -1 on transport/local error. Targets /api/v1/packetsonde/events. */
 int ps_report_events(const struct ps_central_config *cc, const char *base_url,
                      const char **event_jsons, size_t n, struct ps_report_result *out);
+
+/* Same as ps_report_events but targets /api/v1/packetsonde/observations — the
+ * hash-chained, signature-preserving passive-observation store. */
+int ps_report_observations(const struct ps_central_config *cc, const char *base_url,
+                           const char **event_jsons, size_t n, struct ps_report_result *out);
 
 /* Serialize findings to event JSON, then ps_report_events. */
 int ps_report_findings(const struct ps_central_config *cc, const char *base_url,

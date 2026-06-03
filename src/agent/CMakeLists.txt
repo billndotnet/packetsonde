@@ -76,6 +76,7 @@ set(AGENT_CORE_SOURCES
     src/redis_bridge.c
     src/iface_enum.c
     src/iface_snapshot.c
+    src/iso8601.c
     src/modules/icmp_traceroute.c
     src/modules/tcp_traceroute.c
     src/modules/udp_traceroute.c
@@ -102,6 +103,7 @@ set(AGENT_CORE_SOURCES
     src/modules/network_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
+    src/obs_queue.c
 )
 
 # Agent binary
@@ -309,12 +311,25 @@ target_include_directories(test_iface_snapshot PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 add_test(NAME test_iface_snapshot COMMAND test_iface_snapshot)
 
+# Test: pure UTC ISO-8601 formatter (no library deps)
+add_executable(test_iso8601 tests/test_iso8601.c src/iso8601.c)
+target_include_directories(test_iso8601 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME test_iso8601 COMMAND test_iso8601)
+
 # Test: capture handle close (single-iface teardown — no pcap or network needed)
 add_executable(test_capture_close tests/test_capture_close.c src/capture/capture_handle.c)
 target_include_directories(test_capture_close PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_capture_close PRIVATE packetsonde_lib)
 add_test(NAME test_capture_close COMMAND test_capture_close)
+
+# Test: bounded observation queue + event-JSON wrapper
+add_executable(test_obs_queue tests/test_obs_queue.c src/obs_queue.c)
+target_include_directories(test_obs_queue PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_obs_queue PRIVATE pthread)
+add_test(NAME test_obs_queue COMMAND test_obs_queue)
 
 include(GNUInstallDirs)
 

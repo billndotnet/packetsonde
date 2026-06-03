@@ -10,8 +10,12 @@ int ps_platform_fork_priv_worker(const char *priv_binary_path);
 /* Drop privileges to specified user. Returns 0 on success, -1 on error. Skips if not root. */
 int ps_platform_drop_privs(const char *username);
 
-/* Monotonic clock in microseconds. */
+/* Monotonic clock (boot-relative) — for intervals/throttling/ticks. */
 uint64_t ps_platform_now_usec(void);
+
+/* Wall-clock (CLOCK_REALTIME) microseconds since the Unix epoch — for timestamps
+ * stored in the host table / shipped to central. NOT for interval math. */
+uint64_t ps_platform_wall_usec(void);
 
 /* Get directory containing the running executable. */
 int ps_platform_exe_dir(char *buf, size_t bufsz);
