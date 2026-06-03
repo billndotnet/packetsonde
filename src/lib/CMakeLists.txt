@@ -23,6 +23,7 @@ add_library(packetsonde_lib STATIC
     proc_parse.c
     sock_parse.c
     activity_record.c
+    cgroup_unit.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -111,4 +112,8 @@ if(BUILD_TESTING)
     add_executable(test_activity_record tests/test_activity_record.c)
     target_link_libraries(test_activity_record PRIVATE packetsonde_lib)
     add_test(NAME test_activity_record COMMAND test_activity_record)
+
+    add_executable(test_cgroup_unit tests/test_cgroup_unit.c)
+    target_link_libraries(test_cgroup_unit PRIVATE packetsonde_lib)
+    add_test(NAME test_cgroup_unit COMMAND test_cgroup_unit)
 endif()
