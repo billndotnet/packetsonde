@@ -25,6 +25,7 @@ add_library(packetsonde_lib STATIC
     activity_record.c
     cgroup_unit.c
     systemd_policy.c
+    policy_eval.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -125,4 +126,8 @@ if(BUILD_TESTING)
     add_executable(test_systemd_policy_cache tests/test_systemd_policy_cache.c)
     target_link_libraries(test_systemd_policy_cache PRIVATE packetsonde_lib)
     add_test(NAME test_systemd_policy_cache COMMAND test_systemd_policy_cache)
+
+    add_executable(test_policy_eval tests/test_policy_eval.c)
+    target_link_libraries(test_policy_eval PRIVATE packetsonde_lib)
+    add_test(NAME test_policy_eval COMMAND test_policy_eval)
 endif()
