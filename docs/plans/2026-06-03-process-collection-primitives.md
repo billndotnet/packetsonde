@@ -379,7 +379,7 @@ git commit -m "lib: add /proc stat/cgroup/attr field parsers"
  * remote 203.0.113.5:51344 (CB007101:C890), state 01 (ESTABLISHED), inode 99887. */
 static const char *TCP =
 "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-"   0: 0500000A:01BD 0571CBCB:C890 01 00000000:00000000 00:00000000 00000000     0        0 99887 1 0000 ...\n";
+"   0: 0500000A:01BD 057100CB:C890 01 00000000:00000000 00:00000000 00000000     0        0 99887 1 0000 ...\n";
 
 int main(void) {
     struct ps_sock_ep eps[8];
@@ -1042,7 +1042,7 @@ int main(void) {
     snprintf(d, sizeof d, "%s/net", root); mkdir(d, 0755);
     snprintf(p, sizeof p, "%s/net/tcp", root);
     wr(p, "  sl  local_address rem_address   st ... inode\n"
-          "   0: 0500000A:01BD 0571CBCB:C890 01 00000000:00000000 00:00000000 00000000     0        0 99887 1\n");
+          "   0: 0500000A:01BD 057100CB:C890 01 00000000:00000000 00:00000000 00000000     0        0 99887 1\n");
     snprintf(p, sizeof p, "%s/net/tcp6", root); wr(p, "header\n");
     snprintf(p, sizeof p, "%s/net/udp",  root); wr(p, "header\n");
     snprintf(p, sizeof p, "%s/net/udp6", root); wr(p, "header\n");
@@ -1216,7 +1216,7 @@ int main(void) {
     char p[320], d[320];
     snprintf(d, sizeof d, "%s/net", root); mkdir(d, 0755);
     snprintf(p, sizeof p, "%s/net/tcp", root);
-    wr(p, "hdr\n   0: 0500000A:01BD 0571CBCB:C890 01 0 0 0 0 0 99887 1\n");
+    wr(p, "hdr\n   0: 0500000A:01BD 057100CB:C890 01 0 0 0 0 0 99887 1\n");
     snprintf(p, sizeof p, "%s/net/tcp6", root); wr(p, "h\n");
     snprintf(p, sizeof p, "%s/net/udp",  root); wr(p, "h\n");
     snprintf(p, sizeof p, "%s/net/udp6", root); wr(p, "h\n");
