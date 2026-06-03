@@ -332,6 +332,18 @@ Each phase is a separate `writing-plans` cycle.
 - **Auto-written drop-ins / central-reported suggestions** — we chose CLI-on-demand; these
   are the other delivery options from brainstorming.
 - **SP3 statistical baseline / write-then-exec temporal correlation.**
+- **Anomalous crypto-API / socket-family usage observation** (motivated by CVE-2026-31431
+  "Copy Fail", a Linux `algif_aead` page-cache LPE). This exploit is **out of reach of
+  SP1+SP2 as designed**: the corruption is a kernel page-cache write that bypasses VFS
+  (so fanotify sees no write), and the entry point is an `AF_ALG`/`authenc` socket that
+  SP1's IP-only socket snapshot doesn't capture (§8 deferral). A realistic *behavioral*
+  signal — "an unprivileged process opens an `AF_ALG` aead socket and reads a setuid
+  binary" — would require (a) **lifting the SP1 non-IP-socket snapshot deferral** to
+  capture `AF_ALG` sockets + `salg_type`/`salg_name`, and (b) a **baseline/rule detector**
+  ("this unit never uses `AF_ALG`"), which is SP3-style or a dedicated rule engine — *not*
+  declared-policy overwatch. Even then it flags the setup signature, not the corruption;
+  covering the tamper itself needs setuid-binary integrity monitoring (a separate
+  capability). Recorded here so the analysis isn't lost; intentionally kept out of SP2.
 
 ---
 
