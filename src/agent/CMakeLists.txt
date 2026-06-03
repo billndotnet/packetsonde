@@ -105,6 +105,7 @@ set(AGENT_CORE_SOURCES
     src/capture/protocol_demux.c
     src/obs_queue.c
     src/activity_ring.c
+    src/proc_enrich.c
 )
 
 # Agent binary
@@ -338,6 +339,13 @@ target_include_directories(test_activity_ring PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_activity_ring PRIVATE pthread)
 add_test(NAME test_activity_ring COMMAND test_activity_ring)
+
+# Test: process enrichment (meta + ancestry walk)
+add_executable(test_proc_enrich tests/test_proc_enrich.c src/proc_enrich.c)
+target_include_directories(test_proc_enrich PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_proc_enrich PRIVATE packetsonde_lib)
+add_test(NAME test_proc_enrich COMMAND test_proc_enrich)
 
 include(GNUInstallDirs)
 
