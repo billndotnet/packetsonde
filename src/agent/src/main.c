@@ -683,6 +683,28 @@ static void on_ipc_frame(int client_fd, const char *channel,
 }
 
 /* ------------------------------------------------------------------ */
+/* Activity JSONL sink                                                  */
+/* ------------------------------------------------------------------ */
+
+/* Append a single activity record (JSON bytes + newline) to the sink
+ * file, if PS_DETECT_ENABLED is set.  Silently skips on open failure
+ * (e.g. directory not yet created) — never crashes, never spams logs. */
+static void activity_sink_append(const char *json, size_t len)
+{
+    const char *enabled = getenv("PS_DETECT_ENABLED");
+    if (!enabled || !enabled[0]) return;
+
+    const char *path = getenv("PS_DETECT_SINK");
+    if (!path || !path[0]) path = "/var/lib/packetsonde/activity.jsonl";
+
+    FILE *f = fopen(path, "a");
+    if (!f) return;  /* dir missing or unwritable — skip silently */
+    fwrite(json, 1, len, f);
+    fputc('\n', f);
+    fclose(f);
+}
+
+/* ------------------------------------------------------------------ */
 /* Priv client message dispatcher                                       */
 /* ------------------------------------------------------------------ */
 
@@ -711,8 +733,10 @@ static void dispatch_priv_msg(const struct ps_priv_msg *hdr,
             break;
         }
         case PS_OP_ACTIVITY_DATA:
-            if (hdr->payload_len > 0)
+            if (hdr->payload_len > 0) {
                 ps_act_ring_push((const char *)payload, hdr->payload_len);
+                activity_sink_append((const char *)payload, hdr->payload_len);
+            }
             break;
         case PS_OP_ERROR:
             ps_warn("main: priv worker error status=%d handle=%d",

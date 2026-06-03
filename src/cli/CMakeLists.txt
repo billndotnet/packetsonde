@@ -14,6 +14,7 @@ set(CLI_SOURCES
     verbs/report_central.c
     verbs/collect.c
     verbs/recipe.c
+    verbs/watch.c
     recipe/runner.c
     ../agent/src/config.c
     remote/audit_via.c
