@@ -104,6 +104,7 @@ set(AGENT_CORE_SOURCES
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
     src/obs_queue.c
+    src/activity_ring.c
 )
 
 # Agent binary
@@ -330,6 +331,13 @@ target_include_directories(test_obs_queue PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_obs_queue PRIVATE pthread)
 add_test(NAME test_obs_queue COMMAND test_obs_queue)
+
+# Test: bounded activity ring
+add_executable(test_activity_ring tests/test_activity_ring.c src/activity_ring.c)
+target_include_directories(test_activity_ring PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_activity_ring PRIVATE pthread)
+add_test(NAME test_activity_ring COMMAND test_activity_ring)
 
 include(GNUInstallDirs)
 
