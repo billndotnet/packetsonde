@@ -16,6 +16,13 @@
 
 #define PS_ACT_ITEM_SERIALIZE_MAX 8192
 
+const char *ps_fan_event_for_mask(unsigned long long mask, int *is_read) {
+    if (mask & FAN_OPEN_EXEC)   { if (is_read) *is_read = 0; return "exec"; }
+    if (mask & FAN_CLOSE_WRITE) { if (is_read) *is_read = 0; return "write"; }
+    if (mask & FAN_ACCESS)      { if (is_read) *is_read = 1; return "access"; }
+    if (is_read) *is_read = 1;  return "open";
+}
+
 static void now_iso(char *out, size_t cap) {
     struct timeval tv; gettimeofday(&tv, NULL);
     time_t t = tv.tv_sec; struct tm tm; gmtime_r(&t, &tm);
@@ -58,7 +65,7 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
     char paths[4096]; snprintf(paths, sizeof paths, "%s", cfg->watch_paths ? cfg->watch_paths : "");
     for (char *p = strtok(paths, ","); p; p = strtok(NULL, ",")) {
         fanotify_mark(fan, FAN_MARK_ADD,
-                      FAN_OPEN | FAN_ACCESS | FAN_OPEN_EXEC, AT_FDCWD, p);
+                      FAN_OPEN | FAN_ACCESS | FAN_OPEN_EXEC | FAN_CLOSE_WRITE, AT_FDCWD, p);
     }
     /* Mount-wide exec mark: catch ANY execve regardless of dir (the unifying
      * post-exploitation signal). Independent of watch_paths. */
@@ -79,9 +86,8 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
             ssize_t r = readlink(link, path, sizeof path - 1);
             close(m->fd);
             if (r <= 0) continue; path[r] = 0;
-            const char *event = (m->mask & FAN_OPEN_EXEC) ? "exec"
-                              : (m->mask & FAN_ACCESS) ? "access" : "open";
-            int is_read = !(m->mask & FAN_OPEN_EXEC);  /* exec-opens never suppressed */
+            int is_read = 1;
+            const char *event = ps_fan_event_for_mask(m->mask, &is_read);
             char json[PS_ACT_ITEM_SERIALIZE_MAX];
             int n = ps_fan_build_record("", (int)m->pid, path, event, is_read,
                                         cfg->suppress, max_depth, json, sizeof json);

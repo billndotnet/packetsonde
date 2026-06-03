@@ -370,6 +370,13 @@ target_include_directories(test_fan_build PRIVATE
 target_link_libraries(test_fan_build PRIVATE packetsonde_lib)
 add_test(NAME test_fan_build COMMAND test_fan_build)
 
+add_executable(test_fan_event tests/test_fan_event.c
+    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+target_include_directories(test_fan_event PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_fan_event PRIVATE packetsonde_lib)
+add_test(NAME test_fan_event COMMAND test_fan_event)
+
 include(GNUInstallDirs)
 
 # Per-platform install layout, intended for `sudo make install` from a
