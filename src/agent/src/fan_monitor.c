@@ -12,16 +12,20 @@
 #include <unistd.h>
 #include <poll.h>
 #include <stdlib.h>
+#ifdef __linux__
 #include <sys/fanotify.h>
+#endif
 
 #define PS_ACT_ITEM_SERIALIZE_MAX 8192
 
+#ifdef __linux__
 const char *ps_fan_event_for_mask(unsigned long long mask, int *is_read) {
     if (mask & FAN_OPEN_EXEC)   { if (is_read) *is_read = 0; return "exec"; }
     if (mask & FAN_CLOSE_WRITE) { if (is_read) *is_read = 0; return "write"; }
     if (mask & FAN_ACCESS)      { if (is_read) *is_read = 1; return "access"; }
     if (is_read) *is_read = 1;  return "open";
 }
+#endif
 
 static void now_iso(char *out, size_t cap) {
     struct timeval tv; gettimeofday(&tv, NULL);
@@ -57,6 +61,7 @@ int ps_fan_build_record(const char *proc_root, int pid, const char *path,
     return ps_activity_to_json(&a, out, cap);
 }
 
+#ifdef __linux__
 int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
                        void (*emit)(const char *, size_t, void *), void *ctx) {
     int fan = fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC, O_RDONLY | O_CLOEXEC);
@@ -97,3 +102,10 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
     }
     return 0;
 }
+#else  /* non-Linux: fanotify is Linux-only; the collection runtime is a no-op */
+int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
+                       void (*emit)(const char *, size_t, void *), void *ctx) {
+    (void)cfg; (void)emit; (void)ctx;
+    return -1;
+}
+#endif

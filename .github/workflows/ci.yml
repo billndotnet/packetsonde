@@ -33,6 +33,7 @@ jobs:
   # which lacks the EVP_PKEY_ED25519 one-shot the agent uses). Best-effort.
   macos:
     runs-on: macos-latest
+    continue-on-error: true   # best-effort portability leg; does not block the gate
     steps:
       - uses: actions/checkout@v4
       - name: Install deps
@@ -47,6 +48,7 @@ jobs:
   # Portability: FreeBSD via a VM action (no native FreeBSD runner exists). Best-effort.
   freebsd:
     runs-on: ubuntu-latest
+    continue-on-error: true   # best-effort portability leg; does not block the gate
     steps:
       - uses: actions/checkout@v4
       - name: Build + test on FreeBSD
