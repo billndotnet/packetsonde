@@ -63,6 +63,25 @@ int main(void) {
         assert(g_emits == e0 + 2 && strstr(g_last, "\"kind\":\"candidate\"") && strstr(g_last, "9.9.9.9:53"));
     }
 
+    /* --- spawn signal: seed a parent baseline ({bash}) + denial ({evilparent}) --- */
+    {
+        struct ps_baseline_set pbl; ps_blset_init(&pbl, exe); ps_blset_add(&pbl, "bash");
+        struct ps_baseline_set pden; ps_blset_init(&pden, exe); ps_blset_add(&pden, "evilparent");
+        snprintf(p,sizeof p,"%s/parents.json",sub);        f=fopen(p,"w"); ps_blset_to_json_key(&pbl,"parents",j,sizeof j); fputs(j,f); fclose(f);
+        snprintf(p,sizeof p,"%s/parent-denials.json",sub); f=fopen(p,"w"); ps_blset_to_json_key(&pden,"parents",j,sizeof j); fputs(j,f); fclose(f);
+        char b[2048]; int e0 = g_emits;
+        const char *FMT = "{\"event\":\"open\",\"path\":\"/var/www/x\",\"process\":{\"comm\":\"sh\",\"exe\":\"%s\"},\"ancestry\":[{\"pid\":1,\"comm\":\"%s\",\"depth\":1}]}";
+        /* covered path + covered parent -> silent */
+        snprintf(b,sizeof b,FMT,exe,"bash"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0);
+        /* denied parent -> anomaly */
+        snprintf(b,sizeof b,FMT,exe,"evilparent"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0 + 1 && strstr(g_last, "\"signal\":\"spawn\"") && strstr(g_last, "\"kind\":\"anomaly\"") && strstr(g_last, "evilparent"));
+        /* novel parent -> candidate */
+        snprintf(b,sizeof b,FMT,exe,"nginx"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0 + 2 && strstr(g_last, "\"kind\":\"candidate\"") && strstr(g_last, "nginx"));
+    }
+
     ps_baseline_seen_free(seen);
     printf("test_baseline_monitor: OK\n");
     return 0;
