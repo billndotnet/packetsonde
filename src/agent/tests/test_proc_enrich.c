@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static void wr(const char *path, const char *content) {
     FILE *f = fopen(path, "w"); assert(f); fputs(content, f); fclose(f);
@@ -18,7 +19,7 @@ static void mkpid(const char *root, int pid, const char *stat, const char *cgrou
     snprintf(d, sizeof d, "%s/%d/attr", root, pid); mkdir(d, 0755);
     snprintf(p, sizeof p, "%s/%d/attr/current", root, pid); wr(p, attr);
     snprintf(p, sizeof p, "%s/%d/cmdline", root, pid); wr(p, cmdline);
-    (void)exe;
+    snprintf(p, sizeof p, "%s/%d/exe", root, pid); symlink(exe, p);
 }
 
 int main(void) {
@@ -35,6 +36,7 @@ int main(void) {
     assert(rc == 0);
     assert(a.proc.pid == 1234 && a.proc.ppid == 1190);
     assert(strcmp(a.proc.comm, "sh") == 0);
+    assert(strcmp(a.proc.exe, "/usr/bin/dash") == 0);
     assert(strcmp(a.proc.cgroup, "/system.slice/smbd.service") == 0);
     assert(strcmp(a.proc.mac_mode, "complain") == 0);
     /* ancestry: 1190 (smbd) at depth 1; stop before pid 1 */

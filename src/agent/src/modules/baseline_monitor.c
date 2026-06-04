@@ -1,0 +1,111 @@
+#include "baseline_monitor.h"
+#include "baseline_store.h"
+#include "baseline_decide.h"
+#include "baseline_set.h"
+#include "json_extract.h"
+#include "json.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define PS_BLSEEN_N 2048
+struct bl_seen { char keys[PS_BLSEEN_N][384]; int head, count; };
+void *ps_baseline_seen_new(void) { return calloc(1, sizeof(struct bl_seen)); }
+void  ps_baseline_seen_free(void *s) { free(s); }
+static int seen_add(struct bl_seen *s, const char *key) {
+    for (int i = 0; i < s->count; i++) {
+        int idx = (s->head - 1 - i + PS_BLSEEN_N) % PS_BLSEEN_N;
+        if (!strcmp(s->keys[idx], key)) return 1;
+    }
+    snprintf(s->keys[s->head], sizeof s->keys[0], "%s", key);
+    s->head = (s->head + 1) % PS_BLSEEN_N;
+    if (s->count < PS_BLSEEN_N) s->count++;
+    return 0;
+}
+
+static void emit_finding(void (*emit)(void *, const char *, size_t), void *ctx,
+                         const char *kind, const char *exe, const char *path,
+                         const char *event, const char *comm) {
+    char buf[2048]; struct ps_json j; ps_json_init(&j, buf, sizeof buf);
+    ps_json_object_begin(&j);
+    ps_json_key_string(&j, "source", "agent.baseline_monitor");
+    ps_json_key_string(&j, "severity", !strcmp(kind,"anomaly") ? "high" : "info");
+    ps_json_key_string(&j, "confidence", !strcmp(kind,"anomaly") ? "firm" : "tentative");
+    ps_json_key_string(&j, "kind", kind);
+    ps_json_key_string(&j, "exe", exe);
+    ps_json_key_string(&j, "entry", path);
+    ps_json_key_string(&j, "event", event);
+    ps_json_key_string(&j, "comm", comm);
+    ps_json_object_end(&j);
+    if (ps_json_finish(&j) > 0 && emit) emit(ctx, buf, (size_t)j.len);
+}
+
+int ps_baseline_process_record(const char *rec, const char *state_dir, void *seenv,
+                               void (*emit)(void *, const char *, size_t), void *ectx) {
+    struct bl_seen *seen = seenv;
+    char exe[256], path[512], event[16], comm[64]="";
+    if (ps_json_extract_string(rec, "exe", exe, sizeof exe) < 0 || !exe[0]) return 0;
+    if (ps_json_extract_string(rec, "path", path, sizeof path) < 0) return 0;
+    if (ps_json_extract_string(rec, "event", event, sizeof event) < 0) return 0;
+    ps_json_extract_string(rec, "comm", comm, sizeof comm);
+
+    struct ps_baseline_set bl, den;
+    ps_baseline_load(state_dir, exe, &bl, &den);
+    enum ps_bl_verdict v = ps_baseline_decide(&bl, &den, path);
+    if (v == PS_BL_COVERED) return 0;
+
+    char key[384]; snprintf(key, sizeof key, "%s|%s", exe, path);
+    if (seen_add(seen, key)) return 0;                     /* dedup */
+    if (v == PS_BL_ANOMALY) { emit_finding(emit, ectx, "anomaly", exe, path, event, comm); return 1; }
+    /* NOVEL */
+    ps_baseline_append_candidate(state_dir, exe, path);
+    emit_finding(emit, ectx, "candidate", exe, path, event, comm);
+    return 1;
+}
+
+/* --- module wiring --- */
+#include "module.h"
+#include "activity_ring.h"
+
+struct bl_state { int on; int consumer; void *seen; char state_dir[256]; };
+
+static int bl_init(ps_module_ctx_t *ctx) {
+    const char *m = getenv("PS_DETECT_BASELINE_MODE");
+    struct bl_state *st = calloc(1, sizeof *st);
+    if (!st) return -1;
+    st->on = (m && !strcmp(m, "on")) ? 1 : 0;
+    st->consumer = st->on ? ps_act_ring_register() : -1;   /* own ring consumer (fan-out) */
+    st->seen = ps_baseline_seen_new();
+    const char *d = getenv("PS_DETECT_BASELINE_STATE_DIR");
+    snprintf(st->state_dir, sizeof st->state_dir, "%s", (d && d[0]) ? d : "/var/lib/packetsonde/baseline");
+    ctx->userdata = st;
+    if (ctx->log) ctx->log(ctx, 6, "baseline_monitor: %s", st->on ? "on" : "off");
+    return 0;
+}
+static void bl_shutdown(ps_module_ctx_t *ctx) {
+    struct bl_state *st = ctx->userdata;
+    if (st) { ps_baseline_seen_free(st->seen); free(st); }
+}
+struct bl_emit_ctx { ps_module_ctx_t *mctx; };
+static void bl_publish(void *c, const char *json, size_t len) {
+    struct bl_emit_ctx *e = c;
+    const char *ch = strstr(json, "\"kind\":\"anomaly\"") ? "baseline.anomaly" : "baseline.candidate";
+    if (e->mctx->publish) e->mctx->publish(e->mctx, ch, json, (uint32_t)len);
+}
+static void bl_tick(ps_module_ctx_t *ctx, uint64_t now_usec) {
+    (void)now_usec;
+    struct bl_state *st = ctx->userdata;
+    if (!st || !st->on) return;
+    static char items[64][PS_ACT_ITEM_MAX];
+    int n = ps_act_ring_drain(st->consumer, items, 64);
+    struct bl_emit_ctx ec = { ctx };
+    for (int i = 0; i < n; i++)
+        ps_baseline_process_record(items[i], st->state_dir, st->seen, bl_publish, &ec);
+}
+const ps_module_t ps_baseline_monitor_module = {
+    .name = "baseline_monitor",
+    .description = "Learned per-exe behavioral baseline (hybrid learn+enforce)",
+    .version = "1.0", .flags = PS_MOD_PASSIVE,
+    .init = bl_init, .shutdown = bl_shutdown,
+    .on_packet = NULL, .on_job = NULL, .on_response = NULL, .tick = bl_tick,
+};
