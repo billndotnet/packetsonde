@@ -113,7 +113,7 @@ int ps_overwatch_learn_record(const char *rec, struct ps_unit_envelope *envs,
 #define PS_LEARN_MAX_UNITS 256
 
 struct overwatch_state {
-    int mode; void *seen;                       /* 1 overwatch, 2 learn, 0 off */
+    int mode; int consumer; void *seen;         /* 1 overwatch, 2 learn, 0 off */
     struct ps_unit_envelope *envs; int n_envs;  /* learn */
     char state_dir[256]; uint64_t last_flush_us;
 };
@@ -124,6 +124,7 @@ static int overwatch_init(ps_module_ctx_t *ctx) {
     struct overwatch_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
     st->mode = mode; st->seen = ps_overwatch_seen_new();
+    st->consumer = (mode != 0) ? ps_act_ring_register() : -1;
     if (mode == 2) {
         st->envs = calloc(PS_LEARN_MAX_UNITS, sizeof *st->envs);
         const char *d = getenv("PS_DETECT_LEARN_STATE_DIR");
@@ -168,7 +169,7 @@ static void overwatch_tick(ps_module_ctx_t *ctx, uint64_t now_usec) {
     struct overwatch_state *st = ctx->userdata;
     if (!st || st->mode == 0) return;
     static char items[64][PS_ACT_ITEM_MAX];
-    int n = ps_act_ring_drain(items, 64);
+    int n = ps_act_ring_drain(st->consumer, items, 64);
     if (st->mode == 1) {
         struct emit_ctx ec = { ctx };
         uint64_t now_sec = now_usec / 1000000ULL;
