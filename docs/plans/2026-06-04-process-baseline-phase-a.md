@@ -4,7 +4,7 @@
 
 **Goal:** A brain-side `baseline_monitor` module learns, per executable, the set of file paths it touches and — running hybrid-continuous — flags a novel path as a *candidate* finding (operator `approve`s it into the baseline or `deny`s it to a confirmed anomaly), all keyed on `process.exe`.
 
-**Architecture:** Phase A first populates `process.exe` in SP1's `proc_enrich` (a `readlink`). Then: pure libs `exe_slug`, `baseline_set` (path set + dir-prefix match + serde + rollup), `baseline_decide`; an agent `baseline_store` (per-exe load + atomic candidate append); a `baseline_monitor` module (drain ring → decide → emit/append); a `baseline` CLI verb (list/approve/deny/approve-all). Lock-free ownership: agent appends `candidates.json`, CLI writes `baseline.json`/`denials.json`, all atomic.
+**Architecture:** Phase A first makes the SP1 activity ring **multi-consumer** (fan-out) so SP2's `policy_overwatch` and SP3's `baseline_monitor` coexist, and populates `process.exe` in SP1's `proc_enrich` (a `readlink`). Then: pure libs `exe_slug`, `baseline_set` (path set + dir-prefix match + serde + rollup), `baseline_decide`; an agent `baseline_store` (per-exe load + atomic candidate append); a `baseline_monitor` module (drain its ring consumer → decide → emit/append); a `baseline` CLI verb (list/approve/deny/approve-all). Lock-free ownership: agent appends `candidates.json`, CLI writes `baseline.json`/`denials.json`, all atomic.
 
 **Tech Stack:** C11, CMake/CTest. Reuses SP1 `activity_ring`/`proc_enrich`, `ps_json_extract_string`, `ps_json` writer, the module framework, `config_to_env`, the verb-dispatch table.
 
@@ -37,7 +37,165 @@
 
 ---
 
-## Task 1: SP1 prerequisite — populate `process.exe`
+## Task 1: Activity-ring fan-out (multi-consumer)
+
+**Files:** Modify `src/agent/src/activity_ring.h`, `src/agent/src/activity_ring.c`, `src/agent/tests/test_activity_ring.c`, `src/agent/src/modules/policy_overwatch.c` (SP2 — switch to register+drain-by-id), `src/agent/CMakeLists.txt`
+
+> The SP1 ring is single-drain. Make it multi-consumer so SP2's `policy_overwatch` and SP3's `baseline_monitor` each receive every record. Each consumer registers once (gets an id) and drains its own sub-ring; `push` writes to all registered consumers.
+
+- [ ] **Step 1: Rewrite `test_activity_ring.c` for the multi-consumer API**
+
+```c
+#include "activity_ring.h"
+#include <assert.h>
+#include <string.h>
+#include <stdio.h>
+
+int main(void) {
+    ps_act_ring_init();
+    int a = ps_act_ring_register(); assert(a >= 0);
+    int b = ps_act_ring_register(); assert(b >= 0 && b != a);
+    assert(ps_act_ring_count(a) == 0);
+
+    ps_act_ring_push("{\"n\":1}", 7);
+    ps_act_ring_push("{\"n\":2}", 7);
+    /* both consumers see both records */
+    assert(ps_act_ring_count(a) == 2 && ps_act_ring_count(b) == 2);
+
+    char items[8][PS_ACT_ITEM_MAX];
+    int na = ps_act_ring_drain(a, items, 8);
+    assert(na == 2 && strstr(items[0], "\"n\":1"));
+    assert(ps_act_ring_count(a) == 0 && ps_act_ring_count(b) == 2);   /* draining a doesn't affect b */
+    int nb = ps_act_ring_drain(b, items, 8);
+    assert(nb == 2);
+
+    /* overflow per consumer */
+    for (int i = 0; i < PS_ACT_RING_CAP + 5; i++) ps_act_ring_push("{\"x\":1}", 7);
+    assert(ps_act_ring_count(a) == PS_ACT_RING_CAP);
+    printf("test_activity_ring: OK\n");
+    return 0;
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd /data/opt/repo/packetsonde/build && make test_activity_ring 2>&1 | tail -4`
+Expected: FAIL — `ps_act_ring_register` undeclared / drain signature mismatch.
+
+- [ ] **Step 3: Rewrite `src/agent/src/activity_ring.h`**
+
+```c
+#ifndef PS_ACTIVITY_RING_H
+#define PS_ACTIVITY_RING_H
+#include <stddef.h>
+
+#define PS_ACT_RING_CAP       256
+#define PS_ACT_ITEM_MAX      8192
+#define PS_ACT_MAX_CONSUMERS    8
+
+void ps_act_ring_init(void);
+int  ps_act_ring_register(void);                       /* -> consumer id >=0, or -1 if full */
+void ps_act_ring_push(const char *json, size_t len);   /* fan out to ALL registered consumers */
+int  ps_act_ring_drain(int consumer, char out_items[][PS_ACT_ITEM_MAX], int max);
+int  ps_act_ring_count(int consumer);
+#endif /* PS_ACTIVITY_RING_H */
+```
+
+- [ ] **Step 4: Rewrite `src/agent/src/activity_ring.c`**
+
+```c
+#include "activity_ring.h"
+#include <string.h>
+#include <pthread.h>
+
+struct subring {
+    char buf[PS_ACT_RING_CAP][PS_ACT_ITEM_MAX];
+    int  len[PS_ACT_RING_CAP];
+    int  head, count;
+};
+static struct subring g_sub[PS_ACT_MAX_CONSUMERS];
+static int g_n;
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+
+void ps_act_ring_init(void) {
+    pthread_mutex_lock(&g_mu);
+    g_n = 0;
+    memset(g_sub, 0, sizeof g_sub);
+    pthread_mutex_unlock(&g_mu);
+}
+
+int ps_act_ring_register(void) {
+    pthread_mutex_lock(&g_mu);
+    int id = (g_n < PS_ACT_MAX_CONSUMERS) ? g_n++ : -1;
+    pthread_mutex_unlock(&g_mu);
+    return id;
+}
+
+static void sub_push(struct subring *s, const char *json, size_t len) {
+    int tail = (s->head + s->count) % PS_ACT_RING_CAP;
+    if (s->count == PS_ACT_RING_CAP) {        /* full: drop oldest */
+        s->head = (s->head + 1) % PS_ACT_RING_CAP;
+        tail = (s->head + s->count - 1) % PS_ACT_RING_CAP;
+    } else {
+        s->count++;
+    }
+    memcpy(s->buf[tail], json, len);
+    s->buf[tail][len] = 0;
+    s->len[tail] = (int)len;
+}
+
+void ps_act_ring_push(const char *json, size_t len) {
+    if (!json || len == 0 || len >= PS_ACT_ITEM_MAX) return;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < g_n; i++) sub_push(&g_sub[i], json, len);
+    pthread_mutex_unlock(&g_mu);
+}
+
+int ps_act_ring_drain(int consumer, char out_items[][PS_ACT_ITEM_MAX], int max) {
+    if (consumer < 0 || consumer >= PS_ACT_MAX_CONSUMERS) return 0;
+    pthread_mutex_lock(&g_mu);
+    struct subring *s = &g_sub[consumer];
+    int n = 0;
+    while (n < max && s->count > 0) {
+        memcpy(out_items[n], s->buf[s->head], (size_t)s->len[s->head] + 1);
+        s->head = (s->head + 1) % PS_ACT_RING_CAP;
+        s->count--; n++;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+
+int ps_act_ring_count(int consumer) {
+    if (consumer < 0 || consumer >= PS_ACT_MAX_CONSUMERS) return 0;
+    pthread_mutex_lock(&g_mu);
+    int c = g_sub[consumer].count;
+    pthread_mutex_unlock(&g_mu);
+    return c;
+}
+```
+
+> Memory: `PS_ACT_MAX_CONSUMERS` × `PS_ACT_RING_CAP` × `PS_ACT_ITEM_MAX` = 8 × 2 MiB = 16 MiB worst case, but only `g_n` registered sub-rings are used (2 consumers = 4 MiB). Acceptable; revisit cap if more consumers register.
+
+- [ ] **Step 5: Update `policy_overwatch.c` (SP2) to register + drain by id**
+
+In `struct overwatch_state` add `int consumer;`. In `overwatch_init`, after allocating `st`, add `st->consumer = ps_act_ring_register();`. In `overwatch_tick`, change `ps_act_ring_drain(items, 64)` to `ps_act_ring_drain(st->consumer, items, 64)`.
+
+- [ ] **Step 6: Run to verify it passes + agent links**
+
+Run: `cd /data/opt/repo/packetsonde/build && cmake .. -DBUILD_TESTING=ON >/dev/null && make test_activity_ring test_overwatch_core test_overwatch_learn packetsonde-agent packetsonde-priv >/dev/null 2>&1 && ctest -R 'activity_ring|overwatch' --output-on-failure`
+Expected: PASS; binaries link.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd /data/opt/repo/packetsonde
+git add src/agent/src/activity_ring.h src/agent/src/activity_ring.c src/agent/tests/test_activity_ring.c src/agent/src/modules/policy_overwatch.c
+git commit -m "agent: make activity ring multi-consumer (fan-out); overwatch registers a consumer"
+```
+
+---
+
+## Task 2: SP1 prerequisite — populate `process.exe`
 
 **Files:** Modify `src/agent/src/proc_enrich.c`; `src/agent/tests/test_proc_enrich.c`
 
@@ -88,7 +246,7 @@ git commit -m "agent: populate process.exe in proc_enrich (readlink /proc/<pid>/
 
 ---
 
-## Task 2: `exe_slug` (`src/lib/exe_slug`)
+## Task 3: `exe_slug` (`src/lib/exe_slug`)
 
 **Files:** Create `src/lib/exe_slug.h`, `src/lib/exe_slug.c`; Test `src/lib/tests/test_exe_slug.c`; Modify `src/lib/CMakeLists.txt`
 
@@ -171,7 +329,7 @@ git commit -m "lib: add exe_slug (executable path -> filename slug)"
 
 ---
 
-## Task 3: `baseline_set` (`src/lib/baseline_set`)
+## Task 4: `baseline_set` (`src/lib/baseline_set`)
 
 **Files:** Create `src/lib/baseline_set.h`, `src/lib/baseline_set.c`; Test `src/lib/tests/test_baseline_set.c`; Modify `src/lib/CMakeLists.txt`
 
@@ -337,7 +495,7 @@ git commit -m "lib: add baseline_set (path set, dir-prefix match, serde, rollup)
 
 ---
 
-## Task 4: `baseline_decide` (`src/lib/baseline_decide`)
+## Task 5: `baseline_decide` (`src/lib/baseline_decide`)
 
 **Files:** Create `src/lib/baseline_decide.h`, `src/lib/baseline_decide.c`; Test `src/lib/tests/test_baseline_decide.c`; Modify `src/lib/CMakeLists.txt`
 
@@ -412,7 +570,7 @@ git commit -m "lib: add baseline_decide (covered/anomaly/novel verdict)"
 
 ---
 
-## Task 5: `baseline_store` (`src/agent/src/baseline_store`)
+## Task 6: `baseline_store` (`src/agent/src/baseline_store`)
 
 **Files:** Create `src/agent/src/baseline_store.h`, `src/agent/src/baseline_store.c`; Test `src/agent/tests/test_baseline_store.c`; Modify `src/agent/CMakeLists.txt`
 
@@ -556,7 +714,7 @@ git commit -m "agent: add baseline_store (per-exe load + atomic candidate append
 
 ---
 
-## Task 6: `baseline_monitor` module (core + wiring + config)
+## Task 7: `baseline_monitor` module (core + wiring + config)
 
 **Files:** Create `src/agent/src/modules/baseline_monitor.h`, `src/agent/src/modules/baseline_monitor.c`; Test `src/agent/tests/test_baseline_monitor.c`; Modify `src/agent/src/config_to_env.c`, `src/agent/src/main.c`, `src/agent/CMakeLists.txt`, `packaging/packetsonded.toml`
 
@@ -712,13 +870,14 @@ int ps_baseline_process_record(const char *rec, const char *state_dir, void *see
 #include "module.h"
 #include "activity_ring.h"
 
-struct bl_state { int on; void *seen; char state_dir[256]; };
+struct bl_state { int on; int consumer; void *seen; char state_dir[256]; };
 
 static int bl_init(ps_module_ctx_t *ctx) {
     const char *m = getenv("PS_DETECT_BASELINE_MODE");
     struct bl_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
     st->on = (m && !strcmp(m, "on")) ? 1 : 0;
+    st->consumer = st->on ? ps_act_ring_register() : -1;   /* own ring consumer (fan-out) */
     st->seen = ps_baseline_seen_new();
     const char *d = getenv("PS_DETECT_BASELINE_STATE_DIR");
     snprintf(st->state_dir, sizeof st->state_dir, "%s", (d && d[0]) ? d : "/var/lib/packetsonde/baseline");
@@ -741,7 +900,7 @@ static void bl_tick(ps_module_ctx_t *ctx, uint64_t now_usec) {
     struct bl_state *st = ctx->userdata;
     if (!st || !st->on) return;
     static char items[64][PS_ACT_ITEM_MAX];
-    int n = ps_act_ring_drain(items, 64);
+    int n = ps_act_ring_drain(st->consumer, items, 64);
     struct bl_emit_ctx ec = { ctx };
     for (int i = 0; i < n; i++)
         ps_baseline_process_record(items[i], st->state_dir, st->seen, bl_publish, &ec);
@@ -755,7 +914,7 @@ const ps_module_t ps_baseline_monitor_module = {
 };
 ```
 
-> NOTE: only ONE module may drain the ring destructively. `policy_overwatch` already drains it. **Both `policy_overwatch` and `baseline_monitor` calling `ps_act_ring_drain` will each get only a fraction of records** (whoever ticks first wins each item). For Phase A, gate so they don't both run: document that `baseline_mode=on` and `policy_mode!=off` together is unsupported (the ring has a single consumer); the module logs a warning if both are enabled. (A shared fan-out is a follow-up — see Self-Review.)
+> The ring is multi-consumer (Task 1 fan-out): `baseline_monitor` registers its own consumer in `bl_init` and drains it in `bl_tick`, so it and `policy_overwatch` can run simultaneously, each seeing every record.
 
 - [ ] **Step 6: Config + registration + cmake + toml**
 
@@ -784,7 +943,7 @@ add_test(NAME test_baseline_monitor COMMAND test_baseline_monitor)
 ```
 `packaging/packetsonded.toml` — append to `[detect]`:
 ```toml
-baseline_mode      = "off"     # off | on  (hybrid learn+enforce, keyed by exe; single ring consumer — do not run with policy_mode!=off)
+baseline_mode      = "off"     # off | on  (hybrid learn+enforce, keyed by exe; runs alongside policy_mode via the ring fan-out)
 baseline_state_dir = "/var/lib/packetsonde/baseline"
 baseline_reload    = "10"      # seconds between baseline/denials reloads (reserved; v1 loads per-record)
 ```
@@ -806,7 +965,7 @@ git commit -m "agent: baseline_monitor module (hybrid learn+enforce, file signal
 
 ---
 
-## Task 7: `baseline` CLI verb
+## Task 8: `baseline` CLI verb
 
 **Files:** Create `src/cli/verbs/baseline.c`; Modify `src/cli/dispatch.c`, `src/cli/CMakeLists.txt`
 
@@ -929,7 +1088,7 @@ git commit -m "cli: add 'baseline' verb (list/approve/deny/approve-all per-exe b
 
 ---
 
-## Task 8: Assisted live test
+## Task 9: Assisted live test
 
 **Files:** Create `scripts/test-baseline.sh`
 
@@ -975,18 +1134,19 @@ git commit -m "Add assisted live test for the learned per-exe baseline"
 ## Self-Review
 
 **Spec coverage (Phase A, spec §11):**
-- SP1 `exe` prereq → Task 1 ✓
-- exe-keying / `exe_slug` → Task 2 ✓
-- `baseline_set` (dir-prefix match, serde, rollup) → Task 3 ✓
-- `baseline_decide` (covered/anomaly/novel) → Task 4 ✓
-- `baseline_store` (load + atomic candidate append, ownership §8) → Task 5 ✓
-- `baseline_monitor` hybrid flow (covered→silent, denied→anomaly, novel→candidate+append, dedup) + config → Task 6 ✓
-- `baseline` verb (list/approve/deny/approve-all + rollup) → Task 7 ✓
+- Ring fan-out (multi-consumer so SP2+SP3 coexist) → Task 1 ✓
+- SP1 `exe` prereq → Task 2 ✓
+- exe-keying / `exe_slug` → Task 3 ✓
+- `baseline_set` (dir-prefix match, serde, rollup) → Task 4 ✓
+- `baseline_decide` (covered/anomaly/novel) → Task 5 ✓
+- `baseline_store` (load + atomic candidate append, ownership §8) → Task 6 ✓
+- `baseline_monitor` hybrid flow (covered→silent, denied→anomaly, novel→candidate+append, dedup) + config → Task 7 ✓
+- `baseline` verb (list/approve/deny/approve-all + rollup) → Task 8 ✓
 
-**Known gap / accepted for Phase A:** the SP1 ring has a **single destructive consumer**. `policy_overwatch` (SP2) and `baseline_monitor` (SP3) both `ps_act_ring_drain` — running both at once splits records between them. Phase A documents "baseline_mode=on requires policy_mode=off" and logs it; a proper **ring fan-out / multi-consumer** (or a second ring) is a fast-follow tracked here, not built in Phase A. (Per-record `ps_baseline_load` file I/O is also unoptimized; the `baseline_reload` cache is reserved for a follow-up.)
+**Known limitation / accepted for Phase A:** per-record `ps_baseline_load` does file I/O (the `baseline_reload` cache is reserved for a follow-up; the small JSON files are OS-page-cached, so the cost is bounded). The fan-out (Task 1) caps at `PS_ACT_MAX_CONSUMERS` (8) and the per-consumer memory grows with registered consumers — fine for the 2 current consumers.
 
-**Placeholder scan:** no TBD/"add error handling"; every code step complete; the single-consumer limitation is stated explicitly rather than hand-waved.
+**Placeholder scan:** no TBD/"add error handling"; every code step complete.
 
-**Type/name consistency:** `ps_exe_slug` (2,5,6,7); `struct ps_baseline_set`/`ps_blset_*` (3,5,6,7); `ps_baseline_decide`/`PS_BL_*` (4,6); `ps_baseline_load`/`ps_baseline_append_candidate` (5,6); `ps_baseline_process_record`/`ps_baseline_seen_*`/`ps_baseline_monitor_module` (6); `ps_verb_baseline_run`/`baseline` (7); config `PS_DETECT_BASELINE_MODE/_STATE_DIR/_RELOAD` (6); state files `baseline.json`/`candidates.json`/`denials.json` + finding `kind` `candidate`/`anomaly` consistent across 5,6,7.
+**Type/name consistency:** `ps_act_ring_register`/`ps_act_ring_drain(consumer,…)` (1,7); `ps_exe_slug` (3,6,7,8); `struct ps_baseline_set`/`ps_blset_*` (4,6,7,8); `ps_baseline_decide`/`PS_BL_*` (5,7); `ps_baseline_load`/`ps_baseline_append_candidate` (6,7); `ps_baseline_process_record`/`ps_baseline_seen_*`/`ps_baseline_monitor_module` (7); `ps_verb_baseline_run`/`baseline` (8); config `PS_DETECT_BASELINE_MODE/_STATE_DIR/_RELOAD` (7); state files `baseline.json`/`candidates.json`/`denials.json` + finding `kind` `candidate`/`anomaly` consistent across 6,7,8.
 
-**Deferred to Phase B/C:** network-dest + process-spawn signals; the ring fan-out; the reload cache; statistical scoring.
+**Deferred to Phase B/C:** network-dest + process-spawn signals; the reload cache; statistical scoring.
