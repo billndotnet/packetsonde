@@ -78,6 +78,9 @@ set(CLI_SOURCES
 )
 
 add_executable(packetsonde ${CLI_SOURCES})
+# Version comes from the root project (single source of truth). verbs/version.c
+# uses this define; without it, it falls back to a 0.0.0-dev sentinel.
+target_compile_definitions(packetsonde PRIVATE PS_VERSION="${PROJECT_VERSION}")
 target_include_directories(packetsonde PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/psctl

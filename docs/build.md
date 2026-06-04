@@ -24,6 +24,33 @@ location (CI, clean rebuilds, multiple targets in parallel).
 
 ---
 
+## Build version
+
+The build version (`X.Y.Z`, e.g. `0.1.1`) is what `packetsonde version`
+and the `packetsonded` startup banner report. It is **separate** from the
+`vN.N` milestone tags in `CHANGELOG.md` — those mark feature releases; the
+build version identifies the binary.
+
+**Single source of truth:** `set(PS_VERSION_STR "X.Y.Z")` at the top of the
+root `CMakeLists.txt`. The root and agent `project()` calls both consume it,
+and the CLI target gets it as `-DPS_VERSION` — so the CLI, agent, and
+privilege-separated worker always report the same string. Do not edit the
+version anywhere else.
+
+**Dev-push policy:** bump the **patch (3rd) value** on every build you push
+to the fleet. Binaries are deployed by hash (salt `file.managed`), so an
+unchanged version string makes it impossible to confirm a host actually
+took the new binary — bumping the patch makes the swap verifiable:
+
+```
+sudo salt '<host>' cmd.run '/usr/local/bin/packetsonde version'
+```
+
+should report the patch you just pushed. Reserve minor/major bumps for
+feature milestones; routine dev/deploy builds only move the patch.
+
+---
+
 ## macOS
 
 Tested on Apple Silicon and Intel, macOS 12+. Apple ships libedit; the

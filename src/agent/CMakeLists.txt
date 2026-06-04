@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(packetsonde-agent VERSION 0.1.0 LANGUAGES C)
+# Version inherited from the root project (PS_VERSION_STR). Building the agent
+# subdir standalone falls back to 0.1.0; the top-level build is authoritative.
+if(NOT DEFINED PS_VERSION_STR)
+    set(PS_VERSION_STR "0.1.0")
+endif()
+project(packetsonde-agent VERSION ${PS_VERSION_STR} LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

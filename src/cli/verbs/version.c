@@ -2,8 +2,11 @@
 
 #include <stdio.h>
 
+/* PS_VERSION is injected by CMake (-DPS_VERSION="x.y.z") from the root
+ * project version. The sentinel below only shows if this file is built
+ * outside the CMake project, which makes that mistake obvious. */
 #ifndef PS_VERSION
-#define PS_VERSION "0.1.0"
+#define PS_VERSION "0.0.0-dev"
 #endif
 
 int ps_verb_version_run(int argc, char **argv, const struct ps_args *opts) {
