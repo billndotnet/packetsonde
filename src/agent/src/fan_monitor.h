@@ -16,4 +16,9 @@ int ps_fan_build_record(const char *proc_root, int pid, const char *path,
 struct ps_fan_cfg { const char *watch_paths; const char *suppress; int max_depth; int max_events_ps; };
 int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
                        void (*emit)(const char *json, size_t len, void *ctx), void *ctx);
+
+/* Map a fanotify event mask to the activity-record event string and read-ness.
+ * Precedence: exec > write > access > open. *is_read is 0 for exec/write
+ * (never suppressed), 1 for access/open. */
+const char *ps_fan_event_for_mask(unsigned long long mask, int *is_read);
 #endif /* PS_FAN_MONITOR_H */

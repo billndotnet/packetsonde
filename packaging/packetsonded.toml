@@ -79,5 +79,7 @@ suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/
 max_depth      = "16"           # ancestry-walk cap
 max_events_ps  = "2000"         # global events/sec cap (drop + count over)
 # sink = "/var/lib/packetsonde/activity.jsonl"   # where collected records are written
+policy_mode      = "off"     # off | overwatch  (learn mode lands in Phase B)
+policy_cache_ttl = "300"     # overwatch: per-unit systemctl-show cache seconds
 # A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
 # watch_paths) so any execve is caught — see the spec Detection-boundary section.

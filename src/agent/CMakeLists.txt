@@ -98,6 +98,7 @@ set(AGENT_CORE_SOURCES
     src/modules/vrrp_listener.c
     src/modules/broadcast_listener.c
     src/modules/iface_monitor.c
+    src/modules/policy_overwatch.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
     src/modules/network_listener.c
@@ -369,6 +370,20 @@ target_include_directories(test_fan_build PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_fan_build PRIVATE packetsonde_lib)
 add_test(NAME test_fan_build COMMAND test_fan_build)
+
+add_executable(test_fan_event tests/test_fan_event.c
+    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+target_include_directories(test_fan_event PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_fan_event PRIVATE packetsonde_lib)
+add_test(NAME test_fan_event COMMAND test_fan_event)
+
+add_executable(test_overwatch_core tests/test_overwatch_core.c
+    src/modules/policy_overwatch.c src/activity_ring.c)
+target_include_directories(test_overwatch_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+target_link_libraries(test_overwatch_core PRIVATE packetsonde_lib pthread)
+add_test(NAME test_overwatch_core COMMAND test_overwatch_core)
 
 include(GNUInstallDirs)
 
