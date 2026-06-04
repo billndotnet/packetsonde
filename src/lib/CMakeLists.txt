@@ -26,6 +26,7 @@ add_library(packetsonde_lib STATIC
     cgroup_unit.c
     systemd_policy.c
     policy_eval.c
+    unit_envelope.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -130,4 +131,8 @@ if(BUILD_TESTING)
     add_executable(test_policy_eval tests/test_policy_eval.c)
     target_link_libraries(test_policy_eval PRIVATE packetsonde_lib)
     add_test(NAME test_policy_eval COMMAND test_policy_eval)
+
+    add_executable(test_unit_envelope tests/test_unit_envelope.c)
+    target_link_libraries(test_unit_envelope PRIVATE packetsonde_lib)
+    add_test(NAME test_unit_envelope COMMAND test_unit_envelope)
 endif()
