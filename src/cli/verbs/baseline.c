@@ -51,7 +51,7 @@ int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
         else if (!sub) sub = argv[i];
         else if (!entry) entry = argv[i];
     }
-    if (!exe || !sub) { fprintf(stderr, "usage: packetsonde baseline <exe> list|approve <e>|deny <e>|approve-all|approve-dest <r> [--as host|port|cidr/N]|deny-dest <r> [--state-dir D] [--threshold N]\n"); return 2; }
+    if (!exe || !sub) { fprintf(stderr, "usage: packetsonde baseline <exe> list|approve <e>|deny <e>|approve-all|approve-dest <r> [--as host|port|cidr/N]|deny-dest <r>|approve-parent <comm>|deny-parent <comm> [--state-dir D] [--threshold N]\n"); return 2; }
     char slug[256]; if (ps_exe_slug(exe, slug, sizeof slug) != 0) { fprintf(stderr,"bad exe\n"); return 2; }
 
     struct ps_baseline_set bl, cand, den;
@@ -62,6 +62,10 @@ int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
     load_key(dir, slug, "dests.json", "dests", exe, &dbl);
     load_key(dir, slug, "dest-candidates.json", "dests", exe, &dcand);
     load_key(dir, slug, "dest-denials.json", "dests", exe, &dden);
+    struct ps_baseline_set pbl, pcand, pden;
+    load_key(dir, slug, "parents.json", "parents", exe, &pbl);
+    load_key(dir, slug, "parent-candidates.json", "parents", exe, &pcand);
+    load_key(dir, slug, "parent-denials.json", "parents", exe, &pden);
 
     if (!strcmp(sub, "list")) {
         printf("exe: %s\nbaseline (%d):\n", exe, bl.n);
@@ -73,6 +77,9 @@ int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
         printf("dests baseline (%d):\n", dbl.n);   for (int i=0;i<dbl.n;i++) printf("  %s\n", dbl.path[i]);
         printf("dest candidates (%d):\n", dcand.n); for (int i=0;i<dcand.n;i++) printf("  %s\n", dcand.path[i]);
         printf("dest denials (%d):\n", dden.n);     for (int i=0;i<dden.n;i++) printf("  %s\n", dden.path[i]);
+        printf("parents baseline (%d):\n", pbl.n);   for (int i=0;i<pbl.n;i++) printf("  %s\n", pbl.path[i]);
+        printf("parent candidates (%d):\n", pcand.n); for (int i=0;i<pcand.n;i++) printf("  %s\n", pcand.path[i]);
+        printf("parent denials (%d):\n", pden.n);     for (int i=0;i<pden.n;i++) printf("  %s\n", pden.path[i]);
         return 0;
     }
     if (!strcmp(sub, "approve-all")) {
@@ -83,7 +90,10 @@ int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
         for (int i=0;i<dcand.n;i++) ps_blset_add(&dbl, dcand.path[i]);
         dcand.n = 0;
         save_key(dir, slug, "dests.json", "dests", &dbl); save_key(dir, slug, "dest-candidates.json", "dests", &dcand);
-        printf("approved all; baseline now %d paths, %d dests\n", bl.n, dbl.n); return 0;
+        for (int i=0;i<pcand.n;i++) ps_blset_add(&pbl, pcand.path[i]);
+        pcand.n = 0;
+        save_key(dir, slug, "parents.json", "parents", &pbl); save_key(dir, slug, "parent-candidates.json", "parents", &pcand);
+        printf("approved all; baseline now %d paths, %d dests, %d parents\n", bl.n, dbl.n, pbl.n); return 0;
     }
     if (!strcmp(sub, "approve-dest")) {
         if (!entry) { fprintf(stderr, "approve-dest needs a <raddr>\n"); return 2; }
@@ -97,6 +107,18 @@ int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
         ps_blset_add(&dden, entry); remove_entry(&dcand, entry);
         save_key(dir, slug, "dest-denials.json", "dests", &dden); save_key(dir, slug, "dest-candidates.json", "dests", &dcand);
         printf("denied dest %s\n", entry); return 0;
+    }
+    if (!strcmp(sub, "approve-parent")) {
+        if (!entry) { fprintf(stderr, "approve-parent needs a <comm>\n"); return 2; }
+        ps_blset_add(&pbl, entry); remove_entry(&pcand, entry);
+        save_key(dir, slug, "parents.json", "parents", &pbl); save_key(dir, slug, "parent-candidates.json", "parents", &pcand);
+        printf("approved parent %s\n", entry); return 0;
+    }
+    if (!strcmp(sub, "deny-parent")) {
+        if (!entry) { fprintf(stderr, "deny-parent needs a <comm>\n"); return 2; }
+        ps_blset_add(&pden, entry); remove_entry(&pcand, entry);
+        save_key(dir, slug, "parent-denials.json", "parents", &pden); save_key(dir, slug, "parent-candidates.json", "parents", &pcand);
+        printf("denied parent %s\n", entry); return 0;
     }
     if (!entry) { fprintf(stderr, "approve/deny need an <entry>\n"); return 2; }
     if (!strcmp(sub, "approve")) {
