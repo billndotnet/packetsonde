@@ -15,6 +15,7 @@ set(CLI_SOURCES
     verbs/collect.c
     verbs/recipe.c
     verbs/watch.c
+    verbs/sandbox_suggest.c
     recipe/runner.c
     ../agent/src/config.c
     remote/audit_via.c

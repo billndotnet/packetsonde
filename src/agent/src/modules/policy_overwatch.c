@@ -89,23 +89,73 @@ int ps_overwatch_process_record(const char *rec, ps_unit_policy_loader loader,
     return n;
 }
 
-/* --- module wiring --- */
+int ps_overwatch_learn_record(const char *rec, struct ps_unit_envelope *envs,
+                              int *n_envs, int max_envs) {
+    char event[16], path[512], cgroup[256];
+    if (ps_json_extract_string(rec, "event", event, sizeof event) < 0) return -1;
+    if (ps_json_extract_string(rec, "path",  path,  sizeof path)  < 0) return -1;
+    if (ps_json_extract_string(rec, "cgroup", cgroup, sizeof cgroup) < 0) return -1;
+    char unit[128];
+    if (ps_cgroup_to_unit(cgroup, unit, sizeof unit) != 0) return -1;
+    int idx = -1;
+    for (int i = 0; i < *n_envs; i++) if (!strcmp(envs[i].unit, unit)) { idx = i; break; }
+    if (idx < 0) {
+        if (*n_envs >= max_envs) return -1;
+        idx = (*n_envs)++;
+        ps_envelope_init(&envs[idx], unit);
+    }
+    ps_envelope_add(&envs[idx], event, path);
+    return idx;
+}
 
-struct overwatch_state { int mode; void *seen; };   /* mode: 0 off, 1 overwatch */
+/* --- module wiring --- */
+#include <sys/stat.h>
+#define PS_LEARN_MAX_UNITS 256
+
+struct overwatch_state {
+    int mode; void *seen;                       /* 1 overwatch, 2 learn, 0 off */
+    struct ps_unit_envelope *envs; int n_envs;  /* learn */
+    char state_dir[256]; uint64_t last_flush_us;
+};
 
 static int overwatch_init(ps_module_ctx_t *ctx) {
     const char *m = getenv("PS_DETECT_POLICY_MODE");
-    int mode = (m && strcmp(m, "overwatch") == 0) ? 1 : 0;
+    int mode = (m && !strcmp(m, "learn")) ? 2 : (m && !strcmp(m, "overwatch")) ? 1 : 0;
     struct overwatch_state *st = calloc(1, sizeof *st);
     if (!st) return -1;
     st->mode = mode; st->seen = ps_overwatch_seen_new();
+    if (mode == 2) {
+        st->envs = calloc(PS_LEARN_MAX_UNITS, sizeof *st->envs);
+        const char *d = getenv("PS_DETECT_LEARN_STATE_DIR");
+        snprintf(st->state_dir, sizeof st->state_dir, "%s",
+                 (d && d[0]) ? d : "/var/lib/packetsonde/sandbox-learn");
+        mkdir(st->state_dir, 0700);   /* best-effort; ignore EEXIST */
+    }
     ctx->userdata = st;
-    if (ctx->log) ctx->log(ctx, 6, "policy_overwatch: mode=%s", mode ? "overwatch" : "off");
+    if (ctx->log) ctx->log(ctx, 6, "policy_overwatch: mode=%s",
+                           mode == 2 ? "learn" : mode == 1 ? "overwatch" : "off");
     return 0;
 }
+
+static void learn_flush(struct overwatch_state *st) {
+    for (int i = 0; i < st->n_envs; i++) {
+        char buf[1 << 16];
+        if (ps_envelope_to_json(&st->envs[i], buf, sizeof buf) <= 0) continue;
+        char path[400];
+        snprintf(path, sizeof path, "%s/%s.json", st->state_dir, st->envs[i].unit);
+        FILE *f = fopen(path, "w");
+        if (!f) continue;
+        fwrite(buf, 1, strlen(buf), f);
+        fclose(f);
+    }
+}
+
 static void overwatch_shutdown(ps_module_ctx_t *ctx) {
     struct overwatch_state *st = ctx->userdata;
-    if (st) { ps_overwatch_seen_free(st->seen); free(st); }
+    if (!st) return;
+    if (st->mode == 2) { learn_flush(st); free(st->envs); }
+    ps_overwatch_seen_free(st->seen);
+    free(st);
 }
 
 struct emit_ctx { ps_module_ctx_t *mctx; };
@@ -116,14 +166,24 @@ static void publish_emit(void *c, const char *json, size_t len) {
 
 static void overwatch_tick(ps_module_ctx_t *ctx, uint64_t now_usec) {
     struct overwatch_state *st = ctx->userdata;
-    if (!st || st->mode != 1) return;
+    if (!st || st->mode == 0) return;
     static char items[64][PS_ACT_ITEM_MAX];
     int n = ps_act_ring_drain(items, 64);
-    struct emit_ctx ec = { ctx };
-    uint64_t now_sec = now_usec / 1000000ULL;
+    if (st->mode == 1) {
+        struct emit_ctx ec = { ctx };
+        uint64_t now_sec = now_usec / 1000000ULL;
+        for (int i = 0; i < n; i++)
+            ps_overwatch_process_record(items[i], ps_unit_policy_load_systemctl,
+                                        st->seen, publish_emit, &ec, now_sec);
+        return;
+    }
+    /* mode 2: learn */
     for (int i = 0; i < n; i++)
-        ps_overwatch_process_record(items[i], ps_unit_policy_load_systemctl,
-                                    st->seen, publish_emit, &ec, now_sec);
+        ps_overwatch_learn_record(items[i], st->envs, &st->n_envs, PS_LEARN_MAX_UNITS);
+    if (now_usec - st->last_flush_us > 10000000ULL) {   /* flush ~every 10s */
+        learn_flush(st);
+        st->last_flush_us = now_usec;
+    }
 }
 
 const ps_module_t ps_policy_overwatch_module = {

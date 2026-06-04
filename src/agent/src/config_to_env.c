@@ -64,6 +64,8 @@ static const struct mapping MAPPINGS[] = {
     { "detect", "sink",           "PS_DETECT_SINK" },
     { "detect", "policy_mode",      "PS_DETECT_POLICY_MODE" },
     { "detect", "policy_cache_ttl", "PS_DETECT_POLICY_CACHE_TTL" },
+    { "detect", "learn_state_dir",  "PS_DETECT_LEARN_STATE_DIR" },
+    { "detect", "rollup_threshold", "PS_DETECT_ROLLUP_THRESHOLD" },
 
     { NULL, NULL, NULL }
 };
