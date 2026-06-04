@@ -10,4 +10,8 @@ int ps_baseline_append_candidate(const char *state_dir, const char *exe, const c
 int ps_baseline_load_dests(const char *state_dir, const char *exe,
                            struct ps_baseline_set *baseline, struct ps_baseline_set *denials);
 int ps_baseline_append_dest_candidate(const char *state_dir, const char *exe, const char *dest);
+/* Process spawning (Phase C): parallel parent*.json files, key "parents". */
+int ps_baseline_load_parents(const char *state_dir, const char *exe,
+                             struct ps_baseline_set *baseline, struct ps_baseline_set *denials);
+int ps_baseline_append_parent_candidate(const char *state_dir, const char *exe, const char *parent_comm);
 #endif

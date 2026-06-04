@@ -38,6 +38,19 @@ int main(void) {
     struct ps_baseline_set dc; assert(ps_blset_from_json_key(dj, "dests", &dc) == 0);
     assert(dc.n == 2);
 
+    /* parent store: load empty, append two (dedup), read back under "parents" key */
+    struct ps_baseline_set pbl, pden;
+    assert(ps_baseline_load_parents(dir, exe, &pbl, &pden) == 0);
+    assert(pbl.n == 0 && pden.n == 0);
+    assert(ps_baseline_append_parent_candidate(dir, exe, "bash") == 0);
+    assert(ps_baseline_append_parent_candidate(dir, exe, "bash") == 0);
+    assert(ps_baseline_append_parent_candidate(dir, exe, "sshd") == 0);
+    char ppath[600]; snprintf(ppath, sizeof ppath, "%s/%s/parent-candidates.json", dir, slug);
+    FILE *pf = fopen(ppath, "r"); assert(pf);
+    static char pj[8192]; size_t pn2 = fread(pj,1,sizeof pj-1,pf); fclose(pf); pj[pn2]=0;
+    struct ps_baseline_set pc; assert(ps_blset_from_json_key(pj, "parents", &pc) == 0);
+    assert(pc.n == 2);
+
     printf("test_baseline_store: OK\n");
     return 0;
 }

@@ -58,6 +58,37 @@ static void emit_dest_finding(void (*emit)(void *, const char *, size_t), void *
     if (ps_json_finish(&j) > 0 && emit) emit(ctx, buf, (size_t)j.len);
 }
 
+/* the immediate parent comm = first "comm":"..." after "ancestry":[  (empty if none) */
+static void extract_parent_comm(const char *rec, char *out, size_t cap) {
+    out[0] = 0;
+    const char *a = strstr(rec, "\"ancestry\":[");
+    if (!a) return;
+    const char *c = strstr(a, "\"comm\":\"");
+    if (!c) return;
+    c += 8;
+    const char *e = strchr(c, '"');
+    if (!e) return;
+    size_t n = (size_t)(e - c); if (n >= cap) n = cap - 1;
+    memcpy(out, c, n); out[n] = 0;
+}
+
+/* emit a finding for a spawn parent of the given kind. */
+static void emit_spawn_finding(void (*emit)(void *, const char *, size_t), void *ctx,
+                               const char *kind, const char *exe, const char *parent, const char *comm) {
+    char buf[2048]; struct ps_json j; ps_json_init(&j, buf, sizeof buf);
+    ps_json_object_begin(&j);
+    ps_json_key_string(&j, "source", "agent.baseline_monitor");
+    ps_json_key_string(&j, "severity", !strcmp(kind,"anomaly") ? "high" : "info");
+    ps_json_key_string(&j, "confidence", !strcmp(kind,"anomaly") ? "firm" : "tentative");
+    ps_json_key_string(&j, "kind", kind);
+    ps_json_key_string(&j, "signal", "spawn");
+    ps_json_key_string(&j, "exe", exe);
+    ps_json_key_string(&j, "parent", parent);
+    ps_json_key_string(&j, "comm", comm);
+    ps_json_object_end(&j);
+    if (ps_json_finish(&j) > 0 && emit) emit(ctx, buf, (size_t)j.len);
+}
+
 int ps_baseline_process_record(const char *rec, const char *state_dir, void *seenv,
                                void (*emit)(void *, const char *, size_t), void *ectx) {
     struct bl_seen *seen = seenv;
@@ -100,6 +131,22 @@ int ps_baseline_process_record(const char *rec, const char *state_dir, void *see
         if (dv == PS_BL_ANOMALY) { emit_dest_finding(emit, ectx, "anomaly", exe, raddr, comm); n++; }
         else { ps_baseline_append_dest_candidate(state_dir, exe, raddr);
                emit_dest_finding(emit, ectx, "candidate", exe, raddr, comm); n++; }
+    }
+
+    /* process-spawn signal: the immediate parent comm */
+    char parent[64]; extract_parent_comm(rec, parent, sizeof parent);
+    if (parent[0]) {
+        struct ps_baseline_set pbl, pden;
+        ps_baseline_load_parents(state_dir, exe, &pbl, &pden);
+        enum ps_bl_verdict pv = ps_baseline_decide(&pbl, &pden, parent);   /* covered == exact for comms */
+        if (pv != PS_BL_COVERED) {
+            char pkey[384]; snprintf(pkey, sizeof pkey, "%s|P|%s", exe, parent);
+            if (!seen_add(seen, pkey)) {
+                if (pv == PS_BL_ANOMALY) { emit_spawn_finding(emit, ectx, "anomaly", exe, parent, comm); n++; }
+                else { ps_baseline_append_parent_candidate(state_dir, exe, parent);
+                       emit_spawn_finding(emit, ectx, "candidate", exe, parent, comm); n++; }
+            }
+        }
     }
     return n;
 }
