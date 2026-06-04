@@ -79,7 +79,10 @@ suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/
 max_depth      = "16"           # ancestry-walk cap
 max_events_ps  = "2000"         # global events/sec cap (drop + count over)
 # sink = "/var/lib/packetsonde/activity.jsonl"   # where collected records are written
-policy_mode      = "off"     # off | overwatch  (learn mode lands in Phase B)
+policy_mode      = "off"     # off | overwatch | learn
 policy_cache_ttl = "300"     # overwatch: per-unit systemctl-show cache seconds
+# learn (dev/staging): accumulate per-unit envelopes for `packetsonde sandbox-suggest <unit>`
+learn_state_dir  = "/var/lib/packetsonde/sandbox-learn"
+rollup_threshold = "3"       # synth: distinct files/dir before rolling up to the dir rule
 # A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
 # watch_paths) so any execve is caught — see the spec Detection-boundary section.
