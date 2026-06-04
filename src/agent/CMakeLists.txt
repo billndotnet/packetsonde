@@ -99,6 +99,7 @@ set(AGENT_CORE_SOURCES
     src/modules/broadcast_listener.c
     src/modules/iface_monitor.c
     src/modules/policy_overwatch.c
+    src/modules/baseline_monitor.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
     src/modules/network_listener.c
@@ -398,6 +399,13 @@ target_include_directories(test_baseline_store PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(test_baseline_store PRIVATE packetsonde_lib)
 add_test(NAME test_baseline_store COMMAND test_baseline_store)
+
+add_executable(test_baseline_monitor tests/test_baseline_monitor.c
+    src/modules/baseline_monitor.c src/baseline_store.c src/activity_ring.c)
+target_include_directories(test_baseline_monitor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+target_link_libraries(test_baseline_monitor PRIVATE packetsonde_lib pthread)
+add_test(NAME test_baseline_monitor COMMAND test_baseline_monitor)
 
 include(GNUInstallDirs)
 

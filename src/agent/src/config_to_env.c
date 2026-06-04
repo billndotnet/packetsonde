@@ -66,6 +66,9 @@ static const struct mapping MAPPINGS[] = {
     { "detect", "policy_cache_ttl", "PS_DETECT_POLICY_CACHE_TTL" },
     { "detect", "learn_state_dir",  "PS_DETECT_LEARN_STATE_DIR" },
     { "detect", "rollup_threshold", "PS_DETECT_ROLLUP_THRESHOLD" },
+    { "detect", "baseline_mode",      "PS_DETECT_BASELINE_MODE" },
+    { "detect", "baseline_state_dir", "PS_DETECT_BASELINE_STATE_DIR" },
+    { "detect", "baseline_reload",    "PS_DETECT_BASELINE_RELOAD" },
 
     { NULL, NULL, NULL }
 };

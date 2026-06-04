@@ -84,5 +84,9 @@ policy_cache_ttl = "300"     # overwatch: per-unit systemctl-show cache seconds
 # learn (dev/staging): accumulate per-unit envelopes for `packetsonde sandbox-suggest <unit>`
 learn_state_dir  = "/var/lib/packetsonde/sandbox-learn"
 rollup_threshold = "3"       # synth: distinct files/dir before rolling up to the dir rule
+# SP3 learned per-exe baseline (hybrid learn+enforce; runs alongside policy_mode via the ring fan-out)
+baseline_mode      = "off"     # off | on
+baseline_state_dir = "/var/lib/packetsonde/baseline"
+baseline_reload    = "10"      # seconds between baseline/denials reloads (reserved; v1 loads per-record)
 # A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
 # watch_paths) so any execve is caught — see the spec Detection-boundary section.
