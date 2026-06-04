@@ -43,6 +43,26 @@ int main(void) {
     /* empty exe -> skipped */
     ps_baseline_process_record(REC("","/y"), dir, seen, emit, NULL);
     assert(g_emits == 2);
+
+    /* --- dest signal: seed a dest baseline (10/8) + denial (6.6.6.6) --- */
+    {
+        struct ps_baseline_set dbl; ps_blset_init(&dbl, exe); ps_blset_add(&dbl, "10.0.0.0/8");
+        struct ps_baseline_set dden; ps_blset_init(&dden, exe); ps_blset_add(&dden, "6.6.6.6");
+        snprintf(p,sizeof p,"%s/dests.json",sub);        f=fopen(p,"w"); ps_blset_to_json_key(&dbl,"dests",j,sizeof j); fputs(j,f); fclose(f);
+        snprintf(p,sizeof p,"%s/dest-denials.json",sub); f=fopen(p,"w"); ps_blset_to_json_key(&dden,"dests",j,sizeof j); fputs(j,f); fclose(f);
+        char b[2048]; int e0 = g_emits;
+        const char *FMT = "{\"event\":\"open\",\"path\":\"/var/www/x\",\"process\":{\"comm\":\"nginx\",\"exe\":\"%s\"},\"sockets\":[{\"raddr\":\"%s\"}]}";
+        /* covered path + covered dest -> silent */
+        snprintf(b,sizeof b,FMT,exe,"10.1.2.3:443"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0);
+        /* covered path + denied dest -> anomaly */
+        snprintf(b,sizeof b,FMT,exe,"6.6.6.6:1337"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0 + 1 && strstr(g_last, "\"kind\":\"anomaly\"") && strstr(g_last, "6.6.6.6:1337"));
+        /* covered path + novel dest -> candidate */
+        snprintf(b,sizeof b,FMT,exe,"9.9.9.9:53"); ps_baseline_process_record(b, dir, seen, emit, NULL);
+        assert(g_emits == e0 + 2 && strstr(g_last, "\"kind\":\"candidate\"") && strstr(g_last, "9.9.9.9:53"));
+    }
+
     ps_baseline_seen_free(seen);
     printf("test_baseline_monitor: OK\n");
     return 0;
