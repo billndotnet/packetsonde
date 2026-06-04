@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 static int slurp(const char *root, int pid, const char *file, char *out, size_t cap) {
     char path[320];
@@ -43,6 +44,11 @@ static int read_meta(const char *root, int pid, struct ps_act_proc *p) {
         char *u = strstr(status, "Uid:");
         if (u) p->uid = atoi(u + 4);
     }
+    /* exe: readlink /proc/<pid>/exe (a symlink to the binary) */
+    char exep[320];
+    snprintf(exep, sizeof exep, "%s/%d/exe", root, pid);
+    ssize_t er = readlink(exep, p->exe, sizeof p->exe - 1);
+    if (er > 0) p->exe[er] = 0;
     return 0;
 }
 
