@@ -93,3 +93,32 @@ int ps_baseline_append_dest_candidate(const char *state_dir, const char *exe, co
     if (len < 0) return -1;
     return atomic_write(cpath, out, (size_t)len);
 }
+
+/* --- process spawning (parallel files, key "parents") --- */
+
+int ps_baseline_load_parents(const char *state_dir, const char *exe,
+                             struct ps_baseline_set *baseline, struct ps_baseline_set *denials) {
+    char slug[256];
+    if (ps_exe_slug(exe, slug, sizeof slug) != 0) {
+        ps_blset_init(baseline, exe); ps_blset_init(denials, exe); return 0;
+    }
+    load_one_key(state_dir, slug, "parents.json", "parents", exe, baseline);
+    load_one_key(state_dir, slug, "parent-denials.json", "parents", exe, denials);
+    return 0;
+}
+
+int ps_baseline_append_parent_candidate(const char *state_dir, const char *exe, const char *parent_comm) {
+    char slug[256];
+    if (ps_exe_slug(exe, slug, sizeof slug) != 0) return -1;
+    char dir[512]; snprintf(dir, sizeof dir, "%s/%s", state_dir, slug);
+    mkdir(state_dir, 0700); mkdir(dir, 0700);
+    char cpath[600]; snprintf(cpath, sizeof cpath, "%s/parent-candidates.json", dir);
+    struct ps_baseline_set c; ps_blset_init(&c, exe);
+    FILE *f = fopen(cpath, "r");
+    if (f) { static char j[1<<16]; size_t n = fread(j,1,sizeof j-1,f); fclose(f); j[n]=0; ps_blset_from_json_key(j, "parents", &c); }
+    if (ps_blset_add(&c, parent_comm) != 1) return 0;
+    static char out[1 << 16];
+    int len = ps_blset_to_json_key(&c, "parents", out, sizeof out);
+    if (len < 0) return -1;
+    return atomic_write(cpath, out, (size_t)len);
+}
