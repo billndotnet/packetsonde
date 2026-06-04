@@ -2,6 +2,8 @@
 #include "cgroup_unit.h"
 #include "json_extract.h"
 #include "json.h"
+#include "module.h"
+#include "activity_ring.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -86,3 +88,53 @@ int ps_overwatch_process_record(const char *rec, ps_unit_policy_loader loader,
         n += consider(seen, emit, ectx, &pol, unit, path, PS_OP_READ, "exec", comm, exe, mac);
     return n;
 }
+
+/* --- module wiring --- */
+
+struct overwatch_state { int mode; void *seen; };   /* mode: 0 off, 1 overwatch */
+
+static int overwatch_init(ps_module_ctx_t *ctx) {
+    const char *m = getenv("PS_DETECT_POLICY_MODE");
+    int mode = (m && strcmp(m, "overwatch") == 0) ? 1 : 0;
+    struct overwatch_state *st = calloc(1, sizeof *st);
+    if (!st) return -1;
+    st->mode = mode; st->seen = ps_overwatch_seen_new();
+    ctx->userdata = st;
+    if (ctx->log) ctx->log(ctx, 6, "policy_overwatch: mode=%s", mode ? "overwatch" : "off");
+    return 0;
+}
+static void overwatch_shutdown(ps_module_ctx_t *ctx) {
+    struct overwatch_state *st = ctx->userdata;
+    if (st) { ps_overwatch_seen_free(st->seen); free(st); }
+}
+
+struct emit_ctx { ps_module_ctx_t *mctx; };
+static void publish_emit(void *c, const char *json, size_t len) {
+    struct emit_ctx *e = c;
+    if (e->mctx->publish) e->mctx->publish(e->mctx, "policy.sandbox.violation", json, (uint32_t)len);
+}
+
+static void overwatch_tick(ps_module_ctx_t *ctx, uint64_t now_usec) {
+    struct overwatch_state *st = ctx->userdata;
+    if (!st || st->mode != 1) return;
+    static char items[64][PS_ACT_ITEM_MAX];
+    int n = ps_act_ring_drain(items, 64);
+    struct emit_ctx ec = { ctx };
+    uint64_t now_sec = now_usec / 1000000ULL;
+    for (int i = 0; i < n; i++)
+        ps_overwatch_process_record(items[i], ps_unit_policy_load_systemctl,
+                                    st->seen, publish_emit, &ec, now_sec);
+}
+
+const ps_module_t ps_policy_overwatch_module = {
+    .name        = "policy_overwatch",
+    .description = "Flags observed access that a unit's declared systemd sandbox should block",
+    .version     = "1.0",
+    .flags       = PS_MOD_PASSIVE,
+    .init        = overwatch_init,
+    .shutdown    = overwatch_shutdown,
+    .on_packet   = NULL,
+    .on_job      = NULL,
+    .on_response = NULL,
+    .tick        = overwatch_tick,
+};

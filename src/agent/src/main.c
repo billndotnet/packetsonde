@@ -773,6 +773,7 @@ extern const ps_module_t ospf_module;
 extern const ps_module_t vrrp_module;
 extern const ps_module_t broadcast_module;
 extern const ps_module_t ps_iface_monitor_module;
+extern const ps_module_t ps_policy_overwatch_module;
 extern const ps_module_t ps_honeypot_listener_module;
 extern const ps_module_t discovery_listener_module;
 extern const ps_module_t network_listener_module;
@@ -1036,6 +1037,8 @@ int main(int argc, char **argv)
         ps_module_registry_add(&g_registry, &broadcast_module);
     if (ps_config_get_bool(&cfg, "modules", "iface_monitor", 1))
         ps_module_registry_add(&g_registry, &ps_iface_monitor_module);
+    if (ps_config_get_bool(&cfg, "modules", "policy_overwatch", 1))
+        ps_module_registry_add(&g_registry, &ps_policy_overwatch_module);
     if (ps_config_get_bool(&cfg, "modules", "honeypot_listener", 0))  /* off by default */
         ps_module_registry_add(&g_registry, &ps_honeypot_listener_module);
     /* Discovery + network listener: registered unconditionally. Each
