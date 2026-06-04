@@ -135,4 +135,8 @@ if(BUILD_TESTING)
     add_executable(test_unit_envelope tests/test_unit_envelope.c)
     target_link_libraries(test_unit_envelope PRIVATE packetsonde_lib)
     add_test(NAME test_unit_envelope COMMAND test_unit_envelope)
+
+    add_executable(test_unit_envelope_json tests/test_unit_envelope_json.c)
+    target_link_libraries(test_unit_envelope_json PRIVATE packetsonde_lib)
+    add_test(NAME test_unit_envelope_json COMMAND test_unit_envelope_json)
 endif()
