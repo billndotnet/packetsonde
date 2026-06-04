@@ -2,7 +2,7 @@
 
 A CLI-first network infrastructure and security auditing toolkit.
 
-`packetsonde` is the auditor's command-line tool; `packetsonded` is its long-running observation agent. The CLI runs active campaigns (audit TLS / HTTP / DNS / SSH, scan ports, traceroute, probe TCP); the agent runs passive, continuous observation (flow tracking, neighbor discovery, listeners for DHCP/DNS/LLDP/CDP/STP/...).
+`packetsonde` is the auditor's command-line tool; `packetsonded` is its long-running observation agent. The CLI runs active campaigns (audit TLS / HTTP / DNS / SSH and 20+ other services, scan ports, traceroute, probe TCP); the agent runs passive, continuous observation (flow tracking, neighbor discovery, L2/L3 control-plane listeners) and — on Linux — host process/file/socket behavioral monitoring.
 
 Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk-forwarders, anything that reads a line.
 
@@ -10,31 +10,60 @@ Findings come back as **JSONL on stdout** — pipeable to `jq`, `vector`, splunk
 
 ## Documentation
 
-- **Use case guides** — three deployment shapes packetsonde fits:
+- **Use case guides** — deployment shapes packetsonde fits:
     - [Trunk probe](docs/guides/trunk-probe.md) — dot1q-attached, multi-VLAN visibility behind ACLs
     - [Service-dependency test point](docs/guides/service-dependency.md) — continuous validation that a host can reach its dependencies
     - [Passive bridge appliance](docs/guides/bridge-appliance.md) — small in-line device with wifi management
+- **Building** — [docs/build.md](docs/build.md): per-platform build, install layout, the single-source build version + dev-push bump policy
+- **Deploying a fleet** — [packaging/salt/README.md](packaging/salt/README.md): SaltStack state, staged rollout, enrollment
 - **Extending** — [Writing audit plugins](docs/guides/writing-audit-plugins.md): single-file C plugins discovered via `dlopen` at runtime; ship custom audits without recompiling `packetsonde`. Example: `examples/audit-plugin/audit-vnc.c`.
-- [Design spec](docs/specs/2026-05-18-packetsonde-cli-design.md) — finding wire format, verb grammar, defaults, follow-ons
-- [Whitepaper](docs/specs/whitepaper.md) — the project's architecture and principles
-- [Visualization notes](docs/specs/viz-notes.md) — discipline file for the deferred viz redesign
+- **Reference** — [central protocol v1](docs/specs/central-protocol-v1.md) (agent↔central wire contract), [whitepaper](docs/specs/whitepaper.md) (architecture and principles)
 
 ## Status
 
-v1.6.
+Actively developed. Milestone history in [CHANGELOG.md](CHANGELOG.md); current build version reported by `packetsonde version`.
 
-| Verb       | What it does |
+### CLI verbs
+
+| Verb | What it does |
 |-----------:|---|
-| `audit`    | 22 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp`, `rdp`, `mssql`, `kafka`, `vnc` |
-| `scan`     | `ports` — connect-scan a target or CIDR |
-| `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep), `agents` (signed broadcast for remote packetsonded) |
-| `key`      | `generate` / `list` / `fingerprint` / `revoke` — Ed25519 key management for discovery + future `--via` |
+| `audit`    | 26 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp`, `rdp`, `mssql`, `kafka`, `vnc`, `haproxy`, `proxmox`, `nginx`, `opnsense` |
+| `scan`     | `ports` — connect-scan a target or CIDR (TCP / UDP) |
+| `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep), `agents` (signed broadcast for remote `packetsonded`) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
+| `recipe`   | Run / manage signed declarative audit recipes (pushed JIT to a remote agent over `--via`) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
+| `collect`  | Receive + present signed findings from a remote agent, central-free |
+| `watch`    | Tail the agent's process/file/socket activity records (JSONL) |
+| `baseline` | Manage learned per-executable behavioral baselines (`list` / `approve` / `deny` for file paths, network dests, spawn parents) |
+| `sandbox-suggest` | Emit a suggested systemd sandbox stanza from learned per-unit activity |
+| `key`      | `generate` / `list` / `fingerprint` / `revoke` — Ed25519 identity for discovery, `--via`, and enrollment |
+| `register` | Enroll this host with central management (lands a `pending` agent for operator validation) |
+| `report-central` | Ship findings JSONL to central |
 | `config`   | `show`, `path` — inspect resolved configuration |
 | `agent`    | Control / query the local `packetsonded` |
 | `version`, `help` | Standard |
+
+### The agent (`packetsonded`)
+
+Long-running passive observation, plus an opt-in remote-audit channel:
+
+- **Passive control-plane listeners** — DHCP, DNS, CDP, LLDP, STP, OSPF, VRRP, SSDP, NetBIOS, MLD, ARP/NDP neighbors, broadcast, and a honeypot listener. Zero injected traffic; it watches what the segment already carries.
+- **Flow tracking + interface monitor** — connection/flow accounting and live capture-interface state, with dynamic capture-interface selection.
+- **TLS fingerprinting** — JA3 / JA3S / JA4 / JA4S / JA4X computed from observed handshakes.
+- **`--via <agent>`** — the CLI dispatches audits to a remote agent over a TLS 1.3 mTLS channel (identity == Ed25519 pubkey, no PKI). Single- and multi-hop (`CLI → bunker → trunkbox`), with an optional knock-then-listen stealth mode (no idle listening socket between signed knocks).
+- **Central integration** — Ed25519 enrollment (`register` → `pending` → operator-validated trust gate), batched observation reporting, and relay forwarding so deep-segment agents reach central through an edge hop.
+
+### Process-level detection track (Linux)
+
+A layered, post-exploitation behavioral sensor for the host the agent runs on:
+
+1. **Collection** — `fanotify` in a privilege-separated worker captures process/file/socket activity, enriched from `/proc` with an ancestry walk to the owning service/session. View it live with `packetsonde watch --follow`.
+2. **Declared-policy overwatch** — compares observed activity against the unit's own `systemd` sandbox directives (`ProtectSystem`, `ReadOnlyPaths`, exec-from-writable, …) and flags violations. A `learn` mode accumulates per-unit envelopes; `packetsonde sandbox-suggest <unit>` turns them into a tightened sandbox stanza.
+3. **Learned per-exe baseline** — a hybrid learn/enforce allowlist keyed by executable across three signals: **file paths**, **network destinations**, and **spawn parents**. Novel activity becomes a candidate; an operator `approve`s it into the baseline or `deny`s it (denied → anomaly) via the `baseline` verb.
+
+All three run together off a multi-consumer activity ring and are off by default (`[detect]` config block).
 
 ## Quick start
 
@@ -43,8 +72,8 @@ v1.6.
 # detected automatically; macOS prints the brew command).
 sudo ./bootstrap.sh
 
-# Build
-./build.sh native
+# Build agent + CLI
+./build.sh
 
 # Audit a TLS service, JSONL piped to jq
 ./build/src/cli/packetsonde --jsonl audit tls mail.example.com:443 | jq -c '{kind,severity,title}'
@@ -59,9 +88,7 @@ sudo ./bootstrap.sh
 ./build/src/cli/packetsonde scan ports 10.0.0.0/28 -p 22,80,443,8080
 
 # Traceroute, streaming hops as findings (modes: classic, paris, dublin)
-./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1
 ./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1 --mode paris
-./build/src/cli/packetsonde --jsonl probe traceroute 1.1.1.1 --mode dublin
 
 # Local ARP table
 ./build/src/cli/packetsonde discover neighbors
@@ -74,7 +101,7 @@ sudo ./bootstrap.sh
 
 Default: text on a TTY, JSONL when piped. Override with `--text`, `--json`, `--jsonl`, `--quiet`. Persist runs with `--auto-append` (writes JSONL to `$XDG_STATE_HOME/packetsonde/findings-YYYY-MM-DD.jsonl`).
 
-Every finding carries `v: 1` and a stable schema (kind, severity, target, evidence, host, optional via_agent). The wire format is documented in `docs/specs/2026-05-18-packetsonde-cli-design.md` §3 and committed to stability.
+Every finding carries `v: 1` and a stable schema (kind, severity, target, evidence, host, optional via_agent); the wire format is committed to stability. The agent↔central contract is in [docs/specs/central-protocol-v1.md](docs/specs/central-protocol-v1.md).
 
 Example finding:
 
@@ -97,16 +124,16 @@ Example finding:
                  └────┬──────────────┬──────┘
                       │              │
               local raw          --via <name>
-        (cap_net_raw/sudo)       (mTLS, knock-then-listen)
-                      │              │
+        (cap_net_raw/sudo)       (mTLS, knock-then-listen,
+                      │           single- or multi-hop)
                       ▼              ▼
-                  kernel       ┌────────────────┐
-                               │ packetsonded   │
+                  kernel       ┌────────────────┐      enroll / observations / relay
+                               │ packetsonded   │ ───────────────────────────► central
                                │ on remote host │
                                └────────────────┘
 ```
 
-The agent is positioned in topologically-advantaged places — see the [use case guides](docs/guides/) for the three deployment shapes.
+The agent is positioned in topologically-advantaged places — see the [use case guides](docs/guides/) for the deployment shapes.
 
 ## Build requirements
 
@@ -122,6 +149,8 @@ The agent is positioned in topologically-advantaged places — see the [use case
     - Debian/Ubuntu: `apt install libpcap-dev libhiredis-dev`
     - RHEL/Fedora: `dnf install libpcap-devel hiredis-devel`
 
+The process-level detection track (`fanotify`) is Linux-only; the rest builds and runs on macOS, Linux, and FreeBSD / OPNsense. See [docs/build.md](docs/build.md).
+
 ## License
 
 PolyForm Noncommercial 1.0.0, modified to exclude government use. See `LICENSE`. Personal, educational, research, and charitable use are permitted; commercial and government use are not granted under this license. Contact the licensor for a separate license if you need to use this software for any non-permitted purpose.
@@ -130,30 +159,29 @@ PolyForm Noncommercial 1.0.0, modified to exclude government use. See `LICENSE`.
 
 ```
 src/
-├── lib/      # libpacketsonde — finding record, JSON, ULID, IPC, traceroute core
-├── agent/    # packetsonded daemon (passive observation, modules)
+├── lib/      # libpacketsonde — finding record, JSON, ULID, IPC, traceroute core,
+│             #   baseline set/decide, dest match, relay attestation
+├── agent/    # packetsonded daemon — passive listeners, flow tracker, iface monitor,
+│             #   process-collection worker, policy overwatch, learned baseline
 └── cli/      # packetsonde (this binary)
     ├── verbs/         # one file per verb
-    ├── audit/         # tls, dns, http, ssh
-    ├── scan/          # active scans
-    ├── discover/      # local discovery
-    ├── probe/         # single-target probes
+    ├── audit/         # 26 audit kinds (also built as dlopen plugins)
+    ├── scan/          # active scans (tcp/udp ports)
+    ├── discover/      # neighbors, hosts, agents
+    ├── probe/         # single-target probes + traceroute
+    ├── remote/        # --via channel (audit/ingest over mTLS)
+    ├── recipe/        # signed declarative recipe runner
     ├── findings_util/ # JSONL reader + filter
     ├── output/        # text/json/jsonl emitter
     ├── workers/       # pthread pool + rate limiter
     └── registry/      # agents.toml parser
 
 docs/
-├── guides/   # use case guides (trunk, service-dependency, bridge)
-├── specs/    # design specs (cli-design, whitepaper, viz-notes)
-└── plans/    # implementation plans (one per phase)
+├── guides/   # use case guides + plugin authoring
+├── build.md  # build + version policy
+└── specs/    # durable reference docs (central-protocol-v1, whitepaper, viz-notes)
+
+packaging/    # salt state (fleet deploy), systemd unit, bootstrap installers
 ```
 
-## Roadmap
-
-See `docs/specs/2026-05-18-packetsonde-cli-design.md` §8 for the full follow-on list. Near-term priorities:
-
-1. **Recipe framework** — declarative audit logic that lives client-side, signed and pushed JIT to the agent over the v1.6 `--via` channel; agent stays a primitive-runner with zero offensive content at rest.
-2. **Multi-hop `--via`** (`CLI → bunker → trunkbox`). Single-hop landed in v1.6.
-3. **GeoIP + ASN** enrichments (JA3 / JA3S landed in v1.5; JA4 / JA4S / JA4X now ship in `tls.metadata`).
-4. **IPv6 + UDP audit-common helpers** — the TCP path is shared; UDP and TLS/HTTP modules still hand-roll their connect blocks.
+> Design specs and per-phase implementation plans are kept **local** (untracked) as development scaffolding — they're not part of the published tree.

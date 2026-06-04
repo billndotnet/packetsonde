@@ -68,8 +68,9 @@ role          = "0"             # "1" on a relay-capable agent
 allow_sources = ""              # comma-separated agent_ids/fingerprints this relay forwards for
 
 # ---- detect -- process/file/socket collection (Linux) -----------------
-# Process/file/socket collection (Linux). Off by default. See
-# docs/specs/2026-06-03-process-collection-primitives-design.md
+# Process/file/socket collection, policy overwatch, and learned per-exe
+# baseline (Linux). Off by default. See the detection-track overview in
+# README.md.
 [detect]
 enabled        = "0"
 # host baseline default; SERVICE ROLE template adds drop zones + role data dirs, e.g.

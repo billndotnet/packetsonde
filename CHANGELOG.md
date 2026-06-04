@@ -7,6 +7,28 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 ### Added — TLS fingerprints
 - **JA4 (client) + JA4S (server)** (FoxIO 2023) emitted alongside the existing JA3 / JA3S / JA4X in `tls.metadata` evidence. JA4 surfaces real TLS version via `supported_versions`, drops GREASE, sorts ciphers and extensions for stability under Chrome-style extension shuffling, and includes signature_algorithms in original order. Pure parser on the already-captured `client_hello` / `server_hello` — no new deps, no probe behavior changes.
 
+### Added — process-level detection track (Linux)
+Layered, post-exploitation behavioral sensor for the agent's host. Off by default (`[detect]`).
+- **Collection primitives** — `fanotify` in the privilege-separated worker captures process/file/socket activity, enriched from `/proc` with an ancestry walk to the owning service/session, fanned out over a multi-consumer activity ring. New `packetsonde watch [--follow]` tails the JSONL records.
+- **Declared-policy overwatch** — brain-side module compares observed activity to each unit's own `systemd` sandbox directives and flags violations; `learn` mode accumulates per-unit envelopes and `packetsonde sandbox-suggest <unit>` synthesizes a tightened sandbox stanza.
+- **Learned per-exe baseline** — hybrid learn/enforce allowlist keyed by executable across three signals: file paths, network destinations, and spawn parents. Novel → candidate → operator `approve`/`deny` via the new `baseline` verb (denied → anomaly).
+
+### Added — fleet + central integration
+- **Agent registration/enrollment** — Ed25519 keystore identity, `[central]` config, `packetsonde register` (lands a `pending` agent for operator validation).
+- **Observation reporting** — agent ships queued passive findings to central in bounded batches.
+- **Relay forwarding** — deep-segment agents reach central through an edge hop (signed, chain-verified ingest).
+- **Collector / return-routing** — `packetsonde collect` receives + presents signed findings central-free.
+- **Interface monitor + dynamic capture interface** — live capture-interface state and selection.
+
+### Added — recipe framework
+- Signed declarative audit recipes that live client-side and are pushed JIT to a remote agent over the `--via` channel; the agent stays a primitive-runner with no offensive content at rest.
+
+### Added — audit kinds
+- `haproxy`, `proxmox`, `nginx`, `opnsense` — `audit` now covers 26 services.
+
+### Build
+- Single-source build version (`PS_VERSION_STR` in the root CMake drives CLI + agent + priv worker); dev-push policy bumps the patch value per fleet build so a binary swap is verifiable. See `docs/build.md`.
+
 ## [v1.6] — 2026-05-20
 
 ### Added — agent network protocol
