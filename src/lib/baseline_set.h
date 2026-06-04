@@ -11,5 +11,7 @@ int  ps_blset_add(struct ps_baseline_set *s, const char *path);     /* 1 added, 
 int  ps_blset_covered(const struct ps_baseline_set *s, const char *path); /* dir-prefix match */
 int  ps_blset_to_json(const struct ps_baseline_set *s, char *out, size_t cap);
 int  ps_blset_from_json(const char *json, struct ps_baseline_set *s);
+int  ps_blset_to_json_key(const struct ps_baseline_set *s, const char *key, char *out, size_t cap);
+int  ps_blset_from_json_key(const char *json, const char *key, struct ps_baseline_set *s);
 int  ps_blset_rollup(struct ps_baseline_set *s, int threshold);     /* collapse >=N files/dir -> dir */
 #endif
