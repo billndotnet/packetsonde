@@ -29,6 +29,7 @@ add_library(packetsonde_lib STATIC
     unit_envelope.c
     sandbox_synth.c
     exe_slug.c
+    baseline_set.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -149,4 +150,8 @@ if(BUILD_TESTING)
     add_executable(test_exe_slug tests/test_exe_slug.c)
     target_link_libraries(test_exe_slug PRIVATE packetsonde_lib)
     add_test(NAME test_exe_slug COMMAND test_exe_slug)
+
+    add_executable(test_baseline_set tests/test_baseline_set.c)
+    target_link_libraries(test_baseline_set PRIVATE packetsonde_lib)
+    add_test(NAME test_baseline_set COMMAND test_baseline_set)
 endif()
