@@ -385,6 +385,13 @@ target_include_directories(test_overwatch_core PRIVATE
 target_link_libraries(test_overwatch_core PRIVATE packetsonde_lib pthread)
 add_test(NAME test_overwatch_core COMMAND test_overwatch_core)
 
+add_executable(test_overwatch_learn tests/test_overwatch_learn.c
+    src/modules/policy_overwatch.c src/activity_ring.c)
+target_include_directories(test_overwatch_learn PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+target_link_libraries(test_overwatch_learn PRIVATE packetsonde_lib pthread)
+add_test(NAME test_overwatch_learn COMMAND test_overwatch_learn)
+
 include(GNUInstallDirs)
 
 # Per-platform install layout, intended for `sudo make install` from a
