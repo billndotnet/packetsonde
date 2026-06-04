@@ -16,3 +16,15 @@ Thumbs.db
 # Agent harness / per-user state (not project)
 .claude/
 .cache/
+
+# Local development scaffolding — design specs + implementation plans guide
+# development but are kept local, not pushed. Durable reference docs
+# (central-protocol-v1.md, whitepaper.md, viz-notes.md) and docs/guides/
+# stay tracked.
+docs/specs/20*-*.md
+docs/plans/
+docs/reviews/
+
+# Build trees (out-of-tree)
+build-rel/
+build-test/
