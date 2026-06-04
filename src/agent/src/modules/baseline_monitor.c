@@ -2,6 +2,7 @@
 #include "baseline_store.h"
 #include "baseline_decide.h"
 #include "baseline_set.h"
+#include "dest_match.h"
 #include "json_extract.h"
 #include "json.h"
 #include <string.h>
@@ -40,6 +41,23 @@ static void emit_finding(void (*emit)(void *, const char *, size_t), void *ctx,
     if (ps_json_finish(&j) > 0 && emit) emit(ctx, buf, (size_t)j.len);
 }
 
+/* emit a finding for a network dest of the given kind. */
+static void emit_dest_finding(void (*emit)(void *, const char *, size_t), void *ctx,
+                              const char *kind, const char *exe, const char *raddr, const char *comm) {
+    char buf[2048]; struct ps_json j; ps_json_init(&j, buf, sizeof buf);
+    ps_json_object_begin(&j);
+    ps_json_key_string(&j, "source", "agent.baseline_monitor");
+    ps_json_key_string(&j, "severity", !strcmp(kind,"anomaly") ? "high" : "info");
+    ps_json_key_string(&j, "confidence", !strcmp(kind,"anomaly") ? "firm" : "tentative");
+    ps_json_key_string(&j, "kind", kind);
+    ps_json_key_string(&j, "signal", "dest");
+    ps_json_key_string(&j, "exe", exe);
+    ps_json_key_string(&j, "dest", raddr);
+    ps_json_key_string(&j, "comm", comm);
+    ps_json_object_end(&j);
+    if (ps_json_finish(&j) > 0 && emit) emit(ctx, buf, (size_t)j.len);
+}
+
 int ps_baseline_process_record(const char *rec, const char *state_dir, void *seenv,
                                void (*emit)(void *, const char *, size_t), void *ectx) {
     struct bl_seen *seen = seenv;
@@ -49,18 +67,41 @@ int ps_baseline_process_record(const char *rec, const char *state_dir, void *see
     if (ps_json_extract_string(rec, "event", event, sizeof event) < 0) return 0;
     ps_json_extract_string(rec, "comm", comm, sizeof comm);
 
+    int n = 0;
+
+    /* file-path signal */
     struct ps_baseline_set bl, den;
     ps_baseline_load(state_dir, exe, &bl, &den);
     enum ps_bl_verdict v = ps_baseline_decide(&bl, &den, path);
-    if (v == PS_BL_COVERED) return 0;
+    if (v != PS_BL_COVERED) {
+        char key[384]; snprintf(key, sizeof key, "%s|%s", exe, path);
+        if (!seen_add(seen, key)) {
+            if (v == PS_BL_ANOMALY) { emit_finding(emit, ectx, "anomaly", exe, path, event, comm); n++; }
+            else { ps_baseline_append_candidate(state_dir, exe, path);
+                   emit_finding(emit, ectx, "candidate", exe, path, event, comm); n++; }
+        }
+    }
 
-    char key[384]; snprintf(key, sizeof key, "%s|%s", exe, path);
-    if (seen_add(seen, key)) return 0;                     /* dedup */
-    if (v == PS_BL_ANOMALY) { emit_finding(emit, ectx, "anomaly", exe, path, event, comm); return 1; }
-    /* NOVEL */
-    ps_baseline_append_candidate(state_dir, exe, path);
-    emit_finding(emit, ectx, "candidate", exe, path, event, comm);
-    return 1;
+    /* network-destination signal: every "raddr":"..." in the record's sockets[] */
+    struct ps_baseline_set dbl, dden;
+    ps_baseline_load_dests(state_dir, exe, &dbl, &dden);
+    const char *sp = rec;
+    while ((sp = strstr(sp, "\"raddr\":\"")) != NULL) {
+        sp += 9;
+        const char *se = strchr(sp, '"');
+        if (!se) break;
+        char raddr[64]; size_t rl = (size_t)(se - sp); if (rl >= sizeof raddr) rl = sizeof raddr - 1;
+        memcpy(raddr, sp, rl); raddr[rl] = 0; sp = se + 1;
+        if (!raddr[0]) continue;
+        enum ps_bl_verdict dv = ps_baseline_decide_dest(&dbl, &dden, raddr);
+        if (dv == PS_BL_COVERED) continue;
+        char dkey[384]; snprintf(dkey, sizeof dkey, "%s|D|%s", exe, raddr);
+        if (seen_add(seen, dkey)) continue;
+        if (dv == PS_BL_ANOMALY) { emit_dest_finding(emit, ectx, "anomaly", exe, raddr, comm); n++; }
+        else { ps_baseline_append_dest_candidate(state_dir, exe, raddr);
+               emit_dest_finding(emit, ectx, "candidate", exe, raddr, comm); n++; }
+    }
+    return n;
 }
 
 /* --- module wiring --- */

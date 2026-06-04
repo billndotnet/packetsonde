@@ -53,3 +53,43 @@ int ps_baseline_append_candidate(const char *state_dir, const char *exe, const c
     if (len < 0) return -1;
     return atomic_write(cpath, out, (size_t)len);
 }
+
+/* --- network destinations (parallel files, key "dests") --- */
+
+static int load_one_key(const char *state_dir, const char *slug, const char *file,
+                        const char *key, const char *exe, struct ps_baseline_set *out) {
+    ps_blset_init(out, exe);
+    char path[512]; snprintf(path, sizeof path, "%s/%s/%s", state_dir, slug, file);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    static char j[1 << 16]; size_t n = fread(j, 1, sizeof j - 1, f); fclose(f); j[n] = 0;
+    ps_blset_from_json_key(j, key, out);
+    return 0;
+}
+
+int ps_baseline_load_dests(const char *state_dir, const char *exe,
+                           struct ps_baseline_set *baseline, struct ps_baseline_set *denials) {
+    char slug[256];
+    if (ps_exe_slug(exe, slug, sizeof slug) != 0) {
+        ps_blset_init(baseline, exe); ps_blset_init(denials, exe); return 0;
+    }
+    load_one_key(state_dir, slug, "dests.json", "dests", exe, baseline);
+    load_one_key(state_dir, slug, "dest-denials.json", "dests", exe, denials);
+    return 0;
+}
+
+int ps_baseline_append_dest_candidate(const char *state_dir, const char *exe, const char *dest) {
+    char slug[256];
+    if (ps_exe_slug(exe, slug, sizeof slug) != 0) return -1;
+    char dir[512]; snprintf(dir, sizeof dir, "%s/%s", state_dir, slug);
+    mkdir(state_dir, 0700); mkdir(dir, 0700);
+    char cpath[600]; snprintf(cpath, sizeof cpath, "%s/dest-candidates.json", dir);
+    struct ps_baseline_set c; ps_blset_init(&c, exe);
+    FILE *f = fopen(cpath, "r");
+    if (f) { static char j[1<<16]; size_t n = fread(j,1,sizeof j-1,f); fclose(f); j[n]=0; ps_blset_from_json_key(j, "dests", &c); }
+    if (ps_blset_add(&c, dest) != 1) return 0;
+    static char out[1 << 16];
+    int len = ps_blset_to_json_key(&c, "dests", out, sizeof out);
+    if (len < 0) return -1;
+    return atomic_write(cpath, out, (size_t)len);
+}

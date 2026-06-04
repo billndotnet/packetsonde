@@ -30,24 +30,28 @@ int ps_blset_covered(const struct ps_baseline_set *s, const char *path) {
     return 0;
 }
 
-int ps_blset_to_json(const struct ps_baseline_set *s, char *out, size_t cap) {
+int ps_blset_to_json_key(const struct ps_baseline_set *s, const char *key, char *out, size_t cap) {
     struct ps_json j; ps_json_init(&j, out, cap);
     ps_json_object_begin(&j);
     ps_json_key_string(&j, "exe", s->exe);
-    ps_json_array_begin(&j, "paths");
+    ps_json_array_begin(&j, key);
     for (int i = 0; i < s->n; i++) ps_json_array_string(&j, s->path[i]);
     ps_json_array_end(&j);
     ps_json_object_end(&j);
     return ps_json_finish(&j);
 }
+int ps_blset_to_json(const struct ps_baseline_set *s, char *out, size_t cap) {
+    return ps_blset_to_json_key(s, "paths", out, cap);
+}
 
-int ps_blset_from_json(const char *json, struct ps_baseline_set *s) {
+int ps_blset_from_json_key(const char *json, const char *key, struct ps_baseline_set *s) {
     if (!json) return -1;
     s->n = 0; s->exe[0] = 0;
     ps_json_extract_string(json, "exe", s->exe, sizeof s->exe);
-    const char *p = strstr(json, "\"paths\":[");
+    char pat[64]; snprintf(pat, sizeof pat, "\"%s\":[", key);
+    const char *p = strstr(json, pat);
     if (!p) return 0;
-    p += strlen("\"paths\":[");
+    p += strlen(pat);
     while (*p && *p != ']' && s->n < PS_BL_MAX) {
         const char *q = strchr(p, '"'); const char *close = strchr(p, ']');
         if (!q || (close && q > close)) break;
@@ -59,6 +63,9 @@ int ps_blset_from_json(const char *json, struct ps_baseline_set *s) {
         p = comma + 1;
     }
     return 0;
+}
+int ps_blset_from_json(const char *json, struct ps_baseline_set *s) {
+    return ps_blset_from_json_key(json, "paths", s);
 }
 
 static void parent_dir(const char *path, char *out, size_t cap) {

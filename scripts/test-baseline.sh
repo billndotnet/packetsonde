@@ -16,4 +16,11 @@ echo "       ./build/src/cli/packetsonde baseline <exe-path> deny <path>"
 echo
 echo "PASS: after approve-all, nominal paths stop producing candidates; the denied path"
 echo "      produces a baseline.anomaly (severity high) finding on each sighting."
+echo
+echo "Network destinations (Phase B):"
+echo "  - With baseline_mode=on, an exe connecting to a NEW raddr yields a baseline.candidate"
+echo "    (signal=dest). Approve it (optionally generalized):"
+echo "       ./build/src/cli/packetsonde baseline <exe-path> approve-dest <ip:port> --as cidr/24"
+echo "  - A connection to a denied host yields a baseline.anomaly (signal=dest):"
+echo "       ./build/src/cli/packetsonde baseline <exe-path> deny-dest <ip:port>"
 echo "Cleanup: rm -rf /var/lib/packetsonde/baseline/<slug>"

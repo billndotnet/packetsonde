@@ -32,6 +32,16 @@ int main(void) {
     assert(ps_blset_covered(&r, "/d/zzz") == 1);           /* /d rolled up */
     int has_e_only = 0; for (int i=0;i<r.n;i++) if(!strcmp(r.path[i],"/e/only")) has_e_only=1;
     assert(has_e_only);                                    /* /e/only stayed exact */
+
+    /* keyed serde: store/parse under a "dests" key */
+    struct ps_baseline_set ds; ps_blset_init(&ds, "/usr/sbin/nginx");
+    ps_blset_add(&ds, "1.2.3.4:443");
+    char db[4096]; assert(ps_blset_to_json_key(&ds, "dests", db, sizeof db) > 0);
+    assert(strstr(db, "\"dests\":[") && strstr(db, "1.2.3.4:443"));
+    struct ps_baseline_set dt; assert(ps_blset_from_json_key(db, "dests", &dt) == 0);
+    assert(dt.n == 1 && strcmp(dt.path[0], "1.2.3.4:443") == 0);
+    assert(ps_blset_from_json(db, &dt) == 0 && dt.n == 0);   /* no "paths" key in a dests doc */
+
     printf("test_baseline_set: OK\n");
     return 0;
 }
