@@ -98,21 +98,21 @@ void ps_pp_fold(struct ps_pp_model *m, const struct ps_activity *a, int64_t now_
     else if (strcmp(a->event, "exec") == 0)    m->rates.n_exec++;
 
     if (a->path[0]) {
-        char id[320]; snprintf(id, sizeof id, "file:%s", a->path);
+        char id[544]; snprintf(id, sizeof id, "file:%s", a->path);
         struct ps_pp_entity *e = ent_get(m, id, PS_PP_FILE, a->path);
         e->verdict = file_verdict(m, a->path);
         touch(e, a->ts, now_ms);
     }
     for (int i = 0; i < a->nsock; i++) {
         if (!a->sock[i].raddr[0]) continue;
-        char id[320]; snprintf(id, sizeof id, "dest:%s", a->sock[i].raddr);
+        char id[544]; snprintf(id, sizeof id, "dest:%s", a->sock[i].raddr);
         struct ps_pp_entity *e = ent_get(m, id, PS_PP_DEST, a->sock[i].raddr);
         snprintf(e->state, sizeof e->state, "%s", a->sock[i].state);
         e->verdict = dest_verdict(m, a->sock[i].raddr);
         touch(e, a->ts, now_ms);
     }
     if (strcmp(a->event, "exec") == 0 && a->path[0]) {
-        char id[320]; snprintf(id, sizeof id, "proc:%s", a->path);
+        char id[544]; snprintf(id, sizeof id, "proc:%s", a->path);
         struct ps_pp_entity *e = ent_get(m, id, PS_PP_PROC, a->path);
         e->verdict = PS_PP_NA;
         touch(e, a->ts, now_ms);

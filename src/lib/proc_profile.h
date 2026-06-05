@@ -10,9 +10,9 @@ enum ps_pp_kind    { PS_PP_FILE = 0, PS_PP_DEST, PS_PP_PROC };
 enum ps_pp_verdict { PS_PP_COVERED = 0, PS_PP_NOVEL, PS_PP_ANOMALY, PS_PP_NA };
 
 struct ps_pp_entity {
-    char id[320];
+    char id[544];
     enum ps_pp_kind kind;
-    char value[288];
+    char value[512];
     char state[16];
     uint64_t count;
     char first[24], last[24];
