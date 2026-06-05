@@ -32,6 +32,7 @@ add_library(packetsonde_lib STATIC
     baseline_set.c
     baseline_decide.c
     dest_match.c
+    tls_probe.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -164,4 +165,8 @@ if(BUILD_TESTING)
     add_executable(test_dest_match tests/test_dest_match.c)
     target_link_libraries(test_dest_match PRIVATE packetsonde_lib)
     add_test(NAME test_dest_match COMMAND test_dest_match)
+
+    add_executable(test_tls_probe tests/test_tls_probe.c)
+    target_link_libraries(test_tls_probe PRIVATE packetsonde_lib)
+    add_test(NAME test_tls_probe COMMAND test_tls_probe)
 endif()
