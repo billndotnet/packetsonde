@@ -52,7 +52,12 @@ SSH_PID=$!
 trap "kill $SSH_PID 2>/dev/null || true; rm -f $SSH_FIFO; rm -rf $KDIR $AGENTS_CFG" EXIT
 read SSH_READY < "$SSH_FIFO"
 
-# Spin up the agent listener via the test driver.
+# Spin up the agent listener via the test driver. Redirect its output to a
+# log rather than inheriting our stdout: the driver forks a packetsonde
+# subprocess per inbound --via connection, and that child keeps the inherited
+# stdout open. Under ctest (which reads the test's stdout to EOF) that held
+# pipe blocks the run until timeout even after the script has finished and
+# reaped the driver. The sibling via tests already redirect for this reason.
 LISTEN_PORT=$((30000 + RANDOM % 20000))
 PS_KEY_DIR="$KDIR" \
 PS_AGENT_LISTEN_ENABLED=1 \
@@ -60,9 +65,20 @@ PS_AGENT_LISTEN_PORT="$LISTEN_PORT" \
 PS_AGENT_LISTEN_KEY="agent" \
 PS_AGENT_AUTHORIZED_DIR="$ADIR" \
 PS_PACKETSONDE_BIN="$CLI" \
-"$DRIVER" &
+"$DRIVER" >"$KDIR/driver.log" 2>&1 &
 DRIVER_PID=$!
-trap "kill $DRIVER_PID 2>/dev/null || true; kill $SSH_PID 2>/dev/null || true; rm -f $SSH_FIFO; rm -rf $KDIR $AGENTS_CFG" EXIT
+# Reap the driver on exit. SIGTERM alone is unreliable here: the listener's
+# accept thread is blocked in accept() and its shutdown path can stall, so
+# the process may not exit on SIGTERM and would linger holding the listen
+# port (wedging later runs). Send SIGTERM, then SIGKILL as a backstop.
+reap() {
+    kill "$DRIVER_PID" 2>/dev/null || true
+    kill "$SSH_PID"    2>/dev/null || true
+    for _ in 1 2 3; do kill -0 "$DRIVER_PID" 2>/dev/null || break; sleep 0.2; done
+    kill -9 "$DRIVER_PID" 2>/dev/null || true
+    rm -f "$SSH_FIFO"; rm -rf "$KDIR" "$AGENTS_CFG"
+}
+trap reap EXIT
 
 # Wait for listener to bind.
 for i in $(seq 1 30); do
