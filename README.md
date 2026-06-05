@@ -31,7 +31,7 @@ Actively developed. Milestone history in [CHANGELOG.md](CHANGELOG.md); current b
 | `scan`     | `ports` — connect-scan a target or CIDR (TCP / UDP) |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep), `agents` (signed broadcast for remote `packetsonded`) |
 | `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
-| `recipe`   | Run / manage signed declarative audit recipes (pushed JIT to a remote agent over `--via`) |
+| `recipe`   | `run` / `sign` / `verify` / `info` — author and run signed declarative audit recipes (pushed JIT to a remote agent over `--via`) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
 | `collect`  | Receive + present signed findings from a remote agent, central-free |
@@ -134,6 +134,75 @@ Example finding:
 ```
 
 The agent is positioned in topologically-advantaged places — see the [use case guides](docs/guides/) for the deployment shapes.
+
+## Security & trust model
+
+packetsonde is a network-auditing tool — by definition it exercises capabilities that could be misused — so the trust model is explicit and the design is overt by construction. This section is the orientation for a security reviewer; the wire-level contract is in [central-protocol-v1](docs/specs/central-protocol-v1.md) and the rationale in the [whitepaper](docs/specs/whitepaper.md) §7.
+
+### Cryptographic identity — Ed25519, no PKI
+
+Every CLI and agent has an **Ed25519 keypair**, not an X.509 certificate. There is no CA, no chain, no expiry to manage. A peer *is* its public key; you refer to it by its `sha256:` fingerprint.
+
+```bash
+packetsonde key generate --name auditor      # 32-byte .pub / .sec in the keystore
+packetsonde key fingerprint auditor          # sha256:d607af8a...  (the stable identity)
+packetsonde key list / key revoke <name>
+```
+
+Keys live in the per-user keystore (`$PS_KEY_DIR`, default `~/.config/packetsonde/keys`); secret keys are 32-byte Ed25519 seeds and never leave the host. This one identity is reused for the three trust decisions below.
+
+### Authenticated transport — pinned-key mTLS
+
+The `--via <agent>` channel is **TLS 1.3 with mutual authentication**, but identity is the pinned Ed25519 public key rather than a PKI-issued cert (an SSH-style static-key model). The CLI pins the agent's fingerprint in `agents.toml`; the agent authorizes client pubkeys it will accept. Neither side trusts a peer it hasn't been told about (optional trust-on-first-use exists for prototyping only).
+
+```toml
+[agents.trunkbox]
+address = "10.20.0.9:7443"
+key_fingerprint = "sha256:1f3c…"     # connection aborts if the peer key doesn't match
+```
+
+Multi-hop (`CLI → bunker → trunkbox`) chains these pinned channels. An optional **knock-then-listen** mode keeps the agent with *no idle listening socket* between signed knocks, shrinking its attack surface to zero when not in use.
+
+### Authorization gates — explicit operator consent
+
+Two human-in-the-loop gates bound what an authenticated peer can do:
+
+- **Agent side:** a client pubkey must be present in the agent's authorized-clients set before any `--via` request is honored. Authentication (who you are) and authorization (what you're allowed) are separate steps.
+- **Central side:** `packetsonde register` lands an agent in a **`pending`** state. An operator must validate and promote it before central ingests its findings or the agent appears in the fleet. Enrollment is not auto-trust.
+
+### Signed declarative recipes — no offensive logic at rest on the agent
+
+Active audit logic is authored and signed on the **auditor's** machine, pushed to the agent just-in-time over the already-authenticated `--via` channel, executed, and discarded on disconnect. **An agent imaged at rest contains audit *primitives* (connect / send / recv / match / TLS-probe opcodes) but no offensive scripts** — a load-bearing property for trunk probes and bridge appliances in environments that face legal or evidentiary scrutiny.
+
+A recipe is wrapped in a signed envelope. The signature is **Ed25519 over the 72-byte tuple**:
+
+```
+recipe_sha256 (32)  ‖  author_pub (32)  ‖  signed_at_ms (8, big-endian)
+```
+
+so the signature binds the exact recipe bytes, the signing identity, and the signing time together — a tampered recipe, a swapped author key, or a replayed-with-different-time envelope all fail verification.
+
+```bash
+packetsonde recipe sign   --key auditor -o tls.signed.json recipes/tls-posture.json
+packetsonde recipe verify tls.signed.json     # signature: VALID + author fingerprint + signed_at
+packetsonde recipe info   tls.signed.json     # name, version, step/probe budgets, author, signed_at
+```
+
+Verification is deliberately **two decisions, kept separate**: (1) *is the signature cryptographically valid* over those bytes (`recipe verify`), and (2) *is `author_pub` an identity I trust* (a keystore lookup the operator controls). A valid signature from an unknown author is reported, not silently honored. Recipes are also **budgeted** — caps on steps, receive bytes, targets, wall-clock, and TLS handshakes per run are part of the signed document, so an authorized recipe still can't run unbounded.
+
+### Privilege boundary
+
+The boundary the toolkit defends is *between the auditor and the network*, not between the auditor and the tool.
+
+- The **CLI is unprivileged** by default. Raw-socket modes refuse to run without `cap_net_raw` (or `sudo`) and say so explicitly — no silent privilege escalation.
+- The **agent is split-privilege**: an unprivileged main process directs a small privileged worker that holds the raw socket / packet-capture / `fanotify` capabilities, containing the blast radius of the component that has to be privileged.
+
+### Forensic posture — overt by design
+
+- **The finding stream is its own audit trail.** Every record carries the producing host, timestamp, run identifier, and (when applicable) the `via_agent` it was produced through.
+- **No covert operation.** No fragmented scans, no timing obfuscation, no source-address spoofing. Operators who need covert capability use a different tool — this is by design, not omission.
+- **Polite by default.** The default profile (100 pps, 16 concurrency) is structurally unlikely to trip an IDS or cause an outage; flooding is a deliberate opt-in.
+- **No secrets at rest in source or findings.** Identity is key-based; findings are observations, not credentials.
 
 ## Build requirements
 

@@ -22,6 +22,12 @@ Layered, post-exploitation behavioral sensor for the agent's host. Off by defaul
 
 ### Added — recipe framework
 - Signed declarative audit recipes that live client-side and are pushed JIT to a remote agent over the `--via` channel; the agent stays a primitive-runner with no offensive content at rest.
+- **Schema-2 TLS-aware engine** — `tls_upgrade` / `tls_enum` opcodes, string-list bindings with match-any (`any ~ regex` / `any_in`), cipher peeling, and a `max_tls_probes` budget, so a recipe can classify TLS posture (enumerate offered protocols/ciphers, inspect the leaf cert) rather than only banner-grab.
+- **Schema negotiation** — the agent advertises its `max_recipe_schema` in the hello; the CLI declines to push a recipe an older agent can't execute.
+- **Authoring verbs** — `recipe sign` wraps canonical recipe JSON in an Ed25519-signed envelope (signature over `recipe_sha256 ‖ author_pub ‖ signed_at_ms`); `recipe verify` checks the signature and re-parses the inner recipe (signature validity and author *trust* are reported separately); `recipe info` summarizes name / version / budgets and, for envelopes, the author fingerprint and signing time.
+
+### Fixed
+- **Recipe envelope parser buffer overflow** — `EVP_DecodeBlock` decodes in 3-byte groups, so the 44-char `author_pub` base64 wrote 33 bytes into the 32-byte field, corrupting the adjacent `signed_at_ms`. Timestamps ending in a zero low byte survived (masking the bug); others made freshly-signed envelopes verify as INVALID. Now decoded via sized temporaries with an exact-length copy; regression-locked with an odd-timestamp signing test.
 
 ### Added — audit kinds
 - `haproxy`, `proxmox`, `nginx`, `opnsense` — `audit` now covers 26 services.
