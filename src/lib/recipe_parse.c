@@ -1057,14 +1057,20 @@ int ps_recipe_envelope_parse(const uint8_t *json, size_t json_len,
         out->recipe_sha256[i] = (uint8_t)((hv << 4) | lv);
     }
 
-    /* base64 fields. */
+    /* base64 fields. EVP_DecodeBlock writes in multiples of 3, so it can emit up
+     * to 2 padding bytes past the logical length; decode into temp buffers sized
+     * for that and copy the exact bytes out (the fixed struct fields are adjacent —
+     * decoding straight into them overflows into the next field). */
     size_t n;
-    if (b64_decode(pub_b64, strlen(pub_b64), out->author_pub, &n) != 0 || n != 32) {
+    uint8_t pub_tmp[48], sig_tmp[72];
+    if (b64_decode(pub_b64, strlen(pub_b64), pub_tmp, &n) != 0 || n != 32) {
         snprintf(err, err_sz, "envelope: bad author_pub base64"); goto fail;
     }
-    if (b64_decode(sig_b64, strlen(sig_b64), out->signature, &n) != 0 || n != 64) {
+    memcpy(out->author_pub, pub_tmp, 32);
+    if (b64_decode(sig_b64, strlen(sig_b64), sig_tmp, &n) != 0 || n != 64) {
         snprintf(err, err_sz, "envelope: bad signature base64"); goto fail;
     }
+    memcpy(out->signature, sig_tmp, 64);
     /* recipe_b64 → arena buffer. */
     size_t rb_len = strlen(recipe_b64);
     uint8_t *inner = arena_alloc(a, rb_len); /* upper bound */

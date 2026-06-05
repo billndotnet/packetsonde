@@ -14,14 +14,14 @@ int main(void) {
 
     char env[8192];
     int n = ps_recipe_envelope_build((const uint8_t *)RECIPE, strlen(RECIPE),
-                                     &kp, 1733400000000LL, env, sizeof(env));
+                                     &kp, 1749116116123LL, env, sizeof(env));
     CHECK(n > 0);
 
     struct ps_recipe_envelope e; char err[256] = "";
     CHECK(ps_recipe_envelope_parse((const uint8_t *)env, (size_t)n, &e, err, sizeof(err)) == 0);
     CHECK(e.inner_json_len == strlen(RECIPE));
     CHECK(memcmp(e.inner_json, RECIPE, e.inner_json_len) == 0);
-    CHECK(e.signed_at_ms == 1733400000000LL);
+    CHECK(e.signed_at_ms == 1749116116123LL);
     CHECK(ps_recipe_envelope_verify_sig(&e) == 1);
     /* signature tamper -> verify fails */
     e.signature[0] ^= 0xff;
