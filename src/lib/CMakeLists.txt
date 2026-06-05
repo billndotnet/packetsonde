@@ -23,6 +23,7 @@ add_library(packetsonde_lib STATIC
     proc_parse.c
     sock_parse.c
     activity_record.c
+    proc_profile.c
     cgroup_unit.c
     systemd_policy.c
     policy_eval.c
@@ -181,4 +182,8 @@ if(BUILD_TESTING)
     add_executable(test_activity_json tests/test_activity_json.c)
     target_link_libraries(test_activity_json PRIVATE packetsonde_lib)
     add_test(NAME test_activity_json COMMAND test_activity_json)
+
+    add_executable(test_proc_profile tests/test_proc_profile.c)
+    target_link_libraries(test_proc_profile PRIVATE packetsonde_lib)
+    add_test(NAME test_proc_profile COMMAND test_proc_profile)
 endif()
