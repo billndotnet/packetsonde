@@ -6,6 +6,7 @@
  */
 
 #include "../args.h"
+#include "../recipe/authoring.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -34,9 +35,10 @@ int ps_verb_recipe_run(int argc, char **argv, const struct ps_args *opts) {
     if (!strcmp(sub, "run")) {
         return ps_recipe_runner_main(argc - 1, argv + 1, opts);
     }
-    if (!strcmp(sub, "build") || !strcmp(sub, "sign")
-     || !strcmp(sub, "verify") || !strcmp(sub, "info")
-     || !strcmp(sub, "push")) {
+    if (!strcmp(sub, "sign"))   return ps_recipe_sign_main  (argc - 1, argv + 1, opts);
+    if (!strcmp(sub, "verify")) return ps_recipe_verify_main(argc - 1, argv + 1, opts);
+    if (!strcmp(sub, "info"))   return ps_recipe_info_main  (argc - 1, argv + 1, opts);
+    if (!strcmp(sub, "build") || !strcmp(sub, "push")) {
         fprintf(stderr, "packetsonde recipe %s: not yet implemented\n", sub);
         return 2;
     }

@@ -110,6 +110,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_recipe_engine PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_engine COMMAND test_recipe_engine)
 
+    add_executable(test_recipe_sign tests/test_recipe_sign.c)
+    target_link_libraries(test_recipe_sign PRIVATE packetsonde_lib)
+    add_test(NAME test_recipe_sign COMMAND test_recipe_sign)
+
     add_executable(test_proc_parse tests/test_proc_parse.c)
     target_link_libraries(test_proc_parse PRIVATE packetsonde_lib)
     add_test(NAME test_proc_parse COMMAND test_proc_parse)

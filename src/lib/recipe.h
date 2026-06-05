@@ -217,6 +217,16 @@ struct ps_recipe_envelope {
     void          *_arena;
 };
 
+struct ps_keypair;  /* keystore.h */
+
+/* Emit a signed envelope JSON for `recipe_bytes` (signed as-given) into `out`
+ * (NUL-terminated). Computes SHA-256 of the bytes, Ed25519-signs
+ * sha256‖author_pub‖signed_at_ms(BE) with `kp`, and writes the envelope object.
+ * Returns the JSON length, or -1 on sign failure / output overflow. */
+int ps_recipe_envelope_build(const uint8_t *recipe_bytes, size_t recipe_len,
+                             const struct ps_keypair *kp, int64_t signed_at_ms,
+                             char *out, size_t out_cap);
+
 /* Parse a signed envelope from JSON. Verifies that recipe_sha256 matches
  * the actual SHA-256 of the inner recipe bytes; does NOT verify the
  * signature (use ps_recipe_envelope_verify_sig for that, separately —

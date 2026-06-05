@@ -18,6 +18,7 @@ set(CLI_SOURCES
     verbs/sandbox_suggest.c
     verbs/baseline.c
     recipe/runner.c
+    recipe/authoring.c
     ../agent/src/config.c
     remote/audit_via.c
     remote/ingest_via.c
