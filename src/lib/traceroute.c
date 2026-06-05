@@ -1,4 +1,5 @@
 #include "traceroute.h"
+#include "traceroute_internal.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -25,6 +26,26 @@ const char *ps_tr_mode_str(enum ps_tr_mode m) {
 
 static long usec_diff(struct timeval *a, struct timeval *b) {
     return (b->tv_sec - a->tv_sec) * 1000000L + (b->tv_usec - a->tv_usec);
+}
+
+void ps_tr_sink_init(struct ps_tr_sink *s, ps_tr_hop_cb cb, void *user,
+                     int max_gap) {
+    s->cb = cb; s->user = user; s->max_gap = max_gap;
+    s->seen_live = 0; s->consec_dead = 0; s->stopped = 0;
+}
+
+int ps_tr_sink_emit(struct ps_tr_sink *s, const struct ps_tr_hop *hop) {
+    if (s->stopped) return 1;
+    if (s->cb(hop, s->user)) { s->stopped = 1; return 1; }   /* consumer stop */
+
+    if (hop->addr[0]) { s->seen_live = 1; s->consec_dead = 0; }
+    else              { s->consec_dead++; }
+
+    if (hop->reached_dst) { s->stopped = 1; return 1; }      /* dest reached */
+    if (s->max_gap > 0 && s->seen_live && s->consec_dead >= s->max_gap) {
+        s->stopped = 1; return 1;                            /* gap after live */
+    }
+    return 0;
 }
 
 static int resolve_v4(const char *host, struct sockaddr_in *out) {
