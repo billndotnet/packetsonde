@@ -177,4 +177,8 @@ if(BUILD_TESTING)
     add_executable(test_recipe_tls tests/test_recipe_tls.c)
     target_link_libraries(test_recipe_tls PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_tls COMMAND test_recipe_tls)
+
+    add_executable(test_activity_json tests/test_activity_json.c)
+    target_link_libraries(test_activity_json PRIVATE packetsonde_lib)
+    add_test(NAME test_activity_json COMMAND test_activity_json)
 endif()
