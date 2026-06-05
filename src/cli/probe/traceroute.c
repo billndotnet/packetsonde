@@ -3,6 +3,7 @@
 #include "../runstate.h"
 #include "../util/fail_on.h"
 #include "finding.h"
+#include "ptr_cache.h"
 #include "traceroute.h"
 #include "ulid.h"
 
@@ -17,10 +18,55 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts);
 static void usage(void) {
     fprintf(stderr,
         "Usage: packetsonde probe traceroute <target> "
-        "[--proto udp|tcp|icmp] [--mode classic|paris|dublin] [--port N]\n"
+        "[--proto udp|tcp|icmp] [--mode classic|paris|dublin] [--port N] "
+        "[--max-gap K] (stop after K dead hops; default 5, 0=off) "
+        "[--ptr] [--ptr-timeout MS]\n"
         "Defaults: --proto udp --mode classic --port 33434 (udp) / 80 (tcp).\n"
         "TCP: connect-based, hits stateful firewalls that drop UDP.\n"
         "ICMP: echo-request, all modes treated as classic.\n");
+}
+
+struct tr_emit_ctx {
+    struct ps_output          *out;
+    const char                *run_id;
+    const char                *self_host;
+    const char                *target;
+    struct ps_traceroute_opts *to;
+    struct ps_ptr_cache       *ptr;       /* NULL unless --ptr */
+    int                        ptr_timeout_ms;
+};
+
+static int tr_emit_cb(const struct ps_tr_hop *h, void *u) {
+    struct tr_emit_ctx *c = u;
+    char ptr_name[256] = "";
+    if (c->ptr && h->addr[0])
+        ps_ptr_cache_wait(c->ptr, h->addr, c->ptr_timeout_ms, ptr_name, sizeof(ptr_name));
+
+    char title[320];
+    if (h->addr[0] && ptr_name[0])
+        snprintf(title, sizeof(title), "hop %d: %s (%s) (%.1f ms)",
+                 h->ttl, ptr_name, h->addr, h->rtt_us / 1000.0);
+    else if (h->addr[0])
+        snprintf(title, sizeof(title), "hop %d: %s (%.1f ms)",
+                 h->ttl, h->addr, h->rtt_us / 1000.0);
+    else
+        snprintf(title, sizeof(title), "hop %d: *", h->ttl);
+
+    char ev[512];
+    snprintf(ev, sizeof(ev),
+             "{\"proto\":\"%s\",\"mode\":\"%s\",\"ttl\":%d,\"rtt_us\":%ld,"
+             "\"reached_dst\":%s,\"ptr\":\"%s\"}",
+             ps_tr_proto_str(c->to->proto), ps_tr_mode_str(c->to->mode),
+             h->ttl, h->rtt_us, h->reached_dst ? "true" : "false", ptr_name);
+
+    struct ps_finding f;
+    ps_finding_init(&f, c->run_id, "cli.probe.traceroute", c->self_host,
+                    "probe.traceroute.hop", PS_SEV_INFO, PS_CONF_FIRM, title);
+    ps_finding_set_target_hostname(&f, c->target, 0);
+    if (h->addr[0]) ps_finding_set_target_ip(&f, h->addr, 0);
+    ps_finding_set_evidence_json(&f, ev);
+    ps_output_emit(c->out, &f);
+    return 0;   /* Phase 2 adds SIGINT-driven stop here */
 }
 
 int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
@@ -30,11 +76,16 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
 
     struct ps_traceroute_opts to = PS_TRACEROUTE_DEFAULTS;
     int port_set = 0;
+    int enable_ptr = 0;
+    int ptr_timeout_ms = 300;
 
     static const struct option longopts[] = {
-        { "proto", required_argument, NULL, 'p' },
-        { "mode",  required_argument, NULL, 'm' },
-        { "port",  required_argument, NULL, 'P' },
+        { "proto",       required_argument, NULL, 'p' },
+        { "mode",        required_argument, NULL, 'm' },
+        { "port",        required_argument, NULL, 'P' },
+        { "max-gap",     required_argument, NULL, 'g' },
+        { "ptr",         no_argument,       NULL, 'r' },
+        { "ptr-timeout", required_argument, NULL, 't' },
         { NULL, 0, NULL, 0 }
     };
     optind = 2;
@@ -57,12 +108,21 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
                 to.dst_port = (uint16_t)atoi(optarg);
                 port_set = 1;
                 break;
+            case 'g': to.max_gap = atoi(optarg); break;
+            case 'r': enable_ptr = 1; break;
+            case 't': ptr_timeout_ms = atoi(optarg); break;
             default: usage(); return 2;
         }
     }
 
     /* TCP traceroute targets a service port, not the UDP traceroute port. */
     if (to.proto == PS_TR_PROTO_TCP && !port_set) to.dst_port = 80;
+
+    if (opts->via_count > 0) {
+        fprintf(stderr, "probe traceroute: --via is not supported yet "
+                        "(traceroute-over-agent lands in a follow-on)\n");
+        return 2;
+    }
 
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
@@ -78,42 +138,22 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
     oopts.color = opts->no_color ? 0 : 1;
     struct ps_output out; ps_output_init(&out, &oopts);
 
-    struct ps_traceroute_result tr;
-    int rc = ps_traceroute_run(target, &to, &tr);
+    struct ps_ptr_cache *ptr = enable_ptr ? ps_ptr_cache_new() : NULL;
+    struct tr_emit_ctx ctx = {
+        .out = &out, .run_id = run_id, .self_host = self_host,
+        .target = target, .to = &to, .ptr = ptr, .ptr_timeout_ms = ptr_timeout_ms,
+    };
+    int rc = ps_traceroute_run_cb(target, &to, tr_emit_cb, &ctx);
+    if (ptr) ps_ptr_cache_free(ptr);
     if (rc != 0) {
         fprintf(stderr,
                 "probe traceroute: cannot run (proto=%s mode=%s) - "
-                "tcp/icmp + paris/dublin land in a follow-on; udp classic "
-                "requires kernel ICMP capability (cap_net_raw on Linux, "
-                "sudo on macOS for raw fallback)\n",
+                "udp classic requires kernel ICMP capability (cap_net_raw on "
+                "Linux, sudo on macOS for raw fallback)\n",
                 ps_tr_proto_str(to.proto), ps_tr_mode_str(to.mode));
         ps_output_close(&out);
         return 1;
     }
-
-    for (int i = 0; i < tr.hop_count; i++) {
-        struct ps_tr_hop *h = &tr.hops[i];
-        char title[256];
-        if (h->addr[0]) {
-            snprintf(title, sizeof(title), "hop %d: %s (%.1f ms)",
-                     h->ttl, h->addr, h->rtt_us / 1000.0);
-        } else {
-            snprintf(title, sizeof(title), "hop %d: *", h->ttl);
-        }
-        char ev[256];
-        snprintf(ev, sizeof(ev),
-                 "{\"proto\":\"%s\",\"mode\":\"%s\",\"ttl\":%d,\"rtt_us\":%ld,\"reached_dst\":%s}",
-                 ps_tr_proto_str(to.proto), ps_tr_mode_str(to.mode),
-                 h->ttl, h->rtt_us, h->reached_dst ? "true" : "false");
-        struct ps_finding f;
-        ps_finding_init(&f, run_id, "cli.probe.traceroute", self_host,
-                        "probe.traceroute.hop", PS_SEV_INFO, PS_CONF_FIRM, title);
-        ps_finding_set_target_hostname(&f, target, 0);
-        if (h->addr[0]) ps_finding_set_target_ip(&f, h->addr, 0);
-        ps_finding_set_evidence_json(&f, ev);
-        ps_output_emit(&out, &f);
-    }
-
     ps_output_snapshot(&out, &g_last_run_counts);
     ps_output_close(&out);
     return 0;
