@@ -99,6 +99,7 @@ struct jp {
     struct arena  *a;
     char          *err;       /* points to a buffer the caller owns */
     size_t         err_sz;
+    int            schema;     /* recipe schema; gates schema-2 opcodes */
 };
 
 static void jp_err(struct jp *p, const char *fmt, ...) {
@@ -438,10 +439,11 @@ static int build_ref(struct jp *p, struct ps_recipe_ref *out,
 
 static enum ps_recipe_bt bt_from_string(const char *s) {
     if (!s) return PS_BT_NONE;
-    if (!strcmp(s, "string")) return PS_BT_STRING;
-    if (!strcmp(s, "int"))    return PS_BT_INT;
-    if (!strcmp(s, "bool"))   return PS_BT_BOOL;
-    if (!strcmp(s, "bytes"))  return PS_BT_BYTES;
+    if (!strcmp(s, "string"))  return PS_BT_STRING;
+    if (!strcmp(s, "int"))     return PS_BT_INT;
+    if (!strcmp(s, "bool"))    return PS_BT_BOOL;
+    if (!strcmp(s, "bytes"))   return PS_BT_BYTES;
+    if (!strcmp(s, "strlist")) return PS_BT_STRLIST;
     return PS_BT_NONE;
 }
 
@@ -666,6 +668,18 @@ static struct ps_recipe_step *build_step(struct jp *p, const struct jv *o,
 
     if (!strcmp(op_s, "match")) {
         s->op = PS_OP_MATCH;
+        /* schema 2: `any` mode matches the regex against any element of a strlist,
+         * binding `out` (the first hit). Mutually exclusive with `in`. */
+        if (jv_obj_get(o, "any")) {
+            if (p->schema < PS_RECIPE_SCHEMA_V2) { snprintf(err, err_sz, "match.any requires schema 2"); return NULL; }
+            if (expect_string(o, "any", &s->u.match.any, err, err_sz, "match") != 0) return NULL;
+            if (bt_lookup(t, s->u.match.any) != PS_BT_STRLIST) {
+                snprintf(err, err_sz, "match.any: '%s' must reference a strlist binding", s->u.match.any); return NULL;
+            }
+            if (expect_string(o, "regex", &s->u.match.regex, err, err_sz, "match") != 0) return NULL;
+            if (s->out) { s->out_type = PS_BT_STRING; if (bt_declare(t, s->out, PS_BT_STRING, err, err_sz) != 0) return NULL; }
+            return s;
+        }
         if (expect_string(o, "in", &s->u.match.in, err, err_sz, "match") != 0) return NULL;
         enum ps_recipe_bt in_ty = bt_lookup(t, s->u.match.in);
         if (in_ty != PS_BT_BYTES && in_ty != PS_BT_STRING) {
@@ -765,21 +779,129 @@ static struct ps_recipe_step *build_step(struct jp *p, const struct jv *o,
         s->op = PS_OP_IF;
         const char *c = NULL;
         if (expect_string(o, "cond", &c, err, err_sz, "if") != 0) return NULL;
-        if      (!strcmp(c, "equals"))  s->u.if_.cond = PS_COND_EQUALS;
-        else if (!strcmp(c, "exists"))  s->u.if_.cond = PS_COND_EXISTS;
-        else if (!strcmp(c, "matches")) s->u.if_.cond = PS_COND_MATCHES;
+        if      (!strcmp(c, "equals"))      s->u.if_.cond = PS_COND_EQUALS;
+        else if (!strcmp(c, "exists"))      s->u.if_.cond = PS_COND_EXISTS;
+        else if (!strcmp(c, "matches"))     s->u.if_.cond = PS_COND_MATCHES;
+        else if (!strcmp(c, "any_matches")) s->u.if_.cond = PS_COND_ANY_MATCHES;
+        else if (!strcmp(c, "any_in"))      s->u.if_.cond = PS_COND_ANY_IN;
         else { snprintf(err, err_sz, "if.cond: bad value '%s'", c); return NULL; }
-        if (expect_string(o, "binding", &s->u.if_.binding, err, err_sz, "if") != 0) return NULL;
-        if (bt_lookup(t, s->u.if_.binding) == PS_BT_NONE) {
-            snprintf(err, err_sz, "if: unknown binding '%s'", s->u.if_.binding); return NULL;
-        }
-        if (s->u.if_.cond != PS_COND_EXISTS) {
-            if (expect_string(o, "literal", &s->u.if_.literal, err, err_sz, "if") != 0) return NULL;
+
+        if (s->u.if_.cond == PS_COND_ANY_MATCHES || s->u.if_.cond == PS_COND_ANY_IN) {
+            if (p->schema < PS_RECIPE_SCHEMA_V2) { snprintf(err, err_sz, "if.%s requires schema 2", c); return NULL; }
+            if (expect_string(o, "list", &s->u.if_.list, err, err_sz, "if") != 0) return NULL;
+            if (bt_lookup(t, s->u.if_.list) != PS_BT_STRLIST) {
+                snprintf(err, err_sz, "if.%s: 'list' must reference a strlist binding", c); return NULL;
+            }
+            if (s->u.if_.cond == PS_COND_ANY_MATCHES) {
+                if (expect_string(o, "regex", &s->u.if_.regex, err, err_sz, "if") != 0) return NULL;
+            } else {
+                struct jv *setv = jv_obj_get(o, "set");
+                if (!setv || setv->kind != JV_ARR) { snprintf(err, err_sz, "if.any_in: 'set' must be an array"); return NULL; }
+                const char **set = arena_alloc(p->a, (setv->u.arr.n ? setv->u.arr.n : 1) * sizeof(*set));
+                if (!set) { snprintf(err, err_sz, "oom"); return NULL; }
+                for (size_t i = 0; i < setv->u.arr.n; i++) {
+                    struct jv *it = setv->u.arr.items[i];
+                    if (it->kind != JV_STR) { snprintf(err, err_sz, "if.any_in.set[%zu]: must be a string", i); return NULL; }
+                    set[i] = it->u.str.s;
+                }
+                s->u.if_.set = set; s->u.if_.set_n = setv->u.arr.n;
+            }
+        } else {
+            if (expect_string(o, "binding", &s->u.if_.binding, err, err_sz, "if") != 0) return NULL;
+            if (bt_lookup(t, s->u.if_.binding) == PS_BT_NONE) {
+                snprintf(err, err_sz, "if: unknown binding '%s'", s->u.if_.binding); return NULL;
+            }
+            if (s->u.if_.cond != PS_COND_EXISTS) {
+                if (expect_string(o, "literal", &s->u.if_.literal, err, err_sz, "if") != 0) return NULL;
+            }
         }
         struct jv *thenv = jv_obj_get(o, "then");
         if (!thenv) { snprintf(err, err_sz, "if: missing 'then'"); return NULL; }
         if (build_steps_array(p, thenv, &s->u.if_.then, &s->u.if_.then_n,
                               t, kind_prefix, err, err_sz) != 0) return NULL;
+        return s;
+    }
+
+    if (!strcmp(op_s, "tls_upgrade")) {
+        if (p->schema < PS_RECIPE_SCHEMA_V2) { snprintf(err, err_sz, "tls_upgrade requires schema 2"); return NULL; }
+        s->op = PS_OP_TLS_UPGRADE;
+        if (expect_string(o, "conn", &s->u.tls_upgrade.conn, err, err_sz, "tls_upgrade") != 0) return NULL;
+        if (bt_lookup(t, s->u.tls_upgrade.conn) != PS_BT_CONN) {
+            snprintf(err, err_sz, "tls_upgrade: 'conn' must reference a conn binding"); return NULL;
+        }
+        const char *sni = NULL;
+        if (expect_string(o, "sni", &sni, err, err_sz, "tls_upgrade") != 0) return NULL;
+        if (build_ref(p, &s->u.tls_upgrade.sni, sni, err, err_sz, t) != 0) return NULL;
+        (void)opt_int(o, "timeout_ms", &s->u.tls_upgrade.timeout_ms);
+        struct jv *alpnv = jv_obj_get(o, "alpn");
+        if (alpnv) {
+            if (alpnv->kind != JV_ARR) { snprintf(err, err_sz, "tls_upgrade.alpn: must be an array"); return NULL; }
+            const char **al = arena_alloc(p->a, (alpnv->u.arr.n + 1) * sizeof(*al));
+            if (!al) { snprintf(err, err_sz, "oom"); return NULL; }
+            for (size_t i = 0; i < alpnv->u.arr.n; i++) {
+                struct jv *it = alpnv->u.arr.items[i];
+                if (it->kind != JV_STR) { snprintf(err, err_sz, "tls_upgrade.alpn[%zu]: must be a string", i); return NULL; }
+                al[i] = it->u.str.s;
+            }
+            al[alpnv->u.arr.n] = NULL;
+            s->u.tls_upgrade.alpn = al;
+        }
+        static const struct { const char *n; enum ps_recipe_bt t; } TLSB[] = {
+            {"tls_version", PS_BT_STRING}, {"tls_cipher", PS_BT_STRING}, {"tls_ja4", PS_BT_STRING},
+            {"tls_ja4s", PS_BT_STRING}, {"tls_ja4x", PS_BT_STRING}, {"cert_subject_cn", PS_BT_STRING},
+            {"cert_issuer_cn", PS_BT_STRING}, {"cert_not_after", PS_BT_STRING}, {"cert_sig_alg", PS_BT_STRING},
+            {"cert_key_type", PS_BT_STRING}, {"cert_san", PS_BT_STRING}, {"cert_self_signed", PS_BT_STRING},
+            {"cert_days_to_expiry", PS_BT_INT}, {"cert_key_bits", PS_BT_INT},
+        };
+        for (size_t i = 0; i < sizeof(TLSB) / sizeof(TLSB[0]); i++)
+            if (bt_declare(t, TLSB[i].n, TLSB[i].t, err, err_sz) != 0) return NULL;
+        return s;
+    }
+
+    if (!strcmp(op_s, "tls_enum")) {
+        if (p->schema < PS_RECIPE_SCHEMA_V2) { snprintf(err, err_sz, "tls_enum requires schema 2"); return NULL; }
+        s->op = PS_OP_TLS_ENUM;
+        const char *host_s = NULL, *port_s = NULL;
+        if (expect_string(o, "host", &host_s, err, err_sz, "tls_enum") != 0) return NULL;
+        struct jv *pv = jv_obj_get(o, "port");
+        char pb[32];
+        if (!pv) { snprintf(err, err_sz, "tls_enum: missing 'port'"); return NULL; }
+        if (pv->kind == JV_INT) {
+            snprintf(pb, sizeof(pb), "%lld", (long long)pv->u.i);
+            port_s = arena_strndup(p->a, pb, strlen(pb));
+            if (!port_s) { snprintf(err, err_sz, "oom"); return NULL; }
+        } else if (pv->kind == JV_STR) { port_s = pv->u.str.s; }
+        else { snprintf(err, err_sz, "tls_enum: 'port' must be int or template string"); return NULL; }
+        if (build_ref(p, &s->u.tls_enum.host, host_s, err, err_sz, t) != 0) return NULL;
+        if (build_ref(p, &s->u.tls_enum.port, port_s, err, err_sz, t) != 0) return NULL;
+        (void)opt_int(o, "timeout_ms", &s->u.tls_enum.timeout_ms);
+        struct jv *pr = jv_obj_get(o, "protocols");
+        if (pr) {
+            if (pr->kind != JV_ARR) { snprintf(err, err_sz, "tls_enum.protocols: must be an array"); return NULL; }
+            const char **ps = arena_alloc(p->a, (pr->u.arr.n ? pr->u.arr.n : 1) * sizeof(*ps));
+            if (!ps) { snprintf(err, err_sz, "oom"); return NULL; }
+            for (size_t i = 0; i < pr->u.arr.n; i++) {
+                struct jv *it = pr->u.arr.items[i];
+                if (it->kind != JV_STR) { snprintf(err, err_sz, "tls_enum.protocols[%zu]: must be a string", i); return NULL; }
+                const char *L = it->u.str.s;
+                if (strcmp(L, "SSLv3") && strcmp(L, "TLS1.0") && strcmp(L, "TLS1.1") &&
+                    strcmp(L, "TLS1.2") && strcmp(L, "TLS1.3")) {
+                    snprintf(err, err_sz, "tls_enum: bad protocol '%s'", L); return NULL;
+                }
+                ps[i] = L;
+            }
+            s->u.tls_enum.protocols = ps; s->u.tls_enum.protocols_n = pr->u.arr.n;
+        }
+        const char *st = NULL;
+        if (opt_string(o, "starttls", &st) == 0 && st) {
+            if (strcmp(st, "smtp") && strcmp(st, "imap") && strcmp(st, "pop3") &&
+                strcmp(st, "ftp") && strcmp(st, "ldap")) {
+                snprintf(err, err_sz, "tls_enum.starttls: bad mode '%s'", st); return NULL;
+            }
+            s->u.tls_enum.starttls = st;
+        }
+        if (bt_declare(t, "tls_accepted_protocols", PS_BT_STRLIST, err, err_sz) != 0) return NULL;
+        if (bt_declare(t, "tls_accepted_ciphers",  PS_BT_STRLIST, err, err_sz) != 0) return NULL;
         return s;
     }
 
@@ -793,6 +915,7 @@ static void default_budgets(struct ps_recipe_budgets *b) {
     b->max_recv_bytes   = 65536;
     b->max_targets      = 1024;
     b->max_wallclock_ms = 30000;
+    b->max_tls_probes   = 200;
 }
 
 struct ps_recipe *ps_recipe_parse_json(const uint8_t *json, size_t json_len,
@@ -820,9 +943,10 @@ struct ps_recipe *ps_recipe_parse_json(const uint8_t *json, size_t json_len,
     default_budgets(&r->budgets);
 
     if (expect_int(root, "schema", &r->schema, err, err_sz, "recipe") != 0) goto fail;
-    if (r->schema != PS_RECIPE_SCHEMA_V1) {
+    if (r->schema < PS_RECIPE_SCHEMA_V1 || r->schema > PS_RECIPE_SCHEMA_MAX) {
         snprintf(err, err_sz, "unsupported schema %d", r->schema); goto fail;
     }
+    p.schema = r->schema;   /* gate schema-2 opcodes during step building */
     if (expect_string(root, "name", &r->name, err, err_sz, "recipe") != 0) goto fail;
     if (expect_int(root, "version", &r->version, err, err_sz, "recipe") != 0) goto fail;
     (void)opt_string(root, "description", &r->description);
@@ -835,6 +959,7 @@ struct ps_recipe *ps_recipe_parse_json(const uint8_t *json, size_t json_len,
         (void)opt_int(bj, "max_recv_bytes",   &r->budgets.max_recv_bytes);
         (void)opt_int(bj, "max_targets",      &r->budgets.max_targets);
         (void)opt_int(bj, "max_wallclock_ms", &r->budgets.max_wallclock_ms);
+        (void)opt_int(bj, "max_tls_probes",   &r->budgets.max_tls_probes);
     }
 
     struct jv *steps = jv_obj_get(root, "steps");

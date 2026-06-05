@@ -169,4 +169,8 @@ if(BUILD_TESTING)
     add_executable(test_tls_probe tests/test_tls_probe.c)
     target_link_libraries(test_tls_probe PRIVATE packetsonde_lib)
     add_test(NAME test_tls_probe COMMAND test_tls_probe)
+
+    add_executable(test_recipe_tls tests/test_recipe_tls.c)
+    target_link_libraries(test_recipe_tls PRIVATE packetsonde_lib)
+    add_test(NAME test_recipe_tls COMMAND test_recipe_tls)
 endif()

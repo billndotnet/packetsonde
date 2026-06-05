@@ -22,8 +22,10 @@
 #include <stdint.h>
 
 #define PS_RECIPE_SCHEMA_V1 1
+#define PS_RECIPE_SCHEMA_V2 2     /* TLS-aware engine (TLS_UPGRADE / TLS_ENUM) */
+#define PS_RECIPE_SCHEMA_MAX 2    /* highest schema this build executes */
 
-/* Frozen v1 opcode set — see spec §5. New opcodes bump the schema. */
+/* Opcode set. v1 = 1..8 (frozen); schema-2 adds the TLS opcodes. */
 enum ps_recipe_op {
     PS_OP_CONNECT_TCP = 1,
     PS_OP_CONNECT_UDP,
@@ -33,6 +35,8 @@ enum ps_recipe_op {
     PS_OP_MATCH,
     PS_OP_IF,
     PS_OP_EMIT,
+    PS_OP_TLS_UPGRADE,   /* schema 2 */
+    PS_OP_TLS_ENUM,      /* schema 2 */
 };
 
 /* Binding types — see spec §4. */
@@ -43,6 +47,7 @@ enum ps_recipe_bt {
     PS_BT_STRING,
     PS_BT_INT,
     PS_BT_BOOL,
+    PS_BT_STRLIST,       /* schema 2: ordered list of strings */
 };
 
 /* Severity / confidence — mirror the finding.h enums but kept as their
@@ -67,6 +72,8 @@ enum ps_recipe_cond {
     PS_COND_EQUALS = 1,
     PS_COND_EXISTS,
     PS_COND_MATCHES,
+    PS_COND_ANY_MATCHES,   /* schema 2: any element of a strlist matches regex */
+    PS_COND_ANY_IN,        /* schema 2: any element of a strlist is in a set */
 };
 
 /* A reference resolves at run time to a typed value. `text` may be a
@@ -112,7 +119,8 @@ struct ps_recipe_step {
             const char *conn;
         } close;
         struct {
-            const char *in;                  /* binding name */
+            const char *in;                  /* binding name (scalar in mode) */
+            const char *any;                 /* schema 2: strlist binding (any mode) */
             const char *regex;
             struct ps_recipe_capture *captures;
             size_t                    captures_n;
@@ -121,6 +129,10 @@ struct ps_recipe_step {
             enum ps_recipe_cond cond;
             const char *binding;             /* left side, always a binding */
             const char *literal;             /* right side for equals/matches */
+            const char *list;                /* schema 2: strlist for any_matches/any_in */
+            const char *regex;               /* schema 2: any_matches pattern */
+            const char **set;                /* schema 2: any_in membership set */
+            size_t      set_n;
             struct ps_recipe_step **then;    /* substep array */
             size_t                  then_n;
         } if_;
@@ -133,6 +145,20 @@ struct ps_recipe_step {
             struct ps_recipe_emit_field *fields;
             size_t                       fields_n;
         } emit;
+        struct {                             /* schema 2 */
+            const char          *conn;       /* conn binding to wrap in TLS */
+            struct ps_recipe_ref sni;
+            const char         **alpn;       /* NULL-terminated; may be NULL */
+            int                  timeout_ms;
+        } tls_upgrade;
+        struct {                             /* schema 2 */
+            struct ps_recipe_ref host;
+            struct ps_recipe_ref port;
+            const char         **protocols;  /* labels; NULL => default full set */
+            size_t               protocols_n;
+            const char          *starttls;   /* named mode or NULL */
+            int                  timeout_ms;
+        } tls_enum;
     } u;
 };
 
@@ -147,6 +173,7 @@ struct ps_recipe_budgets {
     int max_recv_bytes;
     int max_targets;
     int max_wallclock_ms;
+    int max_tls_probes;       /* schema 2: cap on TLS handshakes per run */
 };
 
 struct ps_recipe {
@@ -222,6 +249,11 @@ struct ps_recipe_target {
  * `recv_some` is a single best-effort read into `buf` of up to `cap`
  * bytes; the engine implements the per-step `until` semantics by calling
  * it in a loop. Returns >0 bytes read, 0 on EOF, -1 on error. */
+/* Full definitions in tls_probe.h; forward-declared here so recipe.h consumers
+ * don't pull in OpenSSL. The TLS callbacks may be NULL for schema-1-only backends. */
+struct ps_tls_info;
+struct ps_tls_probe_result;
+
 struct ps_recipe_io {
     void *ctx;
     int    (*connect_tcp)(void *ctx, const char *host, int port, int timeout_ms);
@@ -229,6 +261,15 @@ struct ps_recipe_io {
     int    (*send_all)   (void *ctx, int conn, const uint8_t *buf, size_t n);
     long   (*recv_some)  (void *ctx, int conn, uint8_t *buf, size_t cap);
     void   (*close_conn) (void *ctx, int conn);
+    /* schema 2 — TLS. After tls_upgrade(conn) succeeds, send_all/recv_some on
+     * that conn ride the encrypted channel. */
+    int    (*tls_upgrade)(void *ctx, int conn, const char *sni,
+                          const char *const *alpn, int timeout_ms);
+    int    (*tls_session)(void *ctx, int conn, struct ps_tls_info *out);
+    int    (*tls_probe)  (void *ctx, const char *host, int port,
+                          const char *min_proto, const char *max_proto,
+                          const char *cipher_list, const char *starttls_mode,
+                          int timeout_ms, struct ps_tls_probe_result *out);
 };
 
 /* Findings sink. `evidence_json` is a complete JSON object (`{...}`) or
