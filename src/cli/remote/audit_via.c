@@ -7,6 +7,7 @@
 #include "../output/output.h"
 #include "../registry/agents.h"
 #include "finding.h"
+#include "recipe.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -436,8 +437,9 @@ int ps_via_connect(const char *agent_name, struct ps_at_ctx *ctx_out,
     ps_keystore_fingerprint(kp.pubkey, self_fpr);
     char hello[256];
     int hn = snprintf(hello, sizeof(hello),
-                      "{\"type\":\"hello\",\"v\":%d,\"client_fingerprint\":\"sha256:%s\"}",
-                      PS_AGENT_PROTO_VERSION, self_fpr);
+                      "{\"type\":\"hello\",\"v\":%d,\"client_fingerprint\":\"sha256:%s\","
+                      "\"max_recipe_schema\":%d}",
+                      PS_AGENT_PROTO_VERSION, self_fpr, PS_RECIPE_SCHEMA_MAX);
     if (hn < 0 || ps_ap_write_frame(io_out, hello, (size_t)hn) != PS_AP_OK) {
         fprintf(stderr, "--via: hello write failed\n");
         ps_at_close(ssl); ps_at_ctx_destroy(ctx_out); return -1;

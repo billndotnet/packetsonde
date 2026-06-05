@@ -44,6 +44,7 @@
 #include "agent_proto.h"
 #include "agent_transport.h"
 #include "keystore.h"
+#include "recipe.h"
 #include "relay_attest.h"
 #include "http_client.h"
 #include "log.h"
@@ -453,8 +454,9 @@ static void *session_thread(void *arg) {
     char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
     ps_keystore_fingerprint(st->agent_kp.pubkey, fpr);
     int hn = snprintf(hello, sizeof(hello),
-                      "{\"type\":\"hello\",\"v\":%d,\"agent_fingerprint\":\"sha256:%s\"}",
-                      PS_AGENT_PROTO_VERSION, fpr);
+                      "{\"type\":\"hello\",\"v\":%d,\"agent_fingerprint\":\"sha256:%s\","
+                      "\"max_recipe_schema\":%d}",
+                      PS_AGENT_PROTO_VERSION, fpr, PS_RECIPE_SCHEMA_MAX);
     if (hn < 0 || ps_ap_write_frame(&io, hello, (size_t)hn) != PS_AP_OK) goto out;
 
     /* Expect hello + audit request from client. */

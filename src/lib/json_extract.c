@@ -9,6 +9,24 @@ static int hexval(char c) {
     return -1;
 }
 
+int ps_json_extract_int(const char *json, const char *key, long *out) {
+    if (!json || !key || !out) return -1;
+    char needle[128];
+    int nl = snprintf(needle, sizeof needle, "\"%s\":", key);
+    if (nl < 0 || (size_t)nl >= sizeof needle) return -1;
+    const char *p = strstr(json, needle);
+    if (!p) return -1;
+    p += nl;
+    while (*p == ' ' || *p == '\t') p++;
+    int neg = 0;
+    if (*p == '-') { neg = 1; p++; }
+    if (*p < '0' || *p > '9') return -1;   /* not an integer value */
+    long v = 0;
+    while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; }
+    *out = neg ? -v : v;
+    return 0;
+}
+
 int ps_json_extract_string(const char *json, const char *key, char *out, size_t cap) {
     if (!json || !key || !out || cap == 0) return -1;
     char needle[128];
