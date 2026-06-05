@@ -24,6 +24,7 @@ add_library(packetsonde_lib STATIC
     sock_parse.c
     activity_record.c
     proc_profile.c
+    proc_profile_delta.c
     cgroup_unit.c
     systemd_policy.c
     policy_eval.c
@@ -186,4 +187,8 @@ if(BUILD_TESTING)
     add_executable(test_proc_profile tests/test_proc_profile.c)
     target_link_libraries(test_proc_profile PRIVATE packetsonde_lib)
     add_test(NAME test_proc_profile COMMAND test_proc_profile)
+
+    add_executable(test_proc_profile_delta tests/test_proc_profile_delta.c)
+    target_link_libraries(test_proc_profile_delta PRIVATE packetsonde_lib)
+    add_test(NAME test_proc_profile_delta COMMAND test_proc_profile_delta)
 endif()
