@@ -11,12 +11,28 @@ packetsonded-user:
     - createhome: False
     - shell: /usr/sbin/nologin
 
+# Runtime shared-library dependencies of the binaries. packetsonde-priv links
+# libpcap (passive capture); packetsonded links libhiredis (Redis bridge) +
+# OpenSSL; the CLI links libedit + OpenSSL. A host missing libpcap crash-loops
+# the priv worker (broken pipe) and captures nothing — install before the
+# binaries run. Package names below are Ubuntu 24.04 / noble (post-t64);
+# adjust per distro (e.g. libpcap0.8 / libssl3 on pre-t64 / non-Ubuntu).
+packetsonded-deps:
+  pkg.installed:
+    - pkgs:
+      - libpcap0.8t64
+      - libhiredis1.1.0
+      - libssl3t64
+      - libedit2
+
 {% for b in ['packetsonded', 'packetsonde-priv'] %}
 packetsonded-bin-{{ b }}:
   file.managed:
     - name: /usr/local/sbin/{{ b }}
     - source: salt://packetsonde/bin/{{ b }}
     - mode: '0755'
+    - require:
+      - pkg: packetsonded-deps
 {% endfor %}
 
 packetsonde-cli-bin:
@@ -24,6 +40,8 @@ packetsonde-cli-bin:
     - name: /usr/local/bin/packetsonde
     - source: salt://packetsonde/bin/packetsonde
     - mode: '0755'
+    - require:
+      - pkg: packetsonded-deps
 
 packetsonded-unit:
   file.managed:

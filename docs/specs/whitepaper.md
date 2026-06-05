@@ -1,7 +1,7 @@
 # packetsonde — Whitepaper
 
-**Version:** 1.0 (toolkit-era)
-**Date:** 2026-05-20
+**Version:** 1.2 (central-reporting era)
+**Date:** 2026-06-05
 **License:** PolyForm Noncommercial 1.0.0
 
 ---
@@ -54,6 +54,8 @@ The toolkit has two binaries and one library.
 **`libpacketsonde`** is the static library both binaries link. It owns the finding record (the wire format), JSON serialization, the IPC client used by the CLI to talk to a local agent, a ULID generator, and the protocol-and-mode-parameterized traceroute core. By living in the shared library, these primitives behave identically whether you observe locally or via the agent.
 
 The CLI and agent are loosely coupled. The CLI can audit a network without an agent running; the agent can observe a network without a CLI ever connecting. They meet, when they meet, through one of two channels: the existing local UNIX-socket IPC, or (forthcoming) a network protocol that carries CLI requests to a remote agent and findings back.
+
+**A third, optional tier has landed: central reporting.** An agent can now check in to a **central console** and ship the observations it accumulates — passive discovery, interface findings — upstream in bounded batches (see §5, "Central reporting"). This is strictly additive and opt-in: an agent with no central configured behaves exactly as before (local JSONL + IPC). The central console enrolls agents, ingests their finding stream, and runs a **correlation tier** over it (§6, "Central console and correlation") — the place where fleet-wide vulnerability correlation happens. The toolkit's founding principle still holds at the edge — the *agent's* intelligence stays local and overt — but the operator who runs a fleet now has a first-class place to aggregate and correlate what the fleet sees, instead of stitching it together with `vector` by hand.
 
 ## 3. The finding record
 
@@ -162,6 +164,16 @@ Findings themselves never affect exit code unless `--fail-on` is set. This decou
 
 **IPC.** Local CLIs talk to the agent over a UNIX socket (`/tmp/packetsonde-agent.sock` by default). The protocol is line-oriented JSON: channel + payload framed by length, with subscribe/unsubscribe and request/response primitives. `packetsonde agent listen` opens a streaming subscription; `packetsonde agent hosts` is a single request/response.
 
+### Central reporting
+
+When configured with a central console, the agent reports the observations it accumulates upstream. The mechanics are deliberately conservative:
+
+- **Bounded, thread-safe observation queue.** Listener modules enqueue findings (passive discovery, interface/neighbor observations) wrapped as events. The queue is bounded — under a reporting stall or a hostile traffic burst, the agent drops oldest rather than growing without limit. Observation collection never blocks packet handling, and the queue is the only shared state between the capture path and the reporter.
+- **Batched check-in.** On each check-in cycle the agent drains the queue and ships it to the console's observations endpoint in **bounded batches**, so a backlog can't produce an oversized request that overflows the reporter's buffer. A check-in that fails leaves the (bounded) queue intact for the next cycle; reporting is best-effort and self-healing, never a source of agent instability.
+- **Opt-in and edge-faithful.** No central configured → no reporting, identical local behavior. The agent still emits the same finding records locally; central reporting is a *copy* upstream, not a redirection. The agent holds no state about what the fleet does with what it sends.
+
+This is the agent→console path (findings up). It is distinct from the local CLI→agent IPC and from the forthcoming CLI→remote-agent network protocol (requests across, §9), which carries an auditor's active campaign to an agent rather than an agent's passive stream to a console.
+
 ### Deployment models
 
 The agent is designed to be positioned in places auditors actually need observation. Three deployment shapes are first-class in the design:
@@ -187,6 +199,19 @@ agent / cli --auto-append--> /var/log/packetsonde/*.jsonl
 ```
 
 The collector is `vector` or any line-shipper. The store is whatever the operator already runs. The alerter is whatever has access to that store. No piece is bundled with the toolkit; every piece is a commodity.
+
+### Central console and correlation
+
+For operators who run a fleet rather than a single probe, hand-stitching with `vector` stops scaling. The **central console** is the optional aggregation-and-correlation tier: it enrolls agents, ingests the finding stream agents report (§5), and turns "what the fleet sees" into "what the fleet is exposed to." The records remain the contract — the console is a consumer of the same JSONL, not a replacement for it.
+
+Its load-bearing job is **vulnerability correlation**, and the design is opinionated about how to do that without drowning operators in false positives:
+
+- **Distro-native verdicts first.** Naive "installed version vs CVE's affected version" matching floods false positives on backport-patched distro packages — the version says vulnerable, the distro shipped the fix — which trains operators to ignore the feed. The console instead prefers **authoritative per-distro security feeds** (Debian/`debsecan`, RedHat/`dnf updateinfo`, FreeBSD/`pkg audit` over VuXML), which already encode backport reality. Raw CPE/NVD matching is the *fallback* for the long tail (own stack, vendored libs), tagged at lower confidence.
+- **Early warning.** A freshly published CVE naming an installed product can be matched against current fleet inventory — "which hosts run X" — in one query, before NVD enrichment lands.
+- **Verify, never remediate.** The console produces only read-only checks. The lifecycle is *detect → validate the condition is real → administrators remediate out-of-band → re-verify the fix → close*. It never changes deployed software; a tool that can't touch the fleet can't take it down on a bad CVE record.
+- **Governed risk acceptance.** Accepting a known-vulnerable finding requires a reason, a review-by **expiry** (auto-lapsing for periodic re-review), and an optional ticket reference linking it to remediation workflow — all captured in an immutable audit log, revocable with history retained.
+
+The console and its correlation engine are the (noncommercial-licensed) value-add tier; the agents, the CLI, the record format, and the local pipeline stay fully usable without it. Detailed correlation-tier design lives in the project's private design specs; this whitepaper documents the architecture and principles, not the engine internals.
 
 ### Configuration
 
@@ -240,6 +265,11 @@ packetsonde is intentionally adjacent to several mature tools rather than positi
 The shape that packetsonde occupies — "Zeek + nuclei + testssl.sh stitched together with a deployment model and a common record format" — is not occupied by any single tool we know of as of 2026.
 
 ## 9. Roadmap
+
+### Landed since 1.0
+
+- **Central reporting** — agents check in to a central console and ship observations upstream in bounded batches over a bounded, thread-safe queue (§5).
+- **Central console + correlation tier** — fleet enrollment, observation ingest, and vulnerability correlation that prefers distro-native verdicts over naive CPE matching, with an early-warning inventory query, a verify-only finding lifecycle, and governed (reason + expiry + ticket, audited) risk acceptance (§6). Its operator console is under active build-out; detailed design is in the private specs.
 
 ### Near-term
 
