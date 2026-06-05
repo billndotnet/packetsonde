@@ -328,12 +328,15 @@ static int dublin_cb(const struct ps_tr_hop *h, void *u) {
     for (int j = 0; j < d->n; j++)
         if (d->seen[j].ttl == h->ttl && strcmp(d->seen[j].addr, h->addr) == 0)
             return 0;   /* duplicate: swallow, keep this flow going */
-    if (d->n < PS_TRACEROUTE_MAX_HOPS) {
-        d->seen[d->n].ttl = h->ttl;
-        snprintf(d->seen[d->n].addr, sizeof(d->seen[d->n].addr), "%s", h->addr);
-        d->n++;
-    }
-    if (ps_tr_sink_emit(d->sink, h)) { d->stop = 1; return 1; }
+    if (d->n >= PS_TRACEROUTE_MAX_HOPS) { d->stop = 1; return 1; }  /* table full */
+    d->seen[d->n].ttl = h->ttl;
+    snprintf(d->seen[d->n].addr, sizeof(d->seen[d->n].addr), "%s", h->addr);
+    d->n++;
+    /* Forward to the user callback directly, NOT through ps_tr_sink_emit:
+     * Dublin enumerates every flow to the destination, so the outer sink's
+     * dest-reached / gap early-stop must not halt enumeration. Only an
+     * explicit consumer stop (cb returns non-zero) ends the run. */
+    if (d->sink->cb(h, d->sink->user)) { d->stop = 1; return 1; }
     return 0;
 }
 

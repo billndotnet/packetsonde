@@ -43,7 +43,7 @@ const char *ps_tr_mode_str (enum ps_tr_mode  m);
  * Return non-zero to stop the walk (e.g. on SIGINT). */
 typedef int (*ps_tr_hop_cb)(const struct ps_tr_hop *hop, void *user);
 
-/* Defined in traceroute.c once the streaming walk is wired (next task). */
+/* Streaming variant: invokes cb once per hop as it is discovered. */
 int ps_traceroute_run_cb(const char *target,
                          const struct ps_traceroute_opts *opts,
                          ps_tr_hop_cb cb, void *user);
