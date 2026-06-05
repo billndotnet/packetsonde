@@ -42,7 +42,7 @@ static int tr_emit_cb(const struct ps_tr_hop *h, void *u) {
     if (c->ptr && h->addr[0])
         ps_ptr_cache_wait(c->ptr, h->addr, c->ptr_timeout_ms, ptr_name, sizeof(ptr_name));
 
-    char title[320];
+    char title[512];
     if (h->addr[0] && ptr_name[0])
         snprintf(title, sizeof(title), "hop %d: %s (%s) (%.1f ms)",
                  h->ttl, ptr_name, h->addr, h->rtt_us / 1000.0);
@@ -52,6 +52,10 @@ static int tr_emit_cb(const struct ps_tr_hop *h, void *u) {
     else
         snprintf(title, sizeof(title), "hop %d: *", h->ttl);
 
+    /* ptr_name is getnameinfo()/NI_NAMEREQD output (DNS charset: letters,
+     * digits, hyphen, dot) and addr is numeric — neither contains JSON-special
+     * characters, so no escaping is needed here. The "ptr" key is always present
+     * (empty when unresolved or --ptr was not given) for a stable JSONL schema. */
     char ev[512];
     snprintf(ev, sizeof(ev),
              "{\"proto\":\"%s\",\"mode\":\"%s\",\"ttl\":%d,\"rtt_us\":%ld,"
