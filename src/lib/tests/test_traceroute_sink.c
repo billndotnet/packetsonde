@@ -66,8 +66,8 @@ int main(void) {
         struct rec r = {0}; struct ps_tr_sink s;
         ps_tr_sink_init(&s, rec_cb, &r, 3);
         struct ps_tr_hop l1 = live_hop(1); ps_tr_sink_emit(&s, &l1);
-        struct ps_tr_hop d2 = dead_hop(2); ps_tr_sink_emit(&s, &d2);
-        struct ps_tr_hop d3 = dead_hop(3); ps_tr_sink_emit(&s, &d3);
+        struct ps_tr_hop d2 = dead_hop(2); CHECK(ps_tr_sink_emit(&s, &d2) == 0);
+        struct ps_tr_hop d3 = dead_hop(3); CHECK(ps_tr_sink_emit(&s, &d3) == 0);
         struct ps_tr_hop l4 = live_hop(4);
         CHECK(ps_tr_sink_emit(&s, &l4) == 0);  /* reset */
         struct ps_tr_hop d5 = dead_hop(5); CHECK(ps_tr_sink_emit(&s, &d5) == 0);
@@ -80,6 +80,17 @@ int main(void) {
         ps_tr_sink_init(&s, rec_cb, &r, 0);
         struct ps_tr_hop a = live_hop(1); CHECK(ps_tr_sink_emit(&s, &a) == 0);
         struct ps_tr_hop b = live_hop(2); CHECK(ps_tr_sink_emit(&s, &b) == 1);
+    }
+    /* 6. Sticky: after a stop, further emits return 1 without re-invoking cb. */
+    {
+        struct rec r = {0}; struct ps_tr_sink s;
+        ps_tr_sink_init(&s, rec_cb, &r, 5);
+        struct ps_tr_hop d = dst_hop(1);
+        CHECK(ps_tr_sink_emit(&s, &d) == 1);   /* dest reached -> stopped */
+        int n_before = r.n;
+        struct ps_tr_hop e = live_hop(2);
+        CHECK(ps_tr_sink_emit(&s, &e) == 1);   /* sticky: returns 1 */
+        CHECK(r.n == n_before);                /* cb NOT invoked again */
     }
     printf("ok\n");
     return 0;
