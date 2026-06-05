@@ -76,6 +76,12 @@ struct ps_ap_io {
     void          *ctx;
 };
 
+/* Extract a peer's advertised `max_recipe_schema` from a hello frame payload.
+ * Returns the advertised schema, or 1 if the field is absent (peers predating
+ * the capability speak recipe schema 1 only). A recipe of schema S may be
+ * pushed to a peer iff S <= this value. */
+int  ps_ap_hello_recipe_schema(const uint8_t *payload, size_t len);
+
 /* Read one frame into out_buf. On success, *out_len holds the JSON byte
  * count and the buffer holds raw UTF-8 (NOT null-terminated). Returns
  * PS_AP_OK or one of the PS_AP_ERR_* codes. */

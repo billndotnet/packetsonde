@@ -106,12 +106,27 @@ static int test_frame_type(void) {
     return 0;
 }
 
+static int test_hello_recipe_schema(void) {
+    /* hello advertising schema 2 parses back to 2 */
+    const char *a = "{\"type\":\"hello\",\"v\":1,\"agent_fingerprint\":\"sha256:ab\",\"max_recipe_schema\":2}";
+    CHECK(ps_ap_hello_recipe_schema((const uint8_t *)a, strlen(a)) == 2);
+    /* absent field defaults to 1 (pre-capability peer) */
+    const char *b = "{\"type\":\"hello\",\"v\":1,\"client_fingerprint\":\"sha256:cd\"}";
+    CHECK(ps_ap_hello_recipe_schema((const uint8_t *)b, strlen(b)) == 1);
+    /* compatibility: recipe schema S pushable iff S <= advertised */
+    int agent_max = ps_ap_hello_recipe_schema((const uint8_t *)a, strlen(a));
+    CHECK(2 <= agent_max);   /* schema-2 recipe OK to a schema-2 agent */
+    CHECK(ps_ap_hello_recipe_schema((const uint8_t *)b, strlen(b)) < 2);  /* schema-2 NOT OK to a schema-1 peer */
+    return 0;
+}
+
 int main(void) {
     if (test_roundtrip())          return 1;
     if (test_oversize_refused())   return 1;
     if (test_short_buffer())       return 1;
     if (test_bad_json_payload())   return 1;
     if (test_frame_type())         return 1;
+    if (test_hello_recipe_schema()) return 1;
     if (strcmp(PS_AP_MSG_INGEST, "ingest") != 0) return 1;
     if (strcmp(PS_AP_MSG_ACK, "ack") != 0) return 1;
     fprintf(stderr, "test_agent_proto: OK\n");

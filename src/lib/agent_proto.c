@@ -1,7 +1,18 @@
 #include "agent_proto.h"
+#include "json_extract.h"
 
 #include <string.h>
 #include <sys/types.h>
+
+int ps_ap_hello_recipe_schema(const uint8_t *payload, size_t len) {
+    char tmp[1024];
+    if (len >= sizeof(tmp)) len = sizeof(tmp) - 1;
+    memcpy(tmp, payload, len);
+    tmp[len] = '\0';
+    long v;
+    if (ps_json_extract_int(tmp, "max_recipe_schema", &v) == 0 && v >= 1) return (int)v;
+    return 1;   /* agents/clients predating the field speak recipe schema 1 only */
+}
 
 static int io_read_all(const struct ps_ap_io *io, void *buf, size_t n) {
     uint8_t *p = buf;
