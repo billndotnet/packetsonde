@@ -1,4 +1,5 @@
 #include "traceroute.h"
+#include "traceroute_internal.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -25,6 +26,26 @@ const char *ps_tr_mode_str(enum ps_tr_mode m) {
 
 static long usec_diff(struct timeval *a, struct timeval *b) {
     return (b->tv_sec - a->tv_sec) * 1000000L + (b->tv_usec - a->tv_usec);
+}
+
+void ps_tr_sink_init(struct ps_tr_sink *s, ps_tr_hop_cb cb, void *user,
+                     int max_gap) {
+    s->cb = cb; s->user = user; s->max_gap = max_gap;
+    s->seen_live = 0; s->consec_dead = 0; s->stopped = 0;
+}
+
+int ps_tr_sink_emit(struct ps_tr_sink *s, const struct ps_tr_hop *hop) {
+    if (s->stopped) return 1;
+    if (s->cb(hop, s->user)) { s->stopped = 1; return 1; }   /* consumer stop */
+
+    if (hop->addr[0]) { s->seen_live = 1; s->consec_dead = 0; }
+    else              { s->consec_dead++; }
+
+    if (hop->reached_dst) { s->stopped = 1; return 1; }      /* dest reached */
+    if (s->max_gap > 0 && s->seen_live && s->consec_dead >= s->max_gap) {
+        s->stopped = 1; return 1;                            /* gap after live */
+    }
+    return 0;
 }
 
 static int resolve_v4(const char *host, struct sockaddr_in *out) {
@@ -62,7 +83,7 @@ static int recv_icmp_for(int icmp_fd, int timeout_ms,
     return -1;
 }
 
-/* Walk a single UDP flow at increasing TTLs, recording hops into out.
+/* Walk a single UDP flow at increasing TTLs, streaming hops through sink.
  *
  * mode controls how each probe identifies itself on the wire:
  *
@@ -72,49 +93,36 @@ static int recv_icmp_for(int icmp_fd, int timeout_ms,
  *             is bound to src_port). ECMP hash is stable; every hop
  *             traverses the same path.
  *
- * Returns 0 on success. Stops early on ICMP unreachable from the destination. */
+ * Returns 0 on success. Stops early when the sink signals stop. */
 static int udp_flow_walk(int udp_fd, int icmp_fd,
                          struct sockaddr_in dst, enum ps_tr_mode mode,
                          const struct ps_traceroute_opts *opts,
-                         struct ps_traceroute_result *out) {
+                         struct ps_tr_sink *sink) {
     int max = opts->max_hops > 0 ? opts->max_hops : 30;
     if (max > PS_TRACEROUTE_MAX_HOPS) max = PS_TRACEROUTE_MAX_HOPS;
-    if (out->hop_count + max > PS_TRACEROUTE_MAX_HOPS) {
-        max = PS_TRACEROUTE_MAX_HOPS - out->hop_count;
-        if (max <= 0) return 0;
-    }
 
     for (int ttl = 1; ttl <= max; ttl++) {
         setsockopt(udp_fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
         struct sockaddr_in d = dst;
-        if (mode == PS_TR_MODE_CLASSIC) {
-            d.sin_port = htons(opts->dst_port + ttl - 1);
-        } else {
-            d.sin_port = htons(opts->dst_port);
-        }
+        d.sin_port = htons(mode == PS_TR_MODE_CLASSIC
+                           ? opts->dst_port + ttl - 1 : opts->dst_port);
 
         struct timeval t0; gettimeofday(&t0, NULL);
         char payload[16] = "PSTR";
         sendto(udp_fd, payload, sizeof(payload), 0,
                (struct sockaddr *)&d, sizeof(d));
 
+        struct ps_tr_hop h; memset(&h, 0, sizeof(h));
+        h.ttl = ttl;
         struct sockaddr_in src; int kind = 0;
         if (recv_icmp_for(icmp_fd, opts->timeout_ms, &src, &kind) == 0) {
             struct timeval t1; gettimeofday(&t1, NULL);
-            struct ps_tr_hop *h = &out->hops[out->hop_count++];
-            h->ttl = ttl;
-            inet_ntop(AF_INET, &src.sin_addr, h->addr, sizeof(h->addr));
-            h->rtt_us = usec_diff(&t0, &t1);
-            h->reached_dst = (kind == ICMP_UNREACH) ||
-                             (src.sin_addr.s_addr == dst.sin_addr.s_addr);
-            if (h->reached_dst) { out->reached = 1; return 0; }
-        } else {
-            struct ps_tr_hop *h = &out->hops[out->hop_count++];
-            h->ttl = ttl;
-            h->addr[0] = '\0';
-            h->rtt_us = 0;
-            h->reached_dst = 0;
+            inet_ntop(AF_INET, &src.sin_addr, h.addr, sizeof(h.addr));
+            h.rtt_us = usec_diff(&t0, &t1);
+            h.reached_dst = (kind == ICMP_UNREACH) ||
+                            (src.sin_addr.s_addr == dst.sin_addr.s_addr);
         }
+        if (ps_tr_sink_emit(sink, &h)) return 0;
     }
     return 0;
 }
@@ -143,21 +151,21 @@ static int icmp_listener(void) {
 
 static int tr_udp_classic(const char *target,
                           const struct ps_traceroute_opts *opts,
-                          struct ps_traceroute_result *out) {
+                          struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     int icmp_fd = icmp_listener();
     if (icmp_fd < 0) return -1;
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_fd < 0) { close(icmp_fd); return -1; }
-    int rc = udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_CLASSIC, opts, out);
+    int rc = udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_CLASSIC, opts, sink);
     close(udp_fd); close(icmp_fd);
     return rc;
 }
 
 static int tr_udp_paris(const char *target,
                         const struct ps_traceroute_opts *opts,
-                        struct ps_traceroute_result *out) {
+                        struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     int icmp_fd = icmp_listener();
@@ -166,59 +174,9 @@ static int tr_udp_paris(const char *target,
      * is stable across every probe in the run. */
     int udp_fd = udp_socket_bound(33500);
     if (udp_fd < 0) { close(icmp_fd); return -1; }
-    int rc = udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_PARIS, opts, out);
+    int rc = udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_PARIS, opts, sink);
     close(udp_fd); close(icmp_fd);
     return rc;
-}
-
-/* Dublin: enumerate ECMP paths by walking multiple Paris-style flows whose
- * src_port differs between flows. Each flow internally holds its tuple
- * constant (Paris-style), so each flow produces a coherent path; varying
- * src_port between flows makes the ECMP hash key differ, exposing alternative
- * paths.
- *
- * Result format: hops[] accumulates hops from every flow in order. The CLI
- * verb can dedupe by (ttl, addr) or render per-flow as it prefers. */
-static int tr_udp_dublin(const char *target,
-                         const struct ps_traceroute_opts *opts,
-                         struct ps_traceroute_result *out) {
-    struct sockaddr_in dst;
-    if (resolve_v4(target, &dst) != 0) return -1;
-    int icmp_fd = icmp_listener();
-    if (icmp_fd < 0) return -1;
-
-    int flows = opts->flow_count > 0 ? opts->flow_count : 8;
-    if (flows > 32) flows = 32;
-
-    for (int f = 0; f < flows; f++) {
-        int udp_fd = udp_socket_bound((uint16_t)(33500 + f));
-        if (udp_fd < 0) continue;
-        struct ps_traceroute_result flow_out = {0};
-        flow_out.hop_count = 0;
-        udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_PARIS, opts, &flow_out);
-        close(udp_fd);
-
-        /* Append this flow's hops to the merged result, skipping duplicates
-         * by (ttl, addr). */
-        for (int i = 0; i < flow_out.hop_count; i++) {
-            struct ps_tr_hop *h = &flow_out.hops[i];
-            int dup = 0;
-            for (int j = 0; j < out->hop_count; j++) {
-                if (out->hops[j].ttl == h->ttl &&
-                    strcmp(out->hops[j].addr, h->addr) == 0) {
-                    dup = 1; break;
-                }
-            }
-            if (dup) continue;
-            if (out->hop_count >= PS_TRACEROUTE_MAX_HOPS) break;
-            out->hops[out->hop_count++] = *h;
-            if (h->reached_dst) out->reached = 1;
-        }
-        if (out->hop_count >= PS_TRACEROUTE_MAX_HOPS) break;
-    }
-
-    close(icmp_fd);
-    return 0;
 }
 
 /* ---- TCP traceroute ----
@@ -245,13 +203,9 @@ static int tr_udp_dublin(const char *target,
 static int tcp_flow_walk(int icmp_fd, struct sockaddr_in dst,
                          enum ps_tr_mode mode, uint16_t src_port,
                          const struct ps_traceroute_opts *opts,
-                         struct ps_traceroute_result *out) {
+                         struct ps_tr_sink *sink) {
     int max = opts->max_hops > 0 ? opts->max_hops : 30;
     if (max > PS_TRACEROUTE_MAX_HOPS) max = PS_TRACEROUTE_MAX_HOPS;
-    if (out->hop_count + max > PS_TRACEROUTE_MAX_HOPS) {
-        max = PS_TRACEROUTE_MAX_HOPS - out->hop_count;
-        if (max <= 0) return 0;
-    }
 
     for (int ttl = 1; ttl <= max; ttl++) {
         int tcp_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -273,10 +227,9 @@ static int tcp_flow_walk(int icmp_fd, struct sockaddr_in dst,
         struct timeval t0; gettimeofday(&t0, NULL);
         int cr = connect(tcp_fd, (struct sockaddr *)&dst, sizeof(dst));
         if (cr != 0 && errno != EINPROGRESS) {
-            /* Local failure (EADDRNOTAVAIL etc.) — skip this hop. */
             close(tcp_fd);
-            struct ps_tr_hop *h = &out->hops[out->hop_count++];
-            h->ttl = ttl; h->addr[0] = '\0'; h->rtt_us = 0; h->reached_dst = 0;
+            struct ps_tr_hop h; memset(&h, 0, sizeof(h)); h.ttl = ttl;
+            if (ps_tr_sink_emit(sink, &h)) return 0;
             continue;
         }
 
@@ -291,24 +244,19 @@ static int tcp_flow_walk(int icmp_fd, struct sockaddr_in dst,
                               (opts->timeout_ms % 1000) * 1000 };
         int sr = select(nfds, &rfds, &wfds, NULL, &tv);
 
-        struct ps_tr_hop *h = &out->hops[out->hop_count++];
-        h->ttl = ttl; h->addr[0] = '\0'; h->rtt_us = 0; h->reached_dst = 0;
+        struct ps_tr_hop h; memset(&h, 0, sizeof(h)); h.ttl = ttl;
 
-        if (sr <= 0) {
-            /* timeout */
-            close(tcp_fd);
-            continue;
-        }
+        if (sr <= 0) { close(tcp_fd); if (ps_tr_sink_emit(sink, &h)) return 0; continue; }
         if (FD_ISSET(icmp_fd, &rfds)) {
             struct sockaddr_in src; int kind = 0;
             if (recv_icmp_for(icmp_fd, 0, &src, &kind) == 0) {
                 struct timeval t1; gettimeofday(&t1, NULL);
-                inet_ntop(AF_INET, &src.sin_addr, h->addr, sizeof(h->addr));
-                h->rtt_us = usec_diff(&t0, &t1);
-                h->reached_dst = (src.sin_addr.s_addr == dst.sin_addr.s_addr);
+                inet_ntop(AF_INET, &src.sin_addr, h.addr, sizeof(h.addr));
+                h.rtt_us = usec_diff(&t0, &t1);
+                h.reached_dst = (src.sin_addr.s_addr == dst.sin_addr.s_addr);
             }
         }
-        if (h->reached_dst == 0 && FD_ISSET(tcp_fd, &wfds)) {
+        if (h.reached_dst == 0 && FD_ISSET(tcp_fd, &wfds)) {
             /* connect() completed. Inspect SO_ERROR:
              *   0              -- SYN+ACK -> reached dst, port open
              *   ECONNREFUSED   -- RST     -> reached dst, port closed
@@ -322,48 +270,101 @@ static int tcp_flow_walk(int icmp_fd, struct sockaddr_in dst,
             int err = 0; socklen_t el = sizeof(err);
             getsockopt(tcp_fd, SOL_SOCKET, SO_ERROR, &err, &el);
             struct timeval t1; gettimeofday(&t1, NULL);
-            h->rtt_us = usec_diff(&t0, &t1);
+            h.rtt_us = usec_diff(&t0, &t1);
             if (err == 0 || err == ECONNREFUSED) {
-                inet_ntop(AF_INET, &dst.sin_addr, h->addr, sizeof(h->addr));
-                h->reached_dst = 1;
+                inet_ntop(AF_INET, &dst.sin_addr, h.addr, sizeof(h.addr));
+                h.reached_dst = 1;
             }
             /* else: intermediate hop ate the SYN; addr stays blank. */
         }
         close(tcp_fd);
-        if (h->reached_dst) { out->reached = 1; return 0; }
+        if (ps_tr_sink_emit(sink, &h)) return 0;
     }
     return 0;
 }
 
 static int tr_tcp_classic(const char *target,
                           const struct ps_traceroute_opts *opts,
-                          struct ps_traceroute_result *out) {
+                          struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     dst.sin_port = htons(opts->dst_port);
     int icmp_fd = icmp_listener();
     if (icmp_fd < 0) return -1;
-    int rc = tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_CLASSIC, 0, opts, out);
+    int rc = tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_CLASSIC, 0, opts, sink);
     close(icmp_fd);
     return rc;
 }
 
 static int tr_tcp_paris(const char *target,
                         const struct ps_traceroute_opts *opts,
-                        struct ps_traceroute_result *out) {
+                        struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     dst.sin_port = htons(opts->dst_port);
     int icmp_fd = icmp_listener();
     if (icmp_fd < 0) return -1;
-    int rc = tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_PARIS, 33500, opts, out);
+    int rc = tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_PARIS, 33500, opts, sink);
     close(icmp_fd);
     return rc;
 }
 
+/* Dublin: enumerate ECMP paths by walking multiple Paris-style flows whose
+ * src_port differs between flows. Each flow internally holds its tuple
+ * constant (Paris-style), so each flow produces a coherent path; varying
+ * src_port between flows makes the ECMP hash key differ, exposing alternative
+ * paths.
+ *
+ * Hops are deduplicated by (ttl, addr) before forwarding to the caller's sink.
+ */
+struct dublin_dedup {
+    struct ps_tr_sink *sink;
+    struct { int ttl; char addr[64]; } seen[PS_TRACEROUTE_MAX_HOPS];
+    int n;
+    int stop;
+};
+static int dublin_cb(const struct ps_tr_hop *h, void *u) {
+    struct dublin_dedup *d = u;
+    for (int j = 0; j < d->n; j++)
+        if (d->seen[j].ttl == h->ttl && strcmp(d->seen[j].addr, h->addr) == 0)
+            return 0;   /* duplicate: swallow, keep this flow going */
+    if (d->n >= PS_TRACEROUTE_MAX_HOPS) { d->stop = 1; return 1; }  /* table full */
+    d->seen[d->n].ttl = h->ttl;
+    snprintf(d->seen[d->n].addr, sizeof(d->seen[d->n].addr), "%s", h->addr);
+    d->n++;
+    /* Forward to the user callback directly, NOT through ps_tr_sink_emit:
+     * Dublin enumerates every flow to the destination, so the outer sink's
+     * dest-reached / gap early-stop must not halt enumeration. Only an
+     * explicit consumer stop (cb returns non-zero) ends the run. */
+    if (d->sink->cb(h, d->sink->user)) { d->stop = 1; return 1; }
+    return 0;
+}
+
+static int tr_udp_dublin(const char *target,
+                         const struct ps_traceroute_opts *opts,
+                         struct ps_tr_sink *sink) {
+    struct sockaddr_in dst;
+    if (resolve_v4(target, &dst) != 0) return -1;
+    int icmp_fd = icmp_listener();
+    if (icmp_fd < 0) return -1;
+    int flows = opts->flow_count > 0 ? opts->flow_count : 8;
+    if (flows > 32) flows = 32;
+
+    struct dublin_dedup dd; memset(&dd, 0, sizeof(dd)); dd.sink = sink;
+    for (int f = 0; f < flows && !dd.stop; f++) {
+        int udp_fd = udp_socket_bound((uint16_t)(33500 + f));
+        if (udp_fd < 0) continue;
+        struct ps_tr_sink inner; ps_tr_sink_init(&inner, dublin_cb, &dd, 0);
+        udp_flow_walk(udp_fd, icmp_fd, dst, PS_TR_MODE_PARIS, opts, &inner);
+        close(udp_fd);
+    }
+    close(icmp_fd);
+    return 0;
+}
+
 static int tr_tcp_dublin(const char *target,
                          const struct ps_traceroute_opts *opts,
-                         struct ps_traceroute_result *out) {
+                         struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     dst.sin_port = htons(opts->dst_port);
@@ -371,25 +372,10 @@ static int tr_tcp_dublin(const char *target,
     if (icmp_fd < 0) return -1;
     int flows = opts->flow_count > 0 ? opts->flow_count : 8;
     if (flows > 32) flows = 32;
-    for (int f = 0; f < flows; f++) {
-        struct ps_traceroute_result flow_out = {0};
-        tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_PARIS,
-                      (uint16_t)(33500 + f), opts, &flow_out);
-        for (int i = 0; i < flow_out.hop_count; i++) {
-            struct ps_tr_hop *h = &flow_out.hops[i];
-            int dup = 0;
-            for (int j = 0; j < out->hop_count; j++) {
-                if (out->hops[j].ttl == h->ttl &&
-                    strcmp(out->hops[j].addr, h->addr) == 0) {
-                    dup = 1; break;
-                }
-            }
-            if (dup) continue;
-            if (out->hop_count >= PS_TRACEROUTE_MAX_HOPS) break;
-            out->hops[out->hop_count++] = *h;
-            if (h->reached_dst) out->reached = 1;
-        }
-        if (out->hop_count >= PS_TRACEROUTE_MAX_HOPS) break;
+    struct dublin_dedup dd; memset(&dd, 0, sizeof(dd)); dd.sink = sink;
+    for (int f = 0; f < flows && !dd.stop; f++) {
+        struct ps_tr_sink inner; ps_tr_sink_init(&inner, dublin_cb, &dd, 0);
+        tcp_flow_walk(icmp_fd, dst, PS_TR_MODE_PARIS, (uint16_t)(33500 + f), opts, &inner);
     }
     close(icmp_fd);
     return 0;
@@ -416,7 +402,7 @@ static uint16_t icmp_checksum(const void *data, size_t len) {
 
 static int icmp_flow_walk(int icmp_fd, struct sockaddr_in dst,
                           const struct ps_traceroute_opts *opts,
-                          struct ps_traceroute_result *out) {
+                          struct ps_tr_sink *sink) {
     int max = opts->max_hops > 0 ? opts->max_hops : 30;
     if (max > PS_TRACEROUTE_MAX_HOPS) max = PS_TRACEROUTE_MAX_HOPS;
 
@@ -452,9 +438,8 @@ static int icmp_flow_walk(int icmp_fd, struct sockaddr_in dst,
         ssize_t n = recvfrom(icmp_fd, rbuf, sizeof(rbuf), 0,
                              (struct sockaddr *)&from, &flen);
 
-        struct ps_tr_hop *h = &out->hops[out->hop_count++];
-        h->ttl = ttl; h->addr[0] = '\0'; h->rtt_us = 0; h->reached_dst = 0;
-        if (n <= 0) continue;
+        struct ps_tr_hop h; memset(&h, 0, sizeof(h)); h.ttl = ttl;
+        if (n <= 0) { if (ps_tr_sink_emit(sink, &h)) return 0; continue; }
 
         /* On macOS SOCK_DGRAM ICMP, the kernel strips the IP header on
          * receive; on Linux it varies. Walk past optional IP header. */
@@ -465,49 +450,61 @@ static int icmp_flow_walk(int icmp_fd, struct sockaddr_in dst,
         }
         uint8_t type = icmp_hdr[0];
         struct timeval t1; gettimeofday(&t1, NULL);
-        inet_ntop(AF_INET, &from.sin_addr, h->addr, sizeof(h->addr));
-        h->rtt_us = usec_diff(&t0, &t1);
-        if (type == 0) { /* echo reply */
-            h->reached_dst = (from.sin_addr.s_addr == dst.sin_addr.s_addr);
-        } else if (type == 11) { /* time exceeded */
-            h->reached_dst = 0;
-        }
-        if (h->reached_dst) { out->reached = 1; return 0; }
+        inet_ntop(AF_INET, &from.sin_addr, h.addr, sizeof(h.addr));
+        h.rtt_us = usec_diff(&t0, &t1);
+        if (type == 0)       h.reached_dst = (from.sin_addr.s_addr == dst.sin_addr.s_addr);
+        else if (type == 11) h.reached_dst = 0;
+        if (ps_tr_sink_emit(sink, &h)) return 0;
     }
     return 0;
 }
 
 static int tr_icmp_classic(const char *target,
                            const struct ps_traceroute_opts *opts,
-                           struct ps_traceroute_result *out) {
+                           struct ps_tr_sink *sink) {
     struct sockaddr_in dst;
     if (resolve_v4(target, &dst) != 0) return -1;
     int icmp_fd = icmp_listener();
     if (icmp_fd < 0) return -1;
-    int rc = icmp_flow_walk(icmp_fd, dst, opts, out);
+    int rc = icmp_flow_walk(icmp_fd, dst, opts, sink);
     close(icmp_fd);
     return rc;
+}
+
+int ps_traceroute_run_cb(const char *target,
+                         const struct ps_traceroute_opts *opts,
+                         ps_tr_hop_cb cb, void *user) {
+    struct ps_tr_sink sink;
+    ps_tr_sink_init(&sink, cb, user, opts->max_gap);
+
+    if (opts->proto == PS_TR_PROTO_UDP) {
+        if (opts->mode == PS_TR_MODE_CLASSIC) return tr_udp_classic(target, opts, &sink);
+        if (opts->mode == PS_TR_MODE_PARIS)   return tr_udp_paris  (target, opts, &sink);
+        if (opts->mode == PS_TR_MODE_DUBLIN)  return tr_udp_dublin (target, opts, &sink);
+    }
+    if (opts->proto == PS_TR_PROTO_TCP) {
+        if (opts->mode == PS_TR_MODE_CLASSIC) return tr_tcp_classic(target, opts, &sink);
+        if (opts->mode == PS_TR_MODE_PARIS)   return tr_tcp_paris  (target, opts, &sink);
+        if (opts->mode == PS_TR_MODE_DUBLIN)  return tr_tcp_dublin (target, opts, &sink);
+    }
+    if (opts->proto == PS_TR_PROTO_ICMP) {
+        return tr_icmp_classic(target, opts, &sink);
+    }
+    return -1;
+}
+
+/* Back-compat: collect every hop into a result array. */
+static int collect_cb(const struct ps_tr_hop *h, void *u) {
+    struct ps_traceroute_result *out = u;
+    if (out->hop_count >= PS_TRACEROUTE_MAX_HOPS) return 1;   /* stop, full */
+    out->hops[out->hop_count++] = *h;
+    if (h->reached_dst) out->reached = 1;
+    return 0;
 }
 
 int ps_traceroute_run(const char *target,
                       const struct ps_traceroute_opts *opts,
                       struct ps_traceroute_result *out) {
     memset(out, 0, sizeof(*out));
-    if (opts->proto == PS_TR_PROTO_UDP) {
-        if (opts->mode == PS_TR_MODE_CLASSIC) return tr_udp_classic(target, opts, out);
-        if (opts->mode == PS_TR_MODE_PARIS)   return tr_udp_paris  (target, opts, out);
-        if (opts->mode == PS_TR_MODE_DUBLIN)  return tr_udp_dublin (target, opts, out);
-    }
-    if (opts->proto == PS_TR_PROTO_TCP) {
-        if (opts->mode == PS_TR_MODE_CLASSIC) return tr_tcp_classic(target, opts, out);
-        if (opts->mode == PS_TR_MODE_PARIS)   return tr_tcp_paris  (target, opts, out);
-        if (opts->mode == PS_TR_MODE_DUBLIN)  return tr_tcp_dublin (target, opts, out);
-    }
-    if (opts->proto == PS_TR_PROTO_ICMP) {
-        /* ICMP traceroute has only one mode in practice — the flow tuple is
-         * (proto=icmp, id, seq) and varying seq is unavoidable. We treat all
-         * three mode names as a single classic walk. */
-        return tr_icmp_classic(target, opts, out);
-    }
-    return -1;
+    return ps_traceroute_run_cb(target, opts, collect_cb, out);
 }
