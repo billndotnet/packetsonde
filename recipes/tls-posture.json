@@ -1,0 +1,12 @@
+{"schema":2,"name":"tls-posture","version":1,"description":"TLS posture: cert hygiene + protocol/cipher enumeration","kind_prefix":"tls","default_port":443,"budgets":{"max_tls_probes":200},"steps":[
+{"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+{"op":"tls_upgrade","conn":"c","sni":"$target.host","timeout_ms":5000},
+{"op":"if","cond":"equals","binding":"cert_self_signed","literal":"1","then":[
+{"op":"emit","kind":"tls.self_signed","severity":"medium","confidence":"firm","title":"Self-signed certificate (CN=$cert_subject_cn)","evidence":{"subject":"$cert_subject_cn","issuer":"$cert_issuer_cn","not_after":"$cert_not_after"}}]},
+{"op":"close","conn":"c"},
+{"op":"tls_enum","host":"$target.host","port":"$target.port","timeout_ms":5000},
+{"op":"if","cond":"any_matches","list":"tls_accepted_ciphers","regex":"RC4|3DES|NULL|EXPORT|DES-CBC|AES128-SHA|AES256-SHA","then":[
+{"op":"emit","kind":"tls.weak_cipher","severity":"high","confidence":"firm","title":"Weak/legacy cipher accepted","evidence":{"ciphers":"$tls_accepted_ciphers"}}]},
+{"op":"if","cond":"any_in","list":"tls_accepted_protocols","set":["SSLv3","TLS1.0","TLS1.1"],"then":[
+{"op":"emit","kind":"tls.deprecated_protocol","severity":"medium","confidence":"firm","title":"Deprecated TLS protocol accepted","evidence":{"protocols":"$tls_accepted_protocols"}}]}
+]}
