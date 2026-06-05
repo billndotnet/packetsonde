@@ -1,4 +1,5 @@
 #include "recipe.h"
+#include "tls_probe.h"
 
 #include <ctype.h>
 #include <regex.h>
@@ -76,6 +77,7 @@ struct rt_binding {
         const char    *s;     /* arena-owned */
         int64_t        i;
         int            boolv;
+        struct { const char **items; size_t n; } strlist;  /* arena-owned */
     } u;
 };
 
@@ -91,6 +93,7 @@ struct rt {
 
     /* Budget bookkeeping. */
     int      steps_done;
+    int      tls_probes_done;
     size_t   recv_bytes_total;
     int64_t  start_ms;
 
@@ -112,6 +115,7 @@ static void rt_err(struct rt *rt, const char *fmt, ...) {
 }
 
 static struct rt_binding *rt_lookup(struct rt *rt, const char *name) {
+    if (!name) return NULL;
     for (size_t i = 0; i < rt->bsn; i++) {
         if (strcmp(rt->bs[i].name, name) == 0) return &rt->bs[i];
     }
@@ -146,6 +150,46 @@ static int budget_step(struct rt *rt) {
     return 0;
 }
 
+/* Counts one TLS handshake (upgrade or enumeration probe). */
+static int budget_tls(struct rt *rt) {
+    rt->tls_probes_done++;
+    if (rt->tls_probes_done > rt->r->budgets.max_tls_probes) {
+        rt_err(rt, "budget: max_tls_probes exceeded (%d)", rt->r->budgets.max_tls_probes);
+        return -1;
+    }
+    return 0;
+}
+
+static const char *rt_strdup(struct rt *rt, const char *s) {
+    return rt_strdup_n(&rt->arena, s, strlen(s));
+}
+
+static int bind_str(struct rt *rt, const char *name, const char *val) {
+    struct rt_binding *b = rt_bind_new(rt, name, PS_BT_STRING);
+    if (!b) return -1;
+    b->u.s = rt_strdup(rt, val);
+    return b->u.s ? 0 : -1;
+}
+
+static int bind_int(struct rt *rt, const char *name, int64_t val) {
+    struct rt_binding *b = rt_bind_new(rt, name, PS_BT_INT);
+    if (!b) return -1;
+    b->u.i = val;
+    return 0;
+}
+
+/* Copy a stack array of (arena-owned) strings into an arena-owned strlist binding. */
+static int bind_strlist(struct rt *rt, const char *name, const char **items, size_t n) {
+    struct rt_binding *b = rt_bind_new(rt, name, PS_BT_STRLIST);
+    if (!b) return -1;
+    const char **arr = rt_alloc(&rt->arena, (n ? n : 1) * sizeof(*arr));
+    if (!arr) { rt_err(rt, "oom in strlist"); return -1; }
+    for (size_t i = 0; i < n; i++) arr[i] = items[i];
+    b->u.strlist.items = arr;
+    b->u.strlist.n = n;
+    return 0;
+}
+
 /* ---- template expansion ------------------------------------------------- */
 
 /* Render a binding's value into a heap string in the runtime arena.
@@ -170,6 +214,21 @@ static const char *render_binding(struct rt *rt, const char *name) {
         case PS_BT_BYTES:
             /* Render as raw bytes — assume printable. */
             return rt_strdup_n(&rt->arena, (const char *)b->u.bytes.b, b->u.bytes.n);
+        case PS_BT_STRLIST: {
+            /* Comma-join the items for evidence/templates. */
+            size_t total = 1;
+            for (size_t i = 0; i < b->u.strlist.n; i++) total += strlen(b->u.strlist.items[i]) + 1;
+            char *out = rt_alloc(&rt->arena, total);
+            if (!out) { rt_err(rt, "oom in strlist render"); return NULL; }
+            size_t o = 0;
+            for (size_t i = 0; i < b->u.strlist.n; i++) {
+                if (i) out[o++] = ',';
+                size_t l = strlen(b->u.strlist.items[i]);
+                memcpy(out + o, b->u.strlist.items[i], l); o += l;
+            }
+            out[o] = '\0';
+            return out;
+        }
         default:
             rt_err(rt, "render: binding '%s' has non-stringable type", name);
             return NULL;
@@ -451,6 +510,22 @@ static int do_close(struct rt *rt, const struct ps_recipe_step *s) {
 }
 
 static int do_match(struct rt *rt, const struct ps_recipe_step *s) {
+    /* schema 2: match `any` element of a strlist against the regex. Binds `out`
+     * (the first matching element) so downstream `if exists` can gate on it. */
+    if (s->u.match.any) {
+        struct rt_binding *lb = rt_lookup(rt, s->u.match.any);
+        if (!lb || lb->type != PS_BT_STRLIST) { rt_err(rt, "match.any: '%s' not a strlist", s->u.match.any); return -1; }
+        regex_t re;
+        if (regcomp(&re, s->u.match.regex, REG_EXTENDED) != 0) { rt_err(rt, "match: regex compile failed"); return -1; }
+        const char *hit = NULL;
+        for (size_t i = 0; i < lb->u.strlist.n; i++) {
+            if (regexec(&re, lb->u.strlist.items[i], 0, NULL, 0) == 0) { hit = lb->u.strlist.items[i]; break; }
+        }
+        regfree(&re);
+        if (hit && s->out) return bind_str(rt, s->out, hit);
+        return 0;
+    }
+
     struct rt_binding *ib = rt_lookup(rt, s->u.match.in);
     if (!ib) { rt_err(rt, "match: unknown binding '%s'", s->u.match.in); return -1; }
     const char *hay; size_t hay_n;
@@ -516,7 +591,8 @@ static int do_emit(struct rt *rt, const struct ps_recipe_step *s) {
 }
 
 static int do_if(struct rt *rt, const struct ps_recipe_step *s) {
-    struct rt_binding *b = rt_lookup(rt, s->u.if_.binding);
+    /* any_matches/any_in use `list`, not `binding` (which is NULL for them). */
+    struct rt_binding *b = s->u.if_.binding ? rt_lookup(rt, s->u.if_.binding) : NULL;
     int taken = 0;
     switch (s->u.if_.cond) {
         case PS_COND_EXISTS:
@@ -548,8 +624,102 @@ static int do_if(struct rt *rt, const struct ps_recipe_step *s) {
             regfree(&re);
             break;
         }
+        case PS_COND_ANY_MATCHES: {
+            struct rt_binding *lb = rt_lookup(rt, s->u.if_.list);
+            if (!lb || lb->type != PS_BT_STRLIST) { taken = 0; break; }
+            regex_t re;
+            if (regcomp(&re, s->u.if_.regex, REG_EXTENDED) != 0) { rt_err(rt, "if.any_matches: regex compile failed"); return -1; }
+            for (size_t i = 0; i < lb->u.strlist.n && !taken; i++)
+                if (regexec(&re, lb->u.strlist.items[i], 0, NULL, 0) == 0) taken = 1;
+            regfree(&re);
+            break;
+        }
+        case PS_COND_ANY_IN: {
+            struct rt_binding *lb = rt_lookup(rt, s->u.if_.list);
+            if (!lb || lb->type != PS_BT_STRLIST) { taken = 0; break; }
+            for (size_t i = 0; i < lb->u.strlist.n && !taken; i++)
+                for (size_t j = 0; j < s->u.if_.set_n; j++)
+                    if (strcmp(lb->u.strlist.items[i], s->u.if_.set[j]) == 0) { taken = 1; break; }
+            break;
+        }
     }
     if (taken) return run_steps(rt, s->u.if_.then, s->u.if_.then_n);
+    return 0;
+}
+
+/* schema 2: wrap the current conn in TLS, surface the negotiated session +
+ * leaf-cert facts as bindings (underscore names — the v1 template grammar
+ * doesn't allow dots in $refs). On handshake failure, bindings stay unset. */
+static int do_tls_upgrade(struct rt *rt, const struct ps_recipe_step *s) {
+    struct rt_binding *cb = rt_lookup(rt, s->u.tls_upgrade.conn);
+    if (!cb || cb->type != PS_BT_CONN) { rt_err(rt, "tls_upgrade: bad conn binding"); return -1; }
+    if (!rt->io->tls_upgrade || !rt->io->tls_session) { rt_err(rt, "io.tls_upgrade not provided"); return -1; }
+    if (budget_tls(rt) != 0) return -1;
+    const char *sni = expand_template(rt, s->u.tls_upgrade.sni.text);
+    if (!sni) return -1;
+    if (rt->io->tls_upgrade(rt->io->ctx, cb->u.conn, sni, s->u.tls_upgrade.alpn,
+                            s->u.tls_upgrade.timeout_ms) != 0)
+        return 0;
+    struct ps_tls_info info;
+    if (rt->io->tls_session(rt->io->ctx, cb->u.conn, &info) != 0) { rt_err(rt, "tls_session failed"); return -1; }
+    if (bind_str(rt, "tls_version", info.version) != 0) return -1;
+    if (bind_str(rt, "tls_cipher", info.cipher) != 0) return -1;
+    bind_str(rt, "tls_ja4", info.ja4);
+    bind_str(rt, "tls_ja4s", info.ja4s);
+    bind_str(rt, "tls_ja4x", info.ja4x);
+    bind_str(rt, "cert_subject_cn", info.cert_subject_cn);
+    bind_str(rt, "cert_issuer_cn", info.cert_issuer_cn);
+    bind_str(rt, "cert_not_after", info.cert_not_after);
+    bind_str(rt, "cert_sig_alg", info.cert_sig_alg);
+    bind_str(rt, "cert_key_type", info.cert_key_type);
+    bind_str(rt, "cert_san", info.cert_san);
+    bind_str(rt, "cert_self_signed", info.cert_self_signed ? "1" : "0");
+    bind_int(rt, "cert_days_to_expiry", info.cert_days_to_expiry);
+    bind_int(rt, "cert_key_bits", info.cert_key_bits);
+    return 0;
+}
+
+static const char *PS_DEFAULT_PROTOS[] = { "SSLv3", "TLS1.0", "TLS1.1", "TLS1.2", "TLS1.3" };
+
+/* schema 2: enumerate accepted protocols/ciphers by cipher peeling. */
+static int do_tls_enum(struct rt *rt, const struct ps_recipe_step *s) {
+    if (!rt->io->tls_probe) { rt_err(rt, "io.tls_probe not provided"); return -1; }
+    const char *host = expand_template(rt, s->u.tls_enum.host.text);
+    if (!host) return -1;
+    int64_t port;
+    if (resolve_as_int(rt, &s->u.tls_enum.port, &port) != 0) return -1;
+    const char **protos = s->u.tls_enum.protocols;
+    size_t protos_n = s->u.tls_enum.protocols_n;
+    if (!protos || protos_n == 0) { protos = PS_DEFAULT_PROTOS; protos_n = 5; }
+    const char *starttls = s->u.tls_enum.starttls;
+    int timeout = s->u.tls_enum.timeout_ms;
+
+    const char *acc_protos[16];  size_t acc_protos_n = 0;
+    const char *acc_ciphers[256]; size_t acc_ciphers_n = 0;
+
+    for (size_t pi = 0; pi < protos_n; pi++) {
+        const char *proto = protos[pi];
+        char excl[2048]; snprintf(excl, sizeof(excl), "ALL:COMPLEMENTOFALL:@SECLEVEL=0");
+        char last[128] = ""; int proto_added = 0;
+        for (;;) {
+            if (budget_tls(rt) != 0) return -1;
+            struct ps_tls_probe_result res;
+            if (rt->io->tls_probe(rt->io->ctx, host, (int)port, proto, proto,
+                                  excl, starttls, timeout, &res) != 0) break;
+            if (!res.ok || res.cipher[0] == '\0') break;
+            if (strcmp(res.cipher, last) == 0) break;   /* no progress (TLS1.3 fixed suites) */
+            if (!proto_added && acc_protos_n < 16) { acc_protos[acc_protos_n++] = rt_strdup(rt, proto); proto_added = 1; }
+            if (acc_ciphers_n < 256) {
+                char pc[200]; snprintf(pc, sizeof(pc), "%s:%s", proto, res.cipher);
+                acc_ciphers[acc_ciphers_n++] = rt_strdup(rt, pc);
+            }
+            snprintf(last, sizeof(last), "%s", res.cipher);
+            size_t l = strlen(excl);
+            snprintf(excl + l, sizeof(excl) - l, ":!%s", res.cipher);
+        }
+    }
+    if (bind_strlist(rt, "tls_accepted_protocols", acc_protos, acc_protos_n) != 0) return -1;
+    if (bind_strlist(rt, "tls_accepted_ciphers", acc_ciphers, acc_ciphers_n) != 0) return -1;
     return 0;
 }
 
@@ -567,6 +737,8 @@ static int run_steps(struct rt *rt, struct ps_recipe_step *const *steps, size_t 
             case PS_OP_MATCH:       rc = do_match(rt, s);   break;
             case PS_OP_EMIT:        rc = do_emit(rt, s);    break;
             case PS_OP_IF:          rc = do_if(rt, s);      break;
+            case PS_OP_TLS_UPGRADE: rc = do_tls_upgrade(rt, s); break;
+            case PS_OP_TLS_ENUM:    rc = do_tls_enum(rt, s);    break;
             default: rt_err(rt, "unknown op %d", s->op); return -1;
         }
         if (rc != 0) return -1;
@@ -588,6 +760,15 @@ int ps_recipe_run(const struct ps_recipe *r,
     rt.start_ms = now_ms();
 
     int rc = run_steps(&rt, r->steps, r->steps_n);
+
+    /* Close any conns the recipe left open — frees the fd and, for upgraded
+     * conns, the TLS session. do_close zeroes conn to -1, so this only hits
+     * still-open ones. */
+    if (rt.io && rt.io->close_conn) {
+        for (size_t i = 0; i < rt.bsn; i++)
+            if (rt.bs[i].type == PS_BT_CONN && rt.bs[i].u.conn >= 0)
+                rt.io->close_conn(rt.io->ctx, rt.bs[i].u.conn);
+    }
 
     rt_arena_destroy(&rt.arena);
     return rc;

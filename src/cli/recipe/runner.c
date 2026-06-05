@@ -13,7 +13,10 @@
 #include "audit_module.h"
 #include "finding.h"
 #include "recipe.h"
+#include "tls_probe.h"
 #include "ulid.h"
+
+#include <openssl/ssl.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -43,9 +46,19 @@ static const struct ps_audit_api API = { api_emit, api_cancelled };
 
 /* ---- real-socket I/O backend -------------------------------------------- */
 
+/* fd -> SSL* side-map: after tls_upgrade(conn), send/recv on that conn ride TLS. */
+#define IO_TLS_MAX 16
 struct io_ctx {
     int default_timeout_ms;
+    struct { int fd; SSL *ssl; struct ps_tls_info info; } tls[IO_TLS_MAX];
+    size_t tls_n;
 };
+
+static SSL *io_ssl_for(struct io_ctx *c, int conn) {
+    for (size_t i = 0; i < c->tls_n; i++)
+        if (c->tls[i].fd == conn && c->tls[i].ssl) return c->tls[i].ssl;
+    return NULL;
+}
 
 static int io_connect_tcp(void *vc, const char *host, int port, int timeout_ms) {
     (void)vc;
@@ -56,21 +69,32 @@ static int io_connect_udp(void *vc, const char *host, int port, int timeout_ms) 
     return ps_audit_udp_connect(host, (uint16_t)port, timeout_ms, NULL, 0);
 }
 static int io_send_all(void *vc, int conn, const uint8_t *buf, size_t n) {
-    (void)vc;
+    SSL *ssl = io_ssl_for(vc, conn);
+    if (ssl) {
+        size_t sent = 0;
+        while (sent < n) {
+            int w = SSL_write(ssl, buf + sent, (int)(n - sent));
+            if (w <= 0) return -1;
+            sent += (size_t)w;
+        }
+        return 0;
+    }
     size_t sent = 0;
     while (sent < n) {
         ssize_t w = send(conn, buf + sent, n - sent, 0);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
+        if (w < 0) { if (errno == EINTR) continue; return -1; }
         if (w == 0) return -1;
         sent += (size_t)w;
     }
     return 0;
 }
 static long io_recv_some(void *vc, int conn, uint8_t *buf, size_t cap) {
-    (void)vc;
+    SSL *ssl = io_ssl_for(vc, conn);
+    if (ssl) {
+        int r = SSL_read(ssl, buf, (int)cap);
+        if (r > 0) return r;
+        return (SSL_get_error(ssl, r) == SSL_ERROR_ZERO_RETURN) ? 0 : -1;
+    }
     for (;;) {
         ssize_t r = recv(conn, buf, cap, 0);
         if (r >= 0) return (long)r;
@@ -79,8 +103,44 @@ static long io_recv_some(void *vc, int conn, uint8_t *buf, size_t cap) {
     }
 }
 static void io_close_conn(void *vc, int conn) {
-    (void)vc;
+    struct io_ctx *c = vc;
+    for (size_t i = 0; i < c->tls_n; i++) {
+        if (c->tls[i].fd == conn && c->tls[i].ssl) {
+            SSL_shutdown(c->tls[i].ssl);
+            SSL_free(c->tls[i].ssl);
+            c->tls[i].ssl = NULL;
+            break;
+        }
+    }
     if (conn >= 0) close(conn);
+}
+
+static int io_tls_upgrade(void *vc, int conn, const char *sni,
+                          const char *const *alpn, int timeout_ms) {
+    struct io_ctx *c = vc;
+    if (c->tls_n >= IO_TLS_MAX) return -1;
+    struct ps_tls_info info;
+    SSL *ssl = ps_tls_upgrade_fd(conn, sni, alpn, timeout_ms, &info);
+    if (!ssl) return -1;
+    c->tls[c->tls_n].fd = conn;
+    c->tls[c->tls_n].ssl = ssl;
+    c->tls[c->tls_n].info = info;
+    c->tls_n++;
+    return 0;
+}
+static int io_tls_session(void *vc, int conn, struct ps_tls_info *out) {
+    struct io_ctx *c = vc;
+    for (size_t i = 0; i < c->tls_n; i++)
+        if (c->tls[i].fd == conn && c->tls[i].ssl) { *out = c->tls[i].info; return 0; }
+    return -1;
+}
+static int io_tls_probe(void *vc, const char *host, int port,
+                        const char *min_proto, const char *max_proto,
+                        const char *cipher_list, const char *starttls_mode,
+                        int timeout_ms, struct ps_tls_probe_result *out) {
+    (void)vc;
+    return ps_tls_probe(host, port, min_proto, max_proto, cipher_list,
+                        starttls_mode, timeout_ms, out);
 }
 
 /* ---- finding sink (engine -> ps_finding via api->emit) ------------------ */
@@ -247,6 +307,9 @@ int ps_recipe_runner_main(int argc, char **argv, const struct ps_args *opts) {
         .send_all    = io_send_all,
         .recv_some   = io_recv_some,
         .close_conn  = io_close_conn,
+        .tls_upgrade = io_tls_upgrade,
+        .tls_session = io_tls_session,
+        .tls_probe   = io_tls_probe,
     };
 
     int exit_rc = 0;
