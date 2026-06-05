@@ -191,4 +191,10 @@ if(BUILD_TESTING)
     add_executable(test_proc_profile_delta tests/test_proc_profile_delta.c)
     target_link_libraries(test_proc_profile_delta PRIVATE packetsonde_lib)
     add_test(NAME test_proc_profile_delta COMMAND test_proc_profile_delta)
+
+    add_executable(test_inspect_subject tests/test_inspect_subject.c
+                   ${CMAKE_SOURCE_DIR}/src/cli/inspect/subject.c)
+    target_include_directories(test_inspect_subject PRIVATE ${CMAKE_SOURCE_DIR}/src/cli/inspect)
+    target_link_libraries(test_inspect_subject PRIVATE packetsonde_lib)
+    add_test(NAME test_inspect_subject COMMAND test_inspect_subject)
 endif()
