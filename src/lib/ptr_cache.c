@@ -29,6 +29,7 @@ struct ps_ptr_cache {
     int              pending;  /* count of state==1 needing work */
 };
 
+/* IPv4-only, matching the traceroute core (resolve_v4 / sockaddr_in). */
 static int real_resolver(const char *ip, char *name, size_t cap) {
     struct sockaddr_in sa; memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -57,7 +58,7 @@ static void *worker_main(void *arg) {
         /* Find a pending entry, resolve it without holding the lock. */
         int idx = -1;
         for (int i = 0; i < c->n; i++) if (c->e[i].state == 1) { idx = i; break; }
-        if (idx < 0) { c->pending = 0; continue; }
+        if (idx < 0) { if (c->pending > 0) c->pending--; continue; }  /* defensive: pending>0 implies a state==1 entry */
         char ip[64]; snprintf(ip, sizeof(ip), "%s", c->e[idx].ip);
         pthread_mutex_unlock(&c->mu);
 
@@ -79,7 +80,11 @@ static struct ps_ptr_cache *new_with(ps_ptr_resolver_fn r) {
     if (!c) return NULL;
     c->resolver = r;
     pthread_mutex_init(&c->mu, NULL);
-    pthread_cond_init(&c->cv, NULL);
+    pthread_condattr_t ca;
+    pthread_condattr_init(&ca);
+    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    pthread_cond_init(&c->cv, &ca);
+    pthread_condattr_destroy(&ca);
     if (pthread_create(&c->worker, NULL, worker_main, c) != 0) {
         pthread_mutex_destroy(&c->mu); pthread_cond_destroy(&c->cv);
         free(c); return NULL;
@@ -134,7 +139,7 @@ int ps_ptr_cache_wait(struct ps_ptr_cache *c, const char *ip,
     if (timeout_ms <= 0) return ps_ptr_cache_lookup(c, ip, name, cap);
 
     struct timespec deadline;
-    clock_gettime(CLOCK_REALTIME, &deadline);
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
     deadline.tv_sec  += timeout_ms / 1000;
     deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
     if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }

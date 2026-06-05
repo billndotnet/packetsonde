@@ -34,6 +34,11 @@ int main(void) {
     /* Dedupe: 10.0.0.1 + 203.0.113.9 each resolved exactly once. */
     CHECK(atomic_load(&g_calls) == 2);
 
+    /* Non-blocking miss path: lookup() returns 0 and schedules; wait() then resolves. */
+    CHECK(ps_ptr_cache_lookup(c, "192.0.2.1", name, sizeof(name)) == 0);
+    CHECK(ps_ptr_cache_wait(c, "192.0.2.1", 2000, name, sizeof(name)) == 1);
+    CHECK(name[0] == '\0');   /* stub returns negative for this IP */
+
     ps_ptr_cache_free(c);
     printf("ok\n");
     return 0;
