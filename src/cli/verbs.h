@@ -19,5 +19,6 @@ const struct ps_verb *ps_verbs_find(const char *name);
 void ps_verbs_print_list(FILE *fp);
 
 int ps_verb_help_run(int argc, char **argv, const struct ps_args *opts);
+int ps_verb_inspect_run(int argc, char **argv, const struct ps_args *opts);
 
 #endif

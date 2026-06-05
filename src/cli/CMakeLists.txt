@@ -15,6 +15,10 @@ set(CLI_SOURCES
     verbs/collect.c
     verbs/recipe.c
     verbs/watch.c
+    verbs/inspect.c
+    inspect/subject.c
+    inspect/render_stream.c
+    inspect/render_tty.c
     verbs/sandbox_suggest.c
     verbs/baseline.c
     recipe/runner.c
@@ -233,6 +237,12 @@ if(BUILD_TESTING)
     add_test(NAME test_via_multihop
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_multihop.sh)
     set_tests_properties(test_via_multihop PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_inspect_stream
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_inspect_stream.sh)
+    set_tests_properties(test_inspect_stream PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
