@@ -26,8 +26,20 @@ Layered, post-exploitation behavioral sensor for the agent's host. Off by defaul
 - **Schema negotiation** — the agent advertises its `max_recipe_schema` in the hello; the CLI declines to push a recipe an older agent can't execute.
 - **Authoring verbs** — `recipe sign` wraps canonical recipe JSON in an Ed25519-signed envelope (signature over `recipe_sha256 ‖ author_pub ‖ signed_at_ms`); `recipe verify` checks the signature and re-parses the inner recipe (signature validity and author *trust* are reported separately); `recipe info` summarizes name / version / budgets and, for envelopes, the author fingerprint and signing time.
 
+### Added — reactive traceroute
+- **Streaming + early-stop** — `probe traceroute` emits each hop the instant it resolves (no more waiting for the whole walk) and stops on destination-reached or after `--max-gap` consecutive dead hops (default 5), so a dark-tail host no longer walks all 30 TTLs (~24s → seconds). The core is refactored to a per-hop callback; `ps_traceroute_run` stays a thin back-compat wrapper.
+- **`--ptr`** — reverse-DNS for hop IPs with a per-IP positive+negative cache (background resolver thread, bounded grace before each hop is emitted).
+
+### Added — live process inspection (`inspect`)
+- **`packetsonde inspect` (`--pid N` | `--exe PATH`)** — an mtr-style live dashboard of one process's fanotify profile: files / network destinations / spawned processes with learned-baseline verdicts (covered / novel / anomaly), plus a header of event rates, ancestry, cgroup/MAC, and live sockets. `--pid` follows the process and its live subtree.
+- **`profile.v1` stream** — model-first design: the dashboard is renderer #0 of a versioned keyframe+delta stream (game-engine replication shape); `--stream` emits the feed for pipes / a future 3D client. Round-trippable and desync-safe.
+
 ### Fixed
+- **traceroute arg ordering + `*`-hop target** — the target may now appear before, after, or interleaved with options (POSIX getopt does not permute, so options before the target were silently dropped and the target itself could be parsed as an option); a second positional is rejected. A no-reply `*` hop no longer displays the trace destination as its own target — the destination moves to the `traced` evidence field.
 - **Recipe envelope parser buffer overflow** — `EVP_DecodeBlock` decodes in 3-byte groups, so the 44-char `author_pub` base64 wrote 33 bytes into the 32-byte field, corrupting the adjacent `signed_at_ms`. Timestamps ending in a zero low byte survived (masking the bug); others made freshly-signed envelopes verify as INVALID. Now decoded via sized temporaries with an exact-length copy; regression-locked with an odd-timestamp signing test.
+
+### Packaging
+- **`[detect]` config stub** — the salt-rendered `packetsonded.toml` now ships a pillar-driven `[detect]` block (off by default; set `packetsonde:detect_enabled "1"` to enable) so the activity sink that `inspect` / `watch` read is configurable, and the state creates `/var/lib/packetsonde` for it.
 
 ### Added — audit kinds
 - `haproxy`, `proxmox`, `nginx`, `opnsense` — `audit` now covers 26 services.

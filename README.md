@@ -60,7 +60,7 @@ Long-running passive observation, plus an opt-in remote-audit channel:
 
 A layered, post-exploitation behavioral sensor for the host the agent runs on:
 
-1. **Collection** — `fanotify` in a privilege-separated worker captures process/file/socket activity, enriched from `/proc` with an ancestry walk to the owning service/session. View it live with `packetsonde watch --follow`.
+1. **Collection** — `fanotify` in a privilege-separated worker captures process/file/socket activity, enriched from `/proc` with an ancestry walk to the owning service/session. View it live as raw events with `packetsonde watch --follow`, or as an aggregated per-process dashboard with `packetsonde inspect --pid N | --exe PATH` (files / dests / spawned procs with baseline verdicts; `--stream` emits the `profile.v1` keyframe/delta feed).
 2. **Declared-policy overwatch** — compares observed activity against the unit's own `systemd` sandbox directives (`ProtectSystem`, `ReadOnlyPaths`, exec-from-writable, …) and flags violations. A `learn` mode accumulates per-unit envelopes; `packetsonde sandbox-suggest <unit>` turns them into a tightened sandbox stanza.
 3. **Learned per-exe baseline** — a hybrid learn/enforce allowlist keyed by executable across three signals: **file paths**, **network destinations**, and **spawn parents**. Novel activity becomes a candidate; an operator `approve`s it into the baseline or `deny`s it (denied → anomaly) via the `baseline` verb.
 
