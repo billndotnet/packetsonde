@@ -23,3 +23,16 @@ enabled     = "1"
 listen_ip   = "{{ salt['pillar.get']('packetsonde:discovery_listen_ip', grains['id']) }}"
 listen_port = "{{ salt['pillar.get']('packetsonde:discovery_listen_port', '8442') }}"
 {% endif %}
+
+# Process/file/socket behavioral collection (Linux). Off by default — set
+# packetsonde:detect_enabled "1" in pillar to turn it on. The `sink` is what
+# `packetsonde inspect` and `packetsonde watch` read; the agent only writes it
+# when enabled and the directory exists (the state creates /var/lib/packetsonde).
+[detect]
+enabled            = "{{ salt['pillar.get']('packetsonde:detect_enabled', '0') }}"
+sink               = "{{ salt['pillar.get']('packetsonde:detect_sink', '/var/lib/packetsonde/activity.jsonl') }}"
+watch_paths        = "{{ salt['pillar.get']('packetsonde:detect_watch_paths', '/etc,/home') }}"
+max_events_ps      = "{{ salt['pillar.get']('packetsonde:detect_max_events_ps', '2000') }}"
+policy_mode        = "{{ salt['pillar.get']('packetsonde:detect_policy_mode', 'off') }}"
+baseline_mode      = "{{ salt['pillar.get']('packetsonde:detect_baseline_mode', 'off') }}"
+baseline_state_dir = "{{ salt['pillar.get']('packetsonde:detect_baseline_state_dir', '/var/lib/packetsonde/baseline') }}"
