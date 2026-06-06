@@ -69,6 +69,9 @@ static const struct mapping MAPPINGS[] = {
     { "detect", "baseline_mode",      "PS_DETECT_BASELINE_MODE" },
     { "detect", "baseline_state_dir", "PS_DETECT_BASELINE_STATE_DIR" },
     { "detect", "baseline_reload",    "PS_DETECT_BASELINE_RELOAD" },
+    { "detect", "provenance_enabled",         "PS_DETECT_PROVENANCE_ENABLED" },
+    { "detect", "provenance_transient_paths", "PS_DETECT_PROVENANCE_TRANSIENT_PATHS" },
+    { "detect", "provenance_sensitive_paths", "PS_DETECT_PROVENANCE_SENSITIVE_PATHS" },
 
     { NULL, NULL, NULL }
 };

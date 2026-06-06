@@ -1,4 +1,5 @@
 #include "fan_monitor.h"
+#include "provenance.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,7 @@ int main(void) {
 
     char json[8192];
     /* not suppressed: read of /etc/shadow */
-    int n = ps_fan_build_record(root, 1234, "/etc/shadow", "open", 1, "", 16, json, sizeof json);
+    int n = ps_fan_build_record(root, 1234, "/etc/shadow", "open", 1, "", 16, NULL, json, sizeof json);
     assert(n > 0);
     assert(strstr(json, "\"path\":\"/etc/shadow\""));
     assert(strstr(json, "\"comm\":\"sh\""));
@@ -46,8 +47,20 @@ int main(void) {
     assert(strstr(json, "\"owner_comm\":\"smbd\""));       /* ancestor socket attributed */
     assert(strstr(json, "\"raddr\":\"203.0.113.5:51344\""));
 
+    /* provenance: executable write under a transient root stamps prov_trigger.
+     * Create a real +x file (the classifier stats the real path for the mode). */
+    char exe_path[320]; snprintf(exe_path, sizeof exe_path, "%s/payload", root);
+    wr(exe_path, "#!/bin/sh\n"); chmod(exe_path, 0755);
+    struct ps_prov_cfg prov = { .enabled = 1, .transient_paths = root, .sensitive_paths = "" };
+    int pn = ps_fan_build_record(root, 1234, exe_path, "write", 0, "", 16, &prov, json, sizeof json);
+    assert(pn > 0);
+    assert(strstr(json, "\"prov_trigger\":\"write_executable\""));
+    /* a plain read open under the same root does NOT stamp a trigger */
+    int rn = ps_fan_build_record(root, 1234, exe_path, "open", 1, "", 16, &prov, json, sizeof json);
+    assert(rn > 0 && strstr(json, "prov_trigger") == NULL);
+
     /* suppressed read returns 0 (no record) */
-    int s = ps_fan_build_record(root, 1234, "/usr/lib/x.so", "open", 1, "/usr/lib", 16, json, sizeof json);
+    int s = ps_fan_build_record(root, 1234, "/usr/lib/x.so", "open", 1, "/usr/lib", 16, NULL, json, sizeof json);
     assert(s == 0);
     printf("test_fan_build: OK\n");
     return 0;

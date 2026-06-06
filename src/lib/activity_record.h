@@ -20,6 +20,7 @@ struct ps_act_socket {
 struct ps_activity {
     char ts[24], event[8], path[512];
     int partial;
+    char prov_trigger[24];   /* "" unless a provenance trigger fired */
     struct ps_act_proc proc;
     int nanc;  struct ps_act_ancestor anc[PS_ACT_MAX_ANC];
     int nsock; struct ps_act_socket  sock[PS_ACT_MAX_SOCK];

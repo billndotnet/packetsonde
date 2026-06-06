@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
@@ -35,7 +36,8 @@ static void now_iso(char *out, size_t cap) {
 
 int ps_fan_build_record(const char *proc_root, int pid, const char *path,
                         const char *event, int is_read, const char *suppress,
-                        int max_depth, char *out, size_t cap) {
+                        int max_depth, const struct ps_prov_cfg *prov,
+                        char *out, size_t cap) {
     /* comm needed for suppression: cheap read via enrich's leaf, but to gate
      * BEFORE full enrich we read just the leaf comm. Reuse enrich for the leaf. */
     struct ps_activity a; memset(&a, 0, sizeof a);
@@ -57,6 +59,22 @@ int ps_fan_build_record(const char *proc_root, int pid, const char *path,
         pids[np] = a.anc[i].pid; comms[np] = a.anc[i].comm; depths[np] = a.anc[i].depth; np++;
     }
     a.nsock = ps_sock_snapshot(proc_root, pids, np, comms, depths, a.sock, PS_ACT_MAX_SOCK);
+
+    /* Provenance classification: stamp prov_trigger so the brain ships this
+     * record as a detect.file_provenance observation. Only write/exec events
+     * can trigger; for writes, stat the path for the executable bit. */
+    if (prov && prov->enabled) {
+        unsigned int mode = 0;
+        /* For writes, stat the real path for the executable bit. `path` is the
+         * absolute file path (proc_root only redirects /proc reads, not this).
+         * The priv worker runs as root, so the stat succeeds. */
+        if (strcmp(event, "write") == 0) {
+            struct stat st;
+            if (stat(path, &st) == 0) mode = st.st_mode;
+        }
+        const char *trig = ps_provenance_classify(event, path, mode, prov);
+        if (trig[0]) snprintf(a.prov_trigger, sizeof a.prov_trigger, "%s", trig);
+    }
 
     return ps_activity_to_json(&a, out, cap);
 }
@@ -95,7 +113,7 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
             const char *event = ps_fan_event_for_mask(m->mask, &is_read);
             char json[PS_ACT_ITEM_SERIALIZE_MAX];
             int n = ps_fan_build_record("", (int)m->pid, path, event, is_read,
-                                        cfg->suppress, max_depth, json, sizeof json);
+                                        cfg->suppress, max_depth, &cfg->prov, json, sizeof json);
             if (n > 0 && emit) emit(json, (size_t)n, ctx);
             else if (n < 0) ps_warn("fan: activity record overflow, dropped (pid=%d path=%s)", (int)m->pid, path);
         }
