@@ -17,6 +17,18 @@ packetsonde:
   agent_listen_addr: "0.0.0.0"
   agent_listen_port: "8442"
 
+  # --- Process/file/socket detection (Linux). Off by default ---------------
+  # Enable to populate the activity sink that `packetsonde inspect` / `watch`
+  # read, plus optional policy overwatch and the learned per-exe baseline.
+  # Has fanotify overhead; turn on per-node (or per-role) where you want it.
+  #   detect_enabled: "1"
+  #   detect_sink: "/var/lib/packetsonde/activity.jsonl"   # default
+  #   detect_watch_paths: "/etc,/home"                     # comma-separated
+  #   detect_max_events_ps: "2000"                         # global events/sec cap
+  #   detect_policy_mode: "off"                            # off | overwatch | learn
+  #   detect_baseline_mode: "off"                          # off | on (learned per-exe allowlist)
+  #   detect_baseline_state_dir: "/var/lib/packetsonde/baseline"
+
 # --- Per-node knock override (stealth: no idle listener) -------------------
 # Put this in pillar/nodes/<minion-id>.sls and target that minion so it deep-
 # merges over the defaults above. A signed broadcast knock opens an ephemeral

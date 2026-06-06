@@ -63,6 +63,19 @@ packetsonded-keydir:
     - require:
       - user: packetsonded-user
 
+# State dir for the [detect] activity sink + learned baseline. The unprivileged
+# agent writes the sink here only if the directory already exists, so create it
+# unconditionally (cheap, empty unless [detect] is enabled).
+packetsonded-statedir:
+  file.directory:
+    - name: /var/lib/packetsonde
+    - user: packetsonded
+    - group: packetsonded
+    - mode: '0750'
+    - makedirs: True
+    - require:
+      - user: packetsonded-user
+
 packetsonded-config:
   file.managed:
     - name: /etc/packetsonded/packetsonded.toml
@@ -97,3 +110,4 @@ packetsonded-service:
       - file: packetsonded-bin-packetsonded
       - file: packetsonded-bin-packetsonde-priv
       - file: packetsonded-config
+      - file: packetsonded-statedir
