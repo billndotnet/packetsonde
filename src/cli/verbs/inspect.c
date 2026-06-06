@@ -17,9 +17,8 @@ static int64_t now_ms(void) {
 }
 
 int ps_verb_inspect_run(int argc, char **argv, const struct ps_args *opts) {
-    (void)opts;
     const char *exe = NULL, *source = "/var/lib/packetsonde/activity.jsonl";
-    const char *bl_dir = getenv("PS_DETECT_BASELINE_DIR");
+    const char *bl_dir = getenv("PS_DETECT_BASELINE_STATE_DIR");
     int pid = -1, stream = 0, once = 0;
     double interval = 1.0;
     static struct option lo[] = {
