@@ -27,6 +27,7 @@ static int read_meta(const char *root, int pid, struct ps_act_proc *p) {
     p->pid = pid;
     p->ppid = ps_proc_parse_ppid(stat);
     ps_proc_parse_comm(stat, p->comm, sizeof p->comm);
+    { unsigned long long st = 0; if (ps_proc_parse_starttime(stat, &st) == 0) p->start_time = st; }
 
     char cg[512];
     if (slurp(root, pid, "cgroup", cg, sizeof cg) >= 0)
@@ -68,6 +69,7 @@ int ps_proc_enrich(const char *proc_root, int pid, struct ps_activity *a, int ma
         a->anc[a->nanc].pid = cur;
         a->anc[a->nanc].depth = depth;
         snprintf(a->anc[a->nanc].comm, sizeof a->anc[a->nanc].comm, "%s", tmp.comm);
+        a->anc[a->nanc].start_time = tmp.start_time;
         a->nanc++;
         if (tmp.ppid <= 1) break;   /* parent is init -> cur was the session/service root */
         cur = tmp.ppid;

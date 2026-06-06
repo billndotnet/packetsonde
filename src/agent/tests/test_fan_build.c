@@ -19,13 +19,15 @@ int main(void) {
     snprintf(p, sizeof p, "%s/net/udp6", root); wr(p, "h\n");
     /* leaf 1234 (sh) -> 1190 (smbd, holds socket) -> init */
     snprintf(d, sizeof d, "%s/1234", root); mkdir(d, 0755);
-    snprintf(p, sizeof p, "%s/1234/stat", root); wr(p, "1234 (sh) S 1190 1234 1190 0\n");
+    snprintf(p, sizeof p, "%s/1234/stat", root);
+    wr(p, "1234 (sh) S 1190 1234 1190 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 5550001 0\n");
     snprintf(p, sizeof p, "%s/1234/cgroup", root); wr(p, "0::/system.slice/smbd.service\n");
     snprintf(d, sizeof d, "%s/1234/attr", root); mkdir(d, 0755);
     snprintf(p, sizeof p, "%s/1234/attr/current", root); wr(p, "unconfined\n");
     snprintf(p, sizeof p, "%s/1234/cmdline", root); wr(p, "sh");
     snprintf(d, sizeof d, "%s/1190", root); mkdir(d, 0755);
-    snprintf(p, sizeof p, "%s/1190/stat", root); wr(p, "1190 (smbd) S 1 1190 1190 0\n");
+    snprintf(p, sizeof p, "%s/1190/stat", root);
+    wr(p, "1190 (smbd) S 1 1190 1190 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 4440002 0\n");
     snprintf(p, sizeof p, "%s/1190/cgroup", root); wr(p, "0::/system.slice/smbd.service\n");
     snprintf(d, sizeof d, "%s/1190/attr", root); mkdir(d, 0755);
     snprintf(p, sizeof p, "%s/1190/attr/current", root); wr(p, "unconfined\n");
@@ -39,6 +41,8 @@ int main(void) {
     assert(n > 0);
     assert(strstr(json, "\"path\":\"/etc/shadow\""));
     assert(strstr(json, "\"comm\":\"sh\""));
+    assert(strstr(json, "\"start_ticks\":5550001"));   /* leaf starttime */
+    assert(strstr(json, "\"start_ticks\":4440002"));   /* ancestor smbd starttime */
     assert(strstr(json, "\"owner_comm\":\"smbd\""));       /* ancestor socket attributed */
     assert(strstr(json, "\"raddr\":\"203.0.113.5:51344\""));
 
