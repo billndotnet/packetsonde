@@ -9,6 +9,8 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <string.h>
 #include <stdint.h>
 
