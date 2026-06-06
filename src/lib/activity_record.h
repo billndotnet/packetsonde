@@ -8,10 +8,11 @@
 
 struct ps_act_proc {
     int pid, ppid, uid, sid;
+    unsigned long long start_time;          /* /proc stat field 22, ticks since boot */
     char comm[64], exe[256], cmdline[512];
     char cgroup[256], mac_label[128], mac_mode[32];
 };
-struct ps_act_ancestor { int pid, depth; char comm[64]; };
+struct ps_act_ancestor { int pid, depth; unsigned long long start_time; char comm[64]; };
 struct ps_act_socket {
     int owner_pid, depth;
     char owner_comm[64], proto[4], laddr[64], raddr[64], state[16];
