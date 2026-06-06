@@ -80,6 +80,17 @@ int ps_fan_build_record(const char *proc_root, int pid, const char *path,
 }
 
 #ifdef __linux__
+/* Mark each comma-separated root for write-close events (non-recursive: the
+ * top level of each root). Used for the provenance transient/sensitive sets so
+ * write triggers fire without the operator also listing them in watch_paths. */
+static void ps_fan_mark_write_roots(int fan, const char *roots) {
+    if (!roots || !roots[0]) return;
+    char buf[4096]; snprintf(buf, sizeof buf, "%s", roots);
+    for (char *p = strtok(buf, ","); p; p = strtok(NULL, ",")) {
+        fanotify_mark(fan, FAN_MARK_ADD, FAN_CLOSE_WRITE, AT_FDCWD, p);
+    }
+}
+
 int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
                        void (*emit)(const char *, size_t, void *), void *ctx) {
     int fan = fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC, O_RDONLY | O_CLOEXEC);
@@ -93,6 +104,15 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
     /* Mount-wide exec mark: catch ANY execve regardless of dir (the unifying
      * post-exploitation signal). Independent of watch_paths. */
     fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_OPEN_EXEC, AT_FDCWD, "/");
+    /* Provenance: also watch the transient + sensitive roots for writes, so the
+     * write_executable / write_sensitive_path triggers fire at stock config
+     * (otherwise they'd depend on those roots being in watch_paths). These marks
+     * are non-recursive — a drop into a deeper subdir is still caught at exec
+     * time by the mount-wide exec mark above (the exec_from_transient backstop). */
+    if (cfg->prov.enabled) {
+        ps_fan_mark_write_roots(fan, cfg->prov.transient_paths);
+        ps_fan_mark_write_roots(fan, cfg->prov.sensitive_paths);
+    }
     int max_depth = cfg->max_depth > 0 ? cfg->max_depth : 16;
     for (;;) {
         struct pollfd pfd = { fan, POLLIN, 0 };

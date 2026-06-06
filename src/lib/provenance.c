@@ -1,7 +1,6 @@
 #include "provenance.h"
 #include "json.h"
 #include <string.h>
-#include <stdio.h>
 #include <sys/stat.h>
 
 /* True if `path` is exactly, or a child of, one of the comma-separated prefixes
