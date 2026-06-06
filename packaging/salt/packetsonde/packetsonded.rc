@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# PROVIDE: packetsonded
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# packetsonde network observation agent (FreeBSD rc.d).
+#
+# Starts as root; packetsonded forks a privilege-separated worker (keeps the
+# raw-socket/bpf access) and drops the main process's privileges itself, so no
+# capability/setuid wrapper is needed here. daemon(8) supervises the foreground
+# agent and restarts it on unexpected exit (mirrors systemd Restart=on-failure).
+#
+# Enable in /etc/rc.conf:  packetsonded_enable="YES"
+
+. /etc/rc.subr
+
+name="packetsonded"
+rcvar="packetsonded_enable"
+
+pidfile="/var/run/${name}.pid"
+logfile="/var/log/${name}.log"
+
+command="/usr/sbin/daemon"
+command_args="-P ${pidfile} -r -t ${name} -o ${logfile} \
+  /usr/local/sbin/packetsonded -c /etc/packetsonded/packetsonded.toml"
+
+load_rc_config "$name"
+: ${packetsonded_enable:="NO"}
+
+run_rc_command "$1"
