@@ -23,6 +23,8 @@ add_library(packetsonde_lib STATIC
     proc_parse.c
     sock_parse.c
     activity_record.c
+    proc_profile.c
+    proc_profile_delta.c
     cgroup_unit.c
     systemd_policy.c
     policy_eval.c
@@ -186,4 +188,22 @@ if(BUILD_TESTING)
     add_executable(test_recipe_tls tests/test_recipe_tls.c)
     target_link_libraries(test_recipe_tls PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_tls COMMAND test_recipe_tls)
+
+    add_executable(test_activity_json tests/test_activity_json.c)
+    target_link_libraries(test_activity_json PRIVATE packetsonde_lib)
+    add_test(NAME test_activity_json COMMAND test_activity_json)
+
+    add_executable(test_proc_profile tests/test_proc_profile.c)
+    target_link_libraries(test_proc_profile PRIVATE packetsonde_lib)
+    add_test(NAME test_proc_profile COMMAND test_proc_profile)
+
+    add_executable(test_proc_profile_delta tests/test_proc_profile_delta.c)
+    target_link_libraries(test_proc_profile_delta PRIVATE packetsonde_lib)
+    add_test(NAME test_proc_profile_delta COMMAND test_proc_profile_delta)
+
+    add_executable(test_inspect_subject tests/test_inspect_subject.c
+                   ${CMAKE_SOURCE_DIR}/src/cli/inspect/subject.c)
+    target_include_directories(test_inspect_subject PRIVATE ${CMAKE_SOURCE_DIR}/src/cli/inspect)
+    target_link_libraries(test_inspect_subject PRIVATE packetsonde_lib)
+    add_test(NAME test_inspect_subject COMMAND test_inspect_subject)
 endif()

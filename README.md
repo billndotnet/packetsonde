@@ -36,6 +36,7 @@ Actively developed. Milestone history in [CHANGELOG.md](CHANGELOG.md); current b
 | `report`   | Generate a Markdown engagement report from JSONL findings |
 | `collect`  | Receive + present signed findings from a remote agent, central-free |
 | `watch`    | Tail the agent's process/file/socket activity records (JSONL) |
+| `inspect`  | Live mtr-style dashboard of one process's fanotify profile (`--pid N` or `--exe PATH`): files / network dests / spawned procs with baseline verdicts; `--stream` emits the `profile.v1` keyframe/delta feed |
 | `baseline` | Manage learned per-executable behavioral baselines (`list` / `approve` / `deny` for file paths, network dests, spawn parents) |
 | `sandbox-suggest` | Emit a suggested systemd sandbox stanza from learned per-unit activity |
 | `key`      | `generate` / `list` / `fingerprint` / `revoke` — Ed25519 identity for discovery, `--via`, and enrollment |

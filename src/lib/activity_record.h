@@ -26,4 +26,9 @@ struct ps_activity {
 
 /* Serialize to JSON (schema = spec §5). Returns bytes written, or -1. */
 int ps_activity_to_json(const struct ps_activity *a, char *out, size_t cap);
+
+/* Parse a JSON line produced by ps_activity_to_json back into *out.
+ * Returns 0 on success, -1 on malformed input. Best-effort: fields absent
+ * from the JSON are left zeroed. */
+int ps_activity_from_json(const char *json, struct ps_activity *out);
 #endif /* PS_ACTIVITY_RECORD_H */
