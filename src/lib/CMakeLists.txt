@@ -43,7 +43,11 @@ target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(packetsonde_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # Ed25519 sign/verify + SHA-256 fingerprints live in discovery.c / keystore.c.
 find_package(OpenSSL REQUIRED)
-target_link_libraries(packetsonde_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+# Threads: FreeBSD requires explicit -pthread (Linux/glibc folds it into libc).
+# PUBLIC so it propagates to every consumer (agent, cli, tests).
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(packetsonde_lib PUBLIC OpenSSL::Crypto OpenSSL::SSL Threads::Threads)
 
 if(BUILD_TESTING)
     add_executable(test_ulid tests/test_ulid.c)
