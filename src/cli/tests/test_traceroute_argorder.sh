@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # traceroute accepts its target before, after, or interleaved with options
 # (POSIX getopt doesn't permute, so the verb handles the positional itself).
 # No network/caps needed: an unresolvable target fails fast and the error echoes

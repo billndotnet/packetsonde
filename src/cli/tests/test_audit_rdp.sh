@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock RDP server that returns an X.224 Connection
 # Confirm with RDP_NEG_RSP selecting plain RDP (no NLA). Asserts
 # rdp.metadata, rdp.exposed, rdp.no_nla findings.

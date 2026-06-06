@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock IMAP server on port 143 that returns a CAPABILITY
 # response with no STARTTLS and no LOGINDISABLED. Asserts imap.metadata,
 # imap.no_starttls, and imap.plaintext_login findings.

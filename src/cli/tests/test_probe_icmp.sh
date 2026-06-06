@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test for `packetsonde probe icmp`. Pings loopback and asserts
 # the reply + summary findings. Skips if the unprivileged ICMP socket cannot
 # be opened (e.g. Linux env where ping_group_range excludes the test user

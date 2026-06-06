@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock LDAP server that accepts anonymous bind (resultCode=0).
 # Asserts ldap.metadata, ldap.anonymous_bind, and (on port 389)
 # ldap.plaintext.

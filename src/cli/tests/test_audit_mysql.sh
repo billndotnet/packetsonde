@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock MySQL/MariaDB handshake announcing version 5.5.62 (pre-8.0).
 # Asserts mysql.metadata + mysql.old_version (medium, < 8.0 is EOL).
 set -e

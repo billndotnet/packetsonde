@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # traceroute does not support --via yet (Phase 4). It must error clearly,
 # not silently run locally. No network required.
 set -e

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock SNMP v2c responder that accepts community "public"
 # and returns a sysDescr GetResponse. Asserts snmp.metadata and
 # snmp.default_community findings.

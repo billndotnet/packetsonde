@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock VNC server speaking RFB 003.008 that advertises three security
 # types: None(1), VNC(2), TLS(18). Asserts vnc.metadata + vnc.exposed +
 # vnc.no_auth (because type 1 is offered).

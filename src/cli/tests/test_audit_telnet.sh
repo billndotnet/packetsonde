@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock telnet -- any reachable banner = telnet.exposed (high).
 set -e
 

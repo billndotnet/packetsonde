@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock HAProxy: replies with a Server: HAProxy header on / and serves the
 # stats-report HTML on /stats. Asserts haproxy.metadata + haproxy.stats_exposed.
 set -e

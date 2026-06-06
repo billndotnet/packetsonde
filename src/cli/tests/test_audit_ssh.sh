@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: spin up a one-shot mock SSH server that sends an
 # OpenSSH 6.0 banner (old, should flag), run packetsonde audit ssh,
 # assert the expected findings.

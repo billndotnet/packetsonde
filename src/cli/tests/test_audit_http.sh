@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock HTTP server with no security headers -> http.metadata +
 # missing_xcto / missing_frame_protection / missing_csp /
 # missing_referrer_policy / server_version_leak.

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock Redis server that responds to INFO with a stats blob (no NOAUTH).
 # Asserts redis.metadata and redis.noauth findings.
 set -e

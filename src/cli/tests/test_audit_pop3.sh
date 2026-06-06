@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock POP3 server on port 110 that returns a CAPA
 # response without STLS. Asserts pop3.metadata and pop3.no_stls findings.
 set -e

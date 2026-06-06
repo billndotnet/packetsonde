@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock nginx: GET / returns "Server: nginx/1.25.3", GET /nginx_status
 # returns the canonical stub_status_module body. Asserts nginx.metadata,
 # nginx.version_disclosed, and nginx.status_exposed.

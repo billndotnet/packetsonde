@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock unauthenticated Elasticsearch returning a cluster info JSON on
 # GET /. Asserts elasticsearch.metadata and elasticsearch.unauthenticated.
 set -e
