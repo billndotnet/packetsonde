@@ -28,6 +28,9 @@ packetsonde:
   #   detect_policy_mode: "off"                            # off | overwatch | learn
   #   detect_baseline_mode: "off"                          # off | on (learned per-exe allowlist)
   #   detect_baseline_state_dir: "/var/lib/packetsonde/baseline"
+  #   detect_provenance_enabled: "1"                       # emit detect.file_provenance findings
+  #   detect_provenance_transient_paths: "/tmp,/var/tmp,/dev/shm,/run,/home"
+  #   detect_provenance_sensitive_paths: "/etc/cron.d,/etc/cron.daily,/etc/systemd/system,/etc/ld.so.preload,/usr/local/sbin,/lib/modules,/etc/rc.local"
 
 # --- Per-node knock override (stealth: no idle listener) -------------------
 # Put this in pillar/nodes/<minion-id>.sls and target that minion so it deep-
