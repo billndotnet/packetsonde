@@ -35,6 +35,7 @@ add_library(packetsonde_lib STATIC
     baseline_decide.c
     dest_match.c
     tls_probe.c
+    ptr_cache.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -71,6 +72,14 @@ if(BUILD_TESTING)
     add_executable(test_traceroute tests/test_traceroute.c)
     target_link_libraries(test_traceroute PRIVATE packetsonde_lib)
     add_test(NAME test_traceroute COMMAND test_traceroute)
+
+    add_executable(test_traceroute_sink tests/test_traceroute_sink.c)
+    target_link_libraries(test_traceroute_sink PRIVATE packetsonde_lib)
+    add_test(NAME test_traceroute_sink COMMAND test_traceroute_sink)
+
+    add_executable(test_ptr_cache tests/test_ptr_cache.c)
+    target_link_libraries(test_ptr_cache PRIVATE packetsonde_lib pthread)
+    add_test(NAME test_ptr_cache COMMAND test_ptr_cache)
 
     add_executable(test_discovery tests/test_discovery.c)
     target_link_libraries(test_discovery PRIVATE packetsonde_lib)

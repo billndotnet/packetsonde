@@ -30,7 +30,7 @@ Actively developed. Milestone history in [CHANGELOG.md](CHANGELOG.md); current b
 | `audit`    | 26 services: `tls`, `dns`, `http`, `ssh`, `smb`, `telnet`, `ftp`, `redis`, `ntp`, `memcached`, `elasticsearch`, `smtp`, `mysql`, `postgresql`, `ldap`, `imap`, `pop3`, `snmp`, `rdp`, `mssql`, `kafka`, `vnc`, `haproxy`, `proxmox`, `nginx`, `opnsense` |
 | `scan`     | `ports` — connect-scan a target or CIDR (TCP / UDP) |
 | `discover` | `neighbors` (local ARP/NDP), `hosts` (port-set sweep), `agents` (signed broadcast for remote `packetsonded`) |
-| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin) |
+| `probe`    | `tcp` (single connect + banner), `traceroute` (UDP / TCP / ICMP; classic / Paris / Dublin; streams hops live with `--max-gap` early-stop and optional `--ptr` reverse-DNS) |
 | `recipe`   | `run` / `sign` / `verify` / `info` — author and run signed declarative audit recipes (pushed JIT to a remote agent over `--via`) |
 | `findings` | `tail` / `filter` / `stats` — read, filter, or aggregate JSONL records from a file or stdin |
 | `report`   | Generate a Markdown engagement report from JSONL findings |
