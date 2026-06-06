@@ -74,13 +74,24 @@ int ps_reg_marker_write(const char *path, const char *agent_id, const char *stat
 #include <limits.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#if defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#endif
 
 #define PS_REG_MARKER "/etc/packetsonded/registered"
 
 static void self_exe_path(char *out, size_t cap) {
+#if defined(__FreeBSD__)
+    /* FreeBSD has no /proc/self/exe by default; KERN_PROC_PATHNAME is the
+     * canonical self-path lookup. */
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+    size_t len = cap;
+    if (sysctl(mib, 4, out, &len, NULL, 0) == 0 && len > 0) { out[cap - 1] = 0; return; }
+#else
     ssize_t n = readlink("/proc/self/exe", out, cap - 1);
     if (n > 0) { out[n] = 0; return; }
-    snprintf(out, cap, "%s", "/usr/local/bin/packetsonded");  /* fallback */
+#endif
+    snprintf(out, cap, "%s", "/usr/local/bin/packetsonde");  /* fallback: the CLI */
 }
 
 /* Minimal primary-v4 detection: UDP-connect a far address, read local sockname.
