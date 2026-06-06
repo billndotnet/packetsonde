@@ -8,10 +8,11 @@
 
 struct ps_act_proc {
     int pid, ppid, uid, sid;
+    unsigned long long start_time;          /* /proc stat field 22, ticks since boot */
     char comm[64], exe[256], cmdline[512];
     char cgroup[256], mac_label[128], mac_mode[32];
 };
-struct ps_act_ancestor { int pid, depth; char comm[64]; };
+struct ps_act_ancestor { int pid, depth; unsigned long long start_time; char comm[64]; };
 struct ps_act_socket {
     int owner_pid, depth;
     char owner_comm[64], proto[4], laddr[64], raddr[64], state[16];
@@ -19,6 +20,7 @@ struct ps_act_socket {
 struct ps_activity {
     char ts[24], event[8], path[512];
     int partial;
+    char prov_trigger[24];   /* "" unless a provenance trigger fired */
     struct ps_act_proc proc;
     int nanc;  struct ps_act_ancestor anc[PS_ACT_MAX_ANC];
     int nsock; struct ps_act_socket  sock[PS_ACT_MAX_SOCK];

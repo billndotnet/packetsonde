@@ -23,6 +23,7 @@ add_library(packetsonde_lib STATIC
     proc_parse.c
     sock_parse.c
     activity_record.c
+    provenance.c
     proc_profile.c
     proc_profile_delta.c
     cgroup_unit.c
@@ -128,6 +129,10 @@ if(BUILD_TESTING)
     add_executable(test_proc_parse tests/test_proc_parse.c)
     target_link_libraries(test_proc_parse PRIVATE packetsonde_lib)
     add_test(NAME test_proc_parse COMMAND test_proc_parse)
+
+    add_executable(test_provenance tests/test_provenance.c)
+    target_link_libraries(test_provenance PRIVATE packetsonde_lib)
+    add_test(NAME test_provenance COMMAND test_provenance)
 
     add_executable(test_sock_parse tests/test_sock_parse.c)
     target_link_libraries(test_sock_parse PRIVATE packetsonde_lib)

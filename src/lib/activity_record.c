@@ -11,12 +11,14 @@ int ps_activity_to_json(const struct ps_activity *a, char *out, size_t cap) {
     ps_json_key_string(&j, "event", a->event);
     ps_json_key_string(&j, "path", a->path);
     ps_json_key_bool(&j, "partial", a->partial);
+    if (a->prov_trigger[0]) ps_json_key_string(&j, "prov_trigger", a->prov_trigger);
 
     ps_json_key_object_begin(&j, "process");
     ps_json_key_int(&j, "pid", a->proc.pid);
     ps_json_key_int(&j, "ppid", a->proc.ppid);
     ps_json_key_int(&j, "uid", a->proc.uid);
     ps_json_key_int(&j, "sid", a->proc.sid);
+    ps_json_key_int(&j, "start_ticks", (int64_t)a->proc.start_time);
     ps_json_key_string(&j, "comm", a->proc.comm);
     ps_json_key_string(&j, "exe", a->proc.exe);
     ps_json_key_string(&j, "cmdline", a->proc.cmdline);
@@ -33,6 +35,7 @@ int ps_activity_to_json(const struct ps_activity *a, char *out, size_t cap) {
         ps_json_key_int(&j, "pid", a->anc[i].pid);
         ps_json_key_string(&j, "comm", a->anc[i].comm);
         ps_json_key_int(&j, "depth", a->anc[i].depth);
+        ps_json_key_int(&j, "start_ticks", (int64_t)a->anc[i].start_time);
         ps_json_object_end(&j);
     }
     ps_json_array_end(&j);
@@ -84,10 +87,12 @@ int ps_activity_from_json(const char *json, struct ps_activity *out) {
     if (ps_json_extract_string(json, "ts", out->ts, sizeof out->ts) < 0) return -1;
     ps_json_extract_string(json, "event", out->event, sizeof out->event);
     ps_json_extract_string(json, "path", out->path, sizeof out->path);
+    ps_json_extract_string(json, "prov_trigger", out->prov_trigger, sizeof out->prov_trigger);
     if (ps_json_extract_int(json, "pid", &iv) == 0) out->proc.pid = (int)iv;
     if (ps_json_extract_int(json, "ppid", &iv) == 0) out->proc.ppid = (int)iv;
     if (ps_json_extract_int(json, "uid", &iv) == 0) out->proc.uid = (int)iv;
     if (ps_json_extract_int(json, "sid", &iv) == 0) out->proc.sid = (int)iv;
+    if (ps_json_extract_int(json, "start_ticks", &iv) == 0) out->proc.start_time = (unsigned long long)iv;
     ps_json_extract_string(json, "comm", out->proc.comm, sizeof out->proc.comm);
     ps_json_extract_string(json, "exe", out->proc.exe, sizeof out->proc.exe);
     ps_json_extract_string(json, "cmdline", out->proc.cmdline, sizeof out->proc.cmdline);
@@ -102,6 +107,7 @@ int ps_activity_from_json(const char *json, struct ps_activity *out) {
         while (p && out->nanc < PS_ACT_MAX_ANC && next_json_object(&p, obj, sizeof obj)) {
             if (ps_json_extract_int(obj, "pid", &iv) == 0) out->anc[out->nanc].pid = (int)iv;
             if (ps_json_extract_int(obj, "depth", &iv) == 0) out->anc[out->nanc].depth = (int)iv;
+            if (ps_json_extract_int(obj, "start_ticks", &iv) == 0) out->anc[out->nanc].start_time = (unsigned long long)iv;
             ps_json_extract_string(obj, "comm", out->anc[out->nanc].comm, sizeof out->anc[out->nanc].comm);
             out->nanc++;
         }

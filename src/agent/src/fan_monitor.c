@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
@@ -35,7 +36,8 @@ static void now_iso(char *out, size_t cap) {
 
 int ps_fan_build_record(const char *proc_root, int pid, const char *path,
                         const char *event, int is_read, const char *suppress,
-                        int max_depth, char *out, size_t cap) {
+                        int max_depth, const struct ps_prov_cfg *prov,
+                        char *out, size_t cap) {
     /* comm needed for suppression: cheap read via enrich's leaf, but to gate
      * BEFORE full enrich we read just the leaf comm. Reuse enrich for the leaf. */
     struct ps_activity a; memset(&a, 0, sizeof a);
@@ -58,10 +60,37 @@ int ps_fan_build_record(const char *proc_root, int pid, const char *path,
     }
     a.nsock = ps_sock_snapshot(proc_root, pids, np, comms, depths, a.sock, PS_ACT_MAX_SOCK);
 
+    /* Provenance classification: stamp prov_trigger so the brain ships this
+     * record as a detect.file_provenance observation. Only write/exec events
+     * can trigger; for writes, stat the path for the executable bit. */
+    if (prov && prov->enabled) {
+        unsigned int mode = 0;
+        /* For writes, stat the real path for the executable bit. `path` is the
+         * absolute file path (proc_root only redirects /proc reads, not this).
+         * The priv worker runs as root, so the stat succeeds. */
+        if (strcmp(event, "write") == 0) {
+            struct stat st;
+            if (stat(path, &st) == 0) mode = st.st_mode;
+        }
+        const char *trig = ps_provenance_classify(event, path, mode, prov);
+        if (trig[0]) snprintf(a.prov_trigger, sizeof a.prov_trigger, "%s", trig);
+    }
+
     return ps_activity_to_json(&a, out, cap);
 }
 
 #ifdef __linux__
+/* Mark each comma-separated root for write-close events (non-recursive: the
+ * top level of each root). Used for the provenance transient/sensitive sets so
+ * write triggers fire without the operator also listing them in watch_paths. */
+static void ps_fan_mark_write_roots(int fan, const char *roots) {
+    if (!roots || !roots[0]) return;
+    char buf[4096]; snprintf(buf, sizeof buf, "%s", roots);
+    for (char *p = strtok(buf, ","); p; p = strtok(NULL, ",")) {
+        fanotify_mark(fan, FAN_MARK_ADD, FAN_CLOSE_WRITE, AT_FDCWD, p);
+    }
+}
+
 int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
                        void (*emit)(const char *, size_t, void *), void *ctx) {
     int fan = fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC, O_RDONLY | O_CLOEXEC);
@@ -75,6 +104,15 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
     /* Mount-wide exec mark: catch ANY execve regardless of dir (the unifying
      * post-exploitation signal). Independent of watch_paths. */
     fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT, FAN_OPEN_EXEC, AT_FDCWD, "/");
+    /* Provenance: also watch the transient + sensitive roots for writes, so the
+     * write_executable / write_sensitive_path triggers fire at stock config
+     * (otherwise they'd depend on those roots being in watch_paths). These marks
+     * are non-recursive — a drop into a deeper subdir is still caught at exec
+     * time by the mount-wide exec mark above (the exec_from_transient backstop). */
+    if (cfg->prov.enabled) {
+        ps_fan_mark_write_roots(fan, cfg->prov.transient_paths);
+        ps_fan_mark_write_roots(fan, cfg->prov.sensitive_paths);
+    }
     int max_depth = cfg->max_depth > 0 ? cfg->max_depth : 16;
     for (;;) {
         struct pollfd pfd = { fan, POLLIN, 0 };
@@ -95,7 +133,7 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
             const char *event = ps_fan_event_for_mask(m->mask, &is_read);
             char json[PS_ACT_ITEM_SERIALIZE_MAX];
             int n = ps_fan_build_record("", (int)m->pid, path, event, is_read,
-                                        cfg->suppress, max_depth, json, sizeof json);
+                                        cfg->suppress, max_depth, &cfg->prov, json, sizeof json);
             if (n > 0 && emit) emit(json, (size_t)n, ctx);
             else if (n < 0) ps_warn("fan: activity record overflow, dropped (pid=%d path=%s)", (int)m->pid, path);
         }

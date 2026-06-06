@@ -21,6 +21,22 @@ int ps_proc_parse_ppid(const char *stat_buf) {
     return atoi(p);
 }
 
+int ps_proc_parse_starttime(const char *stat_buf, unsigned long long *out) {
+    const char *p = after_comm(stat_buf);
+    if (!p) return -1;
+    /* Tokens after ')' are fields 3.. ; starttime is field 22, i.e. the
+     * 20th whitespace-separated token after the ')'. Skip 19, read the 20th. */
+    for (int i = 0; i < 19; i++) {
+        while (*p == ' ') p++;
+        if (!*p) return -1;
+        while (*p && *p != ' ') p++;   /* consume one token */
+    }
+    while (*p == ' ') p++;
+    if (*p < '0' || *p > '9') return -1;
+    *out = strtoull(p, NULL, 10);
+    return 0;
+}
+
 int ps_proc_parse_comm(const char *stat_buf, char *out, size_t cap) {
     const char *lp = strchr(stat_buf, '(');
     const char *rp = strrchr(stat_buf, ')');

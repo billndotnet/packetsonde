@@ -36,3 +36,6 @@ max_events_ps      = "{{ salt['pillar.get']('packetsonde:detect_max_events_ps', 
 policy_mode        = "{{ salt['pillar.get']('packetsonde:detect_policy_mode', 'off') }}"
 baseline_mode      = "{{ salt['pillar.get']('packetsonde:detect_baseline_mode', 'off') }}"
 baseline_state_dir = "{{ salt['pillar.get']('packetsonde:detect_baseline_state_dir', '/var/lib/packetsonde/baseline') }}"
+provenance_enabled         = "{{ salt['pillar.get']('packetsonde:detect_provenance_enabled', '0') }}"
+provenance_transient_paths = "{{ salt['pillar.get']('packetsonde:detect_provenance_transient_paths', '/tmp,/var/tmp,/dev/shm,/run,/home') }}"
+provenance_sensitive_paths = "{{ salt['pillar.get']('packetsonde:detect_provenance_sensitive_paths', '/etc/cron.d,/etc/cron.daily,/etc/systemd/system,/etc/ld.so.preload,/usr/local/sbin,/lib/modules,/etc/rc.local') }}"

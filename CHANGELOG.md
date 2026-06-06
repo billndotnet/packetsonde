@@ -13,6 +13,10 @@ Layered, post-exploitation behavioral sensor for the agent's host. Off by defaul
 - **Declared-policy overwatch** — brain-side module compares observed activity to each unit's own `systemd` sandbox directives and flags violations; `learn` mode accumulates per-unit envelopes and `packetsonde sandbox-suggest <unit>` synthesizes a tightened sandbox stanza.
 - **Learned per-exe baseline** — hybrid learn/enforce allowlist keyed by executable across three signals: file paths, network destinations, and spawn parents. Novel → candidate → operator `approve`/`deny` via the new `baseline` verb (denied → anomaly).
 
+### Added — file provenance ("where did this come from?")
+- **`detect.file_provenance` findings** — high-signal writes/execs (executable drops to transient paths like `/tmp`/`/dev/shm`, writes to persistence/sensitive paths, execs from transient dirs) are reported to central as observations carrying the writer (`pid`, `start_time`, `exe`, `cmdline`, `uid`), ancestry, sockets, and a best-effort `session_src_ip`. Off by default (`detect_provenance_enabled`).
+- **`(pid, start_time)` stable identity** — process records now carry `start_ticks` (`/proc/<pid>/stat` field 22) on the process and each ancestor, making lineage/socket joins PID-reuse-proof.
+
 ### Added — fleet + central integration
 - **Agent registration/enrollment** — Ed25519 keystore identity, `[central]` config, `packetsonde register` (lands a `pending` agent for operator validation).
 - **Observation reporting** — agent ships queued passive findings to central in bounded batches.

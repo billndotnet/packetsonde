@@ -66,6 +66,11 @@ A layered, post-exploitation behavioral sensor for the host the agent runs on:
 
 All three run together off a multi-consumer activity ring and are off by default (`[detect]` config block).
 
+When provenance is enabled (`detect_provenance_enabled` pillar / `[detect]
+provenance_enabled`), suspicious writes/execs (droppers to `/tmp`, persistence
+writes, execs from transient dirs) are reported to central as
+`detect.file_provenance` findings answering "who wrote this, and from where?".
+
 ## Quick start
 
 ```bash

@@ -10,6 +10,7 @@ int main(void) {
     snprintf(a.path, sizeof a.path, "/etc/shadow");
     a.partial = 0;
     a.proc.pid = 4242; a.proc.ppid = 900; a.proc.uid = 0; a.proc.sid = 900;
+    a.proc.start_time = 880042;
     snprintf(a.proc.comm, sizeof a.proc.comm, "suspect");
     snprintf(a.proc.exe, sizeof a.proc.exe, "/usr/bin/suspect");
     snprintf(a.proc.cgroup, sizeof a.proc.cgroup, "/system.slice/sshd.service");
@@ -18,6 +19,8 @@ int main(void) {
     a.nanc = 2;
     a.anc[0].pid = 1; a.anc[0].depth = 2; snprintf(a.anc[0].comm, 64, "systemd");
     a.anc[1].pid = 900; a.anc[1].depth = 1; snprintf(a.anc[1].comm, 64, "sshd");
+    a.anc[0].start_time = 11;
+    a.anc[1].start_time = 870500;
     a.nsock = 1;
     a.sock[0].owner_pid = 4242; a.sock[0].depth = 0;
     snprintf(a.sock[0].owner_comm, 64, "suspect");
@@ -35,6 +38,8 @@ int main(void) {
     CHECK(strcmp(b.event, a.event) == 0);
     CHECK(strcmp(b.path, a.path) == 0);
     CHECK(b.proc.pid == 4242 && b.proc.ppid == 900 && b.proc.uid == 0);
+    CHECK(b.proc.start_time == 880042ULL);
+    CHECK(b.anc[1].start_time == 870500ULL);
     CHECK(strcmp(b.proc.exe, a.proc.exe) == 0);
     CHECK(strcmp(b.proc.comm, a.proc.comm) == 0);
     CHECK(strcmp(b.proc.cgroup, a.proc.cgroup) == 0);

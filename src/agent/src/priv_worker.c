@@ -617,6 +617,10 @@ int main(int argc, char **argv)
         fan_cfg.suppress      = getenv("PS_DETECT_SUPPRESS_PATHS");
         fan_cfg.max_depth     = max_depth_str     ? atoi(max_depth_str)     : 16;
         fan_cfg.max_events_ps = max_events_ps_str ? atoi(max_events_ps_str) : 2000;
+        const char *prov_en = getenv("PS_DETECT_PROVENANCE_ENABLED");
+        fan_cfg.prov.enabled         = prov_en ? atoi(prov_en) : 0;
+        fan_cfg.prov.transient_paths = getenv("PS_DETECT_PROVENANCE_TRANSIENT_PATHS");
+        fan_cfg.prov.sensitive_paths = getenv("PS_DETECT_PROVENANCE_SENSITIVE_PATHS");
         pthread_t t; pthread_create(&t, NULL, fan_thread, &fan_cfg);
         pthread_detach(t);
     }

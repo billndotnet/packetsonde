@@ -21,6 +21,8 @@
 #include "activity_ring.h"
 #include "iso8601.h"
 #include "priv_client.h"
+#include "activity_record.h"
+#include "provenance.h"
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
 #include "capture/protocol_demux.h"
@@ -704,6 +706,35 @@ static void activity_sink_append(const char *json, size_t len)
     fclose(f);
 }
 
+/* If an activity record carries a provenance trigger, build the
+ * detect.file_provenance bundle and enqueue it for central shipping. `json`
+ * must be NUL-terminated. Cheap strstr gate first — only provenance records
+ * (rare) pay the parse cost. */
+static void maybe_ship_provenance(const char *json)
+{
+    if (!strstr(json, "\"prov_trigger\"")) return;
+
+    struct ps_activity a;
+    if (ps_activity_from_json(json, &a) != 0 || a.prov_trigger[0] == '\0') return;
+
+    static char hostbuf[256];
+    if (hostbuf[0] == '\0' && gethostname(hostbuf, sizeof hostbuf) != 0)
+        snprintf(hostbuf, sizeof hostbuf, "unknown");
+
+    char bundle[PS_OBS_ITEM_MAX];
+    int bn = ps_provenance_build_record(&a, a.prov_trigger, hostbuf, bundle, sizeof bundle);
+    if (bn <= 0) return;
+
+    char ts_iso[24];
+    if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof ts_iso) <= 0) return;
+
+    char event_json[PS_OBS_ITEM_MAX];
+    size_t evlen = ps_obs_build_event(event_json, sizeof event_json,
+                                      "detect.file_provenance", ts_iso,
+                                      bundle, (size_t)bn);
+    if (evlen > 0) ps_obs_queue_push(event_json, evlen);
+}
+
 /* ------------------------------------------------------------------ */
 /* Priv client message dispatcher                                       */
 /* ------------------------------------------------------------------ */
@@ -734,8 +765,15 @@ static void dispatch_priv_msg(const struct ps_priv_msg *hdr,
         }
         case PS_OP_ACTIVITY_DATA:
             if (hdr->payload_len > 0) {
-                ps_act_ring_push((const char *)payload, hdr->payload_len);
-                activity_sink_append((const char *)payload, hdr->payload_len);
+                /* NUL-terminate for ring/sink/provenance (the record JSON is
+                 * text; the frame does not guarantee a trailing NUL). */
+                char rec[PS_MAX_MSG_PAYLOAD + 1];
+                uint32_t rlen = hdr->payload_len;
+                if (rlen > PS_MAX_MSG_PAYLOAD) rlen = PS_MAX_MSG_PAYLOAD;
+                memcpy(rec, payload, rlen); rec[rlen] = '\0';
+                ps_act_ring_push(rec, rlen);
+                activity_sink_append(rec, rlen);
+                maybe_ship_provenance(rec);
             }
             break;
         case PS_OP_ERROR:
