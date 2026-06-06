@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Generates a self-signed cert valid for "localhost", weak (sha1, 1024-bit RSA),
 # expiring in 10 days, into $TMPDIR/ps-test-cert.{pem,key}.
 set -e

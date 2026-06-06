@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Regression: --fail-on works for findings forwarded over --via.
 #
 # Previously, audit_via.c's emit_finding_passthrough wrote directly to

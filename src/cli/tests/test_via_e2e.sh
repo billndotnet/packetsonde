@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # End-to-end test: bring up the agent's network_listener in-process via
 # a tiny test driver, run `packetsonde --via testagent audit ssh
 # 127.0.0.1:MOCK` against it, assert finding frames came back with a

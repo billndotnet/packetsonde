@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <sys/socket.h>
 #include <string.h>
 #include <stdint.h>
 

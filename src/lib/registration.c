@@ -3,6 +3,8 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <stdio.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <string.h>
 
 static int b64(const uint8_t *in, size_t n, char *out, size_t cap) {

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock SMTP server that announces no STARTTLS in its EHLO response.
 # Asserts smtp.metadata and smtp.no_starttls findings.
 set -e

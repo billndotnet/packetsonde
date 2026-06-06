@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock FTP server that allows anonymous login.
 # Asserts ftp.metadata, ftp.plaintext_exposed, ftp.anonymous_allowed.
 set -e

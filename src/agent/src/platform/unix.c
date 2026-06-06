@@ -16,7 +16,7 @@
 #  include <sys/time.h>
 #else
 #  include <time.h>
-#  include <linux/limits.h>
+#  include <limits.h>
 #endif
 
 int ps_platform_fork_priv_worker(const char *priv_binary_path)

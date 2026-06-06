@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock DNS server that answers version.bind CHAOS TXT with "mock-bind 1.0".
 # Asserts dns.version_leak.
 set -e

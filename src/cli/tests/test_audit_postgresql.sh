@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock PostgreSQL responding 'N' to SSLRequest -> postgresql.no_ssl.
 set -e
 

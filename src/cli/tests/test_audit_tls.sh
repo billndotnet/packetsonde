@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: spin up an openssl s_server on a free port with weak
 # parameters, run `packetsonde audit tls 127.0.0.1:PORT`, assert findings.
 #

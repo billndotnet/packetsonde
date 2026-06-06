@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock MSSQL server that returns a TDS pre-login response
 # claiming version 11.0.0 (SQL Server 2012) with encryption=OFF. Asserts
 # mssql.metadata, mssql.no_encryption, mssql.old_version.

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock agent that uses raw socket -- skipped here as it
 # needs root. Instead we run a Python responder that *does* bind a UDP
 # port and listens on the broadcast destination port, signs a reply with

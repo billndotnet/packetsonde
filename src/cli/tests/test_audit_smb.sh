@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock SMB1 server that accepts a single-dialect NEGOTIATE request and
 # replies with an SMB1 frame (magic 0xFF S M B), indicating the server
 # is willing to speak SMB1.

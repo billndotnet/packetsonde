@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Multi-hop --via e2e: CLI -> bunker -> trunkbox -> audit target.
 #
 # Spins up two agent instances on loopback (with different listen ports +

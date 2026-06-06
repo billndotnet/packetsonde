@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration test: mock Kafka broker that handles ApiVersions and Metadata
 # requests, returning one broker and zero topics. Asserts kafka.metadata and
 # kafka.unauthenticated findings.

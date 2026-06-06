@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock memcached responding to `version` -- the text protocol has no
 # auth so reaching the port is itself the critical finding.
 set -e

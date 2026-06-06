@@ -1,6 +1,9 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "priv_protocol.h"
 
 static void test_header_size(void)

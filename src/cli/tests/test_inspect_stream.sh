@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # inspect --stream over a fixture sink: emits a profile.v1 keyframe with entities.
 set -e
 BUILD_DIR="${PS_BUILD_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/build}"

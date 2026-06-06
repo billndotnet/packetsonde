@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Mock NTP responder. Answers the mode-3 client query with a 48-byte
 # stratum-2 response, and the mode-7 monlist probe with a sizable
 # (~500-byte) payload that should trip the amplification finding.
