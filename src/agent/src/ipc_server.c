@@ -225,6 +225,12 @@ int ps_ipc_server_init(struct ps_ipc_server *srv, const char *socket_path,
     }
     strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
 
+    /* Remove a stale socket from an unclean prior shutdown; otherwise bind()
+     * fails with EADDRINUSE and the agent crash-loops. systemd guarantees a
+     * single instance, so unconditionally unlinking the path is safe. */
+    if (unlink(socket_path) == 0)
+        ps_warn("ipc_server_init: removed stale socket '%s'", socket_path);
+
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         ps_error("ipc_server_init: bind() failed: %s", strerror(errno));
         close(fd);

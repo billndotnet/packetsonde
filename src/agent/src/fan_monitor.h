@@ -24,4 +24,9 @@ int ps_fan_monitor_run(const struct ps_fan_cfg *cfg,
  * Precedence: exec > write > access > open. *is_read is 0 for exec/write
  * (never suppressed), 1 for access/open. */
 const char *ps_fan_event_for_mask(unsigned long long mask, int *is_read);
+
+/* True if `path` equals, or is nested under, any comma-separated root in `csv`.
+ * Boundary-aware ("/etc" matches "/etc/passwd", never "/etcfoo"). Used to filter
+ * mount-wide fanotify events down to the configured watch_paths/provenance roots. */
+int ps_fan_path_under_csv(const char *path, const char *csv);
 #endif /* PS_FAN_MONITOR_H */

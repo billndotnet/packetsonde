@@ -12,6 +12,11 @@ RestartSec=5s
 
 # Capabilities: pcap requires NET_RAW + NET_ADMIN; mTLS doesn't need them
 # itself but the agent's passive modules do.
+# NOTE: enabling the [detect] track (fanotify file/exec monitoring) additionally
+# requires CAP_SYS_ADMIN (fanotify_init) and CAP_DAC_READ_SEARCH (inode marks on
+# unreadable sensitive files like /etc/shadow):
+#   AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+#   CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
@@ -23,8 +28,10 @@ Group=packetsonded
 # Filesystem isolation. The agent only needs read access to its config
 # and key dirs, plus write to its state/log dirs.
 ReadOnlyPaths=/etc/packetsonded
-StateDirectory=packetsonded
-LogsDirectory=packetsonded
+# Must match the [detect] sink/baseline dir (/var/lib/packetsonde) so it stays
+# writable under ProtectSystem=strict.
+StateDirectory=packetsonde
+LogsDirectory=packetsonde
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -75,6 +75,7 @@ packetsonded-unit:
   file.managed:
     - name: /etc/systemd/system/packetsonded.service
     - source: salt://packetsonde/packetsonded.service
+    - template: jinja
     - mode: '0644'
   module.run:
     - name: service.systemctl_reload
