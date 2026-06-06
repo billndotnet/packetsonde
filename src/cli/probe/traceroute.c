@@ -52,21 +52,22 @@ static int tr_emit_cb(const struct ps_tr_hop *h, void *u) {
     else
         snprintf(title, sizeof(title), "hop %d: *", h->ttl);
 
-    /* ptr_name is getnameinfo()/NI_NAMEREQD output (DNS charset: letters,
-     * digits, hyphen, dot) and addr is numeric — neither contains JSON-special
-     * characters, so no escaping is needed here. The "ptr" key is always present
-     * (empty when unresolved or --ptr was not given) for a stable JSONL schema. */
-    char ev[512];
+    /* ptr_name is getnameinfo()/NI_NAMEREQD output (DNS charset) and c->target
+     * has already resolved successfully (else no hops would be emitted), so both
+     * are JSON-safe; no escaping needed. "ptr" is always present for a stable
+     * schema; "traced" records the run's destination per-hop. */
+    char ev[640];
     snprintf(ev, sizeof(ev),
              "{\"proto\":\"%s\",\"mode\":\"%s\",\"ttl\":%d,\"rtt_us\":%ld,"
-             "\"reached_dst\":%s,\"ptr\":\"%s\"}",
+             "\"reached_dst\":%s,\"ptr\":\"%s\",\"traced\":\"%s\"}",
              ps_tr_proto_str(c->to->proto), ps_tr_mode_str(c->to->mode),
-             h->ttl, h->rtt_us, h->reached_dst ? "true" : "false", ptr_name);
+             h->ttl, h->rtt_us, h->reached_dst ? "true" : "false", ptr_name, c->target);
 
     struct ps_finding f;
     ps_finding_init(&f, c->run_id, "cli.probe.traceroute", c->self_host,
                     "probe.traceroute.hop", PS_SEV_INFO, PS_CONF_FIRM, title);
-    ps_finding_set_target_hostname(&f, c->target, 0);
+    /* The hop's target is the hop itself (its IP) — NOT the trace destination,
+     * so a "*" (no-reply) hop has no target instead of displaying the dest name. */
     if (h->addr[0]) ps_finding_set_target_ip(&f, h->addr, 0);
     ps_finding_set_evidence_json(&f, ev);
     ps_output_emit(c->out, &f);
@@ -75,8 +76,6 @@ static int tr_emit_cb(const struct ps_tr_hop *h, void *u) {
 
 int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
     if (argc < 2) { usage(); return 2; }
-
-    const char *target = argv[1];
 
     struct ps_traceroute_opts to = PS_TRACEROUTE_DEFAULTS;
     int port_set = 0;
@@ -92,9 +91,26 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
         { "ptr-timeout", required_argument, NULL, 't' },
         { NULL, 0, NULL, 0 }
     };
-    optind = 2;
-    int c;
-    while ((c = getopt_long(argc, argv, "", longopts, NULL)) != -1) {
+    /* getopt does not permute here (POSIX environments stop option scanning at
+     * the first non-option), so a target placed before options used to drop the
+     * trailing options. Handle the single positional explicitly: when getopt
+     * stops at a non-option, capture it as the target, step past it, and resume
+     * — so options may appear before, after, or around the target. */
+    const char *target = NULL;
+    optind = 1;
+    for (;;) {
+        int c = getopt_long(argc, argv, "", longopts, NULL);
+        if (c == -1) {
+            if (optind < argc) {                 /* stopped at a non-option */
+                if (target) {
+                    fprintf(stderr, "probe traceroute: unexpected extra argument '%s'\n", argv[optind]);
+                    return 2;
+                }
+                target = argv[optind++];         /* capture target, resume parsing */
+                continue;
+            }
+            break;                                /* no args left: done */
+        }
         switch (c) {
             case 'p':
                 if      (!strcmp(optarg, "udp"))  to.proto = PS_TR_PROTO_UDP;
@@ -118,6 +134,8 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
             default: usage(); return 2;
         }
     }
+
+    if (!target) { usage(); return 2; }
 
     /* TCP traceroute targets a service port, not the UDP traceroute port. */
     if (to.proto == PS_TR_PROTO_TCP && !port_set) to.dst_port = 80;
