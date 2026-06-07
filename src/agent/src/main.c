@@ -25,6 +25,7 @@
 #include "iso8601.h"
 #include "priv_client.h"
 #include "activity_record.h"
+#include "capture_session.h"
 #include "provenance.h"
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
@@ -707,6 +708,10 @@ static void activity_sink_append(const char *json, size_t len)
     fwrite(json, 1, len, f);
     fputc('\n', f);
     fclose(f);
+
+    /* Tee into the active detect capture session, if one is set. The helper
+     * no-ops when there is no session; it supplies its own trailing newline. */
+    ps_capture_session_append(json);
 }
 
 /* If an activity record carries a provenance trigger, build the
