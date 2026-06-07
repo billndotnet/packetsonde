@@ -21,6 +21,7 @@ int  ps_verb_watch_run   (int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_sandbox_suggest_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts);
 int  ps_verb_inspect_run (int argc, char **argv, const struct ps_args *opts);
+int  ps_verb_detect_run  (int argc, char **argv, const struct ps_args *opts);
 
 static const struct ps_verb VERBS[] = {
     { "version",  ps_verb_version_run,  "Show packetsonde version" },
@@ -41,6 +42,7 @@ static const struct ps_verb VERBS[] = {
     { "inspect",  ps_verb_inspect_run,  "Live process-activity dashboard (profile keyframe/delta stream)" },
     { "sandbox-suggest", ps_verb_sandbox_suggest_run, "Suggest a systemd sandbox stanza from learned activity" },
     { "baseline", ps_verb_baseline_run, "Manage learned per-exe baselines (list/approve/deny)" },
+    { "detect",   ps_verb_detect_run,   "control the detect agent (capture sessions)" },
     { "help",     ps_verb_help_run,     "Show this help" },
     { NULL, NULL, NULL }
 };

@@ -15,6 +15,7 @@ set(CLI_SOURCES
     verbs/collect.c
     verbs/recipe.c
     verbs/watch.c
+    verbs/detect.c
     verbs/inspect.c
     inspect/subject.c
     inspect/render_stream.c
