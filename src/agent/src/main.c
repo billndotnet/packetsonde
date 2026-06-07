@@ -683,6 +683,70 @@ static void on_ipc_frame(int client_fd, const char *channel,
             ps_warn("main: query.flows malloc failed");
         }
 
+    } else if (strcmp(channel, "detect.capture.control") == 0) {
+        /*
+         * detect.capture.control — start/stop a detect capture session.
+         * Payload: {"action":"start","session_id":"<id>"}
+         *          {"action":"stop"}
+         * Response channel: "response.capture"
+         *   {"ok":true,"session_id":"<id>","action":"<a>"} on success
+         *   {"ok":false,"error":"..."} on bad/missing fields
+         */
+        char action[16]      = {0};
+        char session_id[128] = {0};
+        const char *p;
+
+        if ((p = strstr(payload, "\"action\"")) != NULL) {
+            sscanf(p, "\"action\" : \"%15[^\"]\"", action);
+            if (action[0] == '\0')
+                sscanf(p, "\"action\":\"%15[^\"]\"", action);
+        }
+        if ((p = strstr(payload, "\"session_id\"")) != NULL) {
+            sscanf(p, "\"session_id\" : \"%127[^\"]\"", session_id);
+            if (session_id[0] == '\0')
+                sscanf(p, "\"session_id\":\"%127[^\"]\"", session_id);
+        }
+
+        char resp[256];
+        struct ps_json j;
+        ps_json_init(&j, resp, sizeof(resp));
+
+        if (strcmp(action, "start") == 0) {
+            if (session_id[0] == '\0') {
+                ps_warn("main: detect.capture.control start missing session_id");
+                ps_json_object_begin(&j);
+                ps_json_key_bool(&j,   "ok", false);
+                ps_json_key_string(&j, "error", "missing session_id");
+                ps_json_object_end(&j);
+            } else {
+                ps_capture_session_set(session_id);
+                ps_info("main: detect capture session started '%s'", session_id);
+                ps_json_object_begin(&j);
+                ps_json_key_bool(&j,   "ok", true);
+                ps_json_key_string(&j, "session_id", session_id);
+                ps_json_key_string(&j, "action", "start");
+                ps_json_object_end(&j);
+            }
+        } else if (strcmp(action, "stop") == 0) {
+            ps_capture_session_clear();
+            ps_info("main: detect capture session stopped");
+            ps_json_object_begin(&j);
+            ps_json_key_bool(&j,   "ok", true);
+            ps_json_key_string(&j, "action", "stop");
+            ps_json_object_end(&j);
+        } else {
+            ps_warn("main: detect.capture.control bad action '%s'", action);
+            ps_json_object_begin(&j);
+            ps_json_key_bool(&j,   "ok", false);
+            ps_json_key_string(&j, "error", "unknown action");
+            ps_json_object_end(&j);
+        }
+
+        int rlen = ps_json_finish(&j);
+        if (rlen > 0)
+            ps_ipc_server_send_to(&g_ipc, client_fd, "response.capture",
+                                  resp, (uint32_t)rlen);
+
     } else {
         ps_debug("main: unknown IPC channel '%s'", channel);
     }
