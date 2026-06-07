@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEFAULT_SOCKET "/tmp/packetsonde-agent.sock"
+#define DEFAULT_SOCKET "/run/packetsonde/agent.sock"
 
 static enum psctl_fmt map_fmt(enum ps_fmt f) {
     switch (f) {

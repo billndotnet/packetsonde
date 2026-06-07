@@ -21,7 +21,7 @@
  * --session flag is scanned out of argv by hand (per the no-permute gotcha).
  */
 
-#define DEFAULT_SOCKET "/tmp/packetsonde-agent.sock"
+#define DEFAULT_SOCKET "/run/packetsonde/agent.sock"
 #define DETECT_CHAN_SZ 256
 #define DETECT_PAYL_SZ (64 * 1024)
 

@@ -206,6 +206,25 @@ int ps_ipc_server_init(struct ps_ipc_server *srv, const char *socket_path,
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++)
         srv->clients[i].fd = -1;
 
+    /* Ensure the socket's parent directory exists. Under systemd this is
+     * created host-visibly by RuntimeDirectory= (/run/packetsonde), but
+     * create it defensively so the agent also works when run directly or
+     * before the unit's RuntimeDirectory has been provisioned. PrivateTmp
+     * does NOT privatize /run, so a socket here is reachable from the host
+     * namespace (unlike the old /tmp/packetsonde-agent.sock). */
+    {
+        char dir[256];
+        strncpy(dir, socket_path, sizeof(dir) - 1);
+        dir[sizeof(dir) - 1] = '\0';
+        char *slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = '\0';
+            if (mkdir(dir, 0755) < 0 && errno != EEXIST)
+                ps_warn("ipc_server_init: mkdir('%s') failed: %s",
+                        dir, strerror(errno));
+        }
+    }
+
     /* Remove stale socket file */
     unlink(socket_path);
 

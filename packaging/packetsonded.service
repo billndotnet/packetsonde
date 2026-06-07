@@ -32,6 +32,12 @@ ReadOnlyPaths=/etc/packetsonded
 # writable under ProtectSystem=strict.
 StateDirectory=packetsonde
 LogsDirectory=packetsonde
+# Host-visible /run/packetsonde for the IPC socket. PrivateTmp does NOT
+# privatize /run, so the agent's Unix socket (/run/packetsonde/agent.sock) is
+# reachable by a CLI run from the host namespace (e.g. over salt). The old
+# /tmp/packetsonde-agent.sock was hidden by PrivateTmp.
+RuntimeDirectory=packetsonde
+RuntimeDirectoryMode=0755
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

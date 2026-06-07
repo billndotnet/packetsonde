@@ -1057,7 +1057,7 @@ int main(int argc, char **argv)
 
     /* --- Init IPC server --- */
     const char *sock_path = ps_config_get(&cfg, "agent", "socket");
-    if (!sock_path) sock_path = "/tmp/packetsonde-agent.sock";
+    if (!sock_path) sock_path = "/run/packetsonde/agent.sock";
 
     if (ps_ipc_server_init(&g_ipc, sock_path, on_ipc_frame, NULL) < 0) {
         ps_error("main: failed to init IPC server on '%s'", sock_path);
