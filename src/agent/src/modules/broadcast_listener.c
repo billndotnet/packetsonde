@@ -164,8 +164,5 @@ const ps_module_t broadcast_module = {
 	.tick        = NULL,
 };
 
-__attribute__((constructor))
-static void register_broadcast(void)
-{
-	ps_module_register(&broadcast_module);
-}
+/* Self-registration via constructor was deleted -- main.c registers
+ * this module explicitly so the global registry exists by then. */

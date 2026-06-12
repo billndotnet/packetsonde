@@ -256,8 +256,5 @@ const ps_module_t ospf_module = {
     .tick        = NULL,
 };
 
-__attribute__((constructor))
-static void register_ospf(void)
-{
-    ps_module_register(&ospf_module);
-}
+/* Self-registration via constructor was deleted -- main.c registers
+ * this module explicitly so the global registry exists by then. */

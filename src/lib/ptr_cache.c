@@ -12,6 +12,16 @@
 
 #define PTR_MAX 256
 
+/* macOS lacks pthread_condattr_setclock; its condvars wait on CLOCK_REALTIME.
+   Use a monotonic condvar clock where supported (robust against wall-clock
+   jumps), falling back to realtime on Apple. The deadline clock in
+   ps_ptr_cache_wait() must match whatever the condvar actually uses. */
+#if defined(__APPLE__)
+#define PS_PTR_COND_CLOCK CLOCK_REALTIME
+#else
+#define PS_PTR_COND_CLOCK CLOCK_MONOTONIC
+#endif
+
 struct ptr_entry {
     char ip[64];
     char name[256];   /* "" == resolved-negative */
@@ -82,7 +92,9 @@ static struct ps_ptr_cache *new_with(ps_ptr_resolver_fn r) {
     pthread_mutex_init(&c->mu, NULL);
     pthread_condattr_t ca;
     pthread_condattr_init(&ca);
-    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+#if !defined(__APPLE__)
+    pthread_condattr_setclock(&ca, PS_PTR_COND_CLOCK);
+#endif
     pthread_cond_init(&c->cv, &ca);
     pthread_condattr_destroy(&ca);
     if (pthread_create(&c->worker, NULL, worker_main, c) != 0) {
@@ -139,7 +151,7 @@ int ps_ptr_cache_wait(struct ps_ptr_cache *c, const char *ip,
     if (timeout_ms <= 0) return ps_ptr_cache_lookup(c, ip, name, cap);
 
     struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    clock_gettime(PS_PTR_COND_CLOCK, &deadline);
     deadline.tv_sec  += timeout_ms / 1000;
     deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
     if (deadline.tv_nsec >= 1000000000L) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000L; }
