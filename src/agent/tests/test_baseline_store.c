@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>   /* mkdtemp: <stdlib.h> on glibc (POSIX), <unistd.h> on macOS/BSD */
 
 int main(void) {
     char dir[] = "/tmp/ps_bl_XXXXXX"; assert(mkdtemp(dir));

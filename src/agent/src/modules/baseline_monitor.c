@@ -167,7 +167,7 @@ static int bl_init(ps_module_ctx_t *ctx) {
     const char *d = getenv("PS_DETECT_BASELINE_STATE_DIR");
     snprintf(st->state_dir, sizeof st->state_dir, "%s", (d && d[0]) ? d : "/var/lib/packetsonde/baseline");
     ctx->userdata = st;
-    if (ctx->log) ctx->log(ctx, 6, "baseline_monitor: %s", st->on ? "on" : "off");
+    if (ctx->log) ctx->log(ctx, 1 /* PS_LOG_INFO */, "baseline_monitor: %s", st->on ? "on" : "off");
     return 0;
 }
 static void bl_shutdown(ps_module_ctx_t *ctx) {

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>   /* mkdtemp: <stdlib.h> on glibc (POSIX), <unistd.h> on macOS/BSD */
 
 static int g_emits = 0; static char g_last[4096];
 static void emit(void *c, const char *json, size_t len) { (void)c;(void)len; g_emits++; snprintf(g_last,sizeof g_last,"%s",json); }

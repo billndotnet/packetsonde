@@ -212,8 +212,5 @@ const ps_module_t vrrp_module = {
     .tick        = NULL,
 };
 
-__attribute__((constructor))
-static void register_vrrp(void)
-{
-    ps_module_register(&vrrp_module);
-}
+/* Self-registration via constructor was deleted -- main.c registers
+ * this module explicitly so the global registry exists by then. */
