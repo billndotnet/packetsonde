@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 const char *ps_tr_proto_str(enum ps_tr_proto p) {
@@ -406,7 +407,21 @@ static int icmp_flow_walk(int icmp_fd, struct sockaddr_in dst,
     int max = opts->max_hops > 0 ? opts->max_hops : 30;
     if (max > PS_TRACEROUTE_MAX_HOPS) max = PS_TRACEROUTE_MAX_HOPS;
 
-    uint16_t ident = (uint16_t)(getpid() & 0xffff);
+    /*
+     * Per-trace unique ICMP id. When many `probe traceroute` processes run
+     * concurrently, an ICMP socket may be handed replies belonging to other
+     * traces (raw sockets copy every host reply; even SOCK_DGRAM ping sockets
+     * can deliver foreign/stale datagrams). We MUST match each reply strictly
+     * by (id == ident) AND (inner seq == ttl), or processes cross-talk: every
+     * trace then attributes siblings' replies to its current hop, never times
+     * out, never reaches the destination, and reports impossible sub-ms RTTs.
+     *
+     * PID alone can collide across concurrent processes, so mix in a random
+     * word; the strict id+seq match is the real guarantee.
+     */
+    srand((unsigned)(getpid() ^ (unsigned)time(NULL)));
+    uint16_t ident = (uint16_t)((getpid() & 0xffff) ^ (rand() & 0xffff));
+    if (ident == 0) ident = 1;
     for (int ttl = 1; ttl <= max; ttl++) {
         setsockopt(icmp_fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
 
@@ -429,31 +444,83 @@ static int icmp_flow_walk(int icmp_fd, struct sockaddr_in dst,
         sendto(icmp_fd, &pkt, sizeof(pkt), 0,
                (struct sockaddr *)&dst, sizeof(dst));
 
-        struct timeval tv = { opts->timeout_ms / 1000,
-                              (opts->timeout_ms % 1000) * 1000 };
-        setsockopt(icmp_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-        char rbuf[2048];
-        struct sockaddr_in from; socklen_t flen = sizeof(from);
-        ssize_t n = recvfrom(icmp_fd, rbuf, sizeof(rbuf), 0,
-                             (struct sockaddr *)&from, &flen);
-
+        /*
+         * Receive loop: keep draining replies until we get one that is OURS
+         * (matching id + seq) or the timeout budget for this hop is exhausted.
+         * Foreign replies (other traces, stale hops) are skipped, not counted.
+         */
+        long budget_us = (long)opts->timeout_ms * 1000;
         struct ps_tr_hop h; memset(&h, 0, sizeof(h)); h.ttl = ttl;
-        if (n <= 0) { if (ps_tr_sink_emit(sink, &h)) return 0; continue; }
+        int got = 0;
 
-        /* On macOS SOCK_DGRAM ICMP, the kernel strips the IP header on
-         * receive; on Linux it varies. Walk past optional IP header. */
-        uint8_t *icmp_hdr = (uint8_t *)rbuf;
-        if (n >= (ssize_t)sizeof(struct ip) && (rbuf[0] & 0xf0) == 0x40) {
-            int hl = (rbuf[0] & 0x0f) * 4;
-            if (n >= hl + 8) icmp_hdr = (uint8_t *)rbuf + hl;
+        for (;;) {
+            struct timeval now; gettimeofday(&now, NULL);
+            long elapsed = usec_diff(&t0, &now);
+            long remain = budget_us - elapsed;
+            if (remain <= 0) break;
+
+            struct timeval tv = { remain / 1000000, remain % 1000000 };
+            setsockopt(icmp_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+            char rbuf[2048];
+            struct sockaddr_in from; socklen_t flen = sizeof(from);
+            ssize_t n = recvfrom(icmp_fd, rbuf, sizeof(rbuf), 0,
+                                 (struct sockaddr *)&from, &flen);
+            if (n <= 0) break;  /* timeout or error */
+
+            /* On macOS SOCK_DGRAM ICMP, the kernel strips the IP header on
+             * receive; on Linux it varies. Walk past optional IP header. */
+            uint8_t *icmp_hdr = (uint8_t *)rbuf;
+            ssize_t icmp_len = n;
+            if (n >= (ssize_t)sizeof(struct ip) && (rbuf[0] & 0xf0) == 0x40) {
+                int hl = (rbuf[0] & 0x0f) * 4;
+                if (n >= hl + 8) { icmp_hdr = (uint8_t *)rbuf + hl; icmp_len = n - hl; }
+            }
+            if (icmp_len < 8) continue;
+            uint8_t type = icmp_hdr[0];
+
+            /* Extract the (id, seq) that identifies which probe this reply is
+             * for. Echo reply (type 0): id/seq are in this ICMP header. Time
+             * Exceeded (type 11): id/seq are in the embedded original echo
+             * request (inner IP + inner ICMP). */
+            uint16_t r_id = 0, r_seq = 0;
+            int matched = 0;
+            if (type == 0) {
+                memcpy(&r_id,  icmp_hdr + 4, 2);
+                memcpy(&r_seq, icmp_hdr + 6, 2);
+                matched = 1;
+            } else if (type == 11) {
+                /* TE header (8) + inner IP + inner ICMP echo (>=8) */
+                if (icmp_len >= 8 + (ssize_t)sizeof(struct ip) + 8) {
+                    uint8_t *inner_ip = icmp_hdr + 8;
+                    int ihl = (inner_ip[0] & 0x0f) * 4;
+                    if (icmp_len >= 8 + ihl + 8) {
+                        uint8_t *inner_icmp = inner_ip + ihl;
+                        if (inner_icmp[0] == 8) {  /* inner echo request */
+                            memcpy(&r_id,  inner_icmp + 4, 2);
+                            memcpy(&r_seq, inner_icmp + 6, 2);
+                            matched = 1;
+                        }
+                    }
+                }
+            }
+            if (!matched) continue;
+            r_id  = ntohs(r_id);
+            r_seq = ntohs(r_seq);
+
+            /* STRICT match: only our id, and only the hop we're probing. */
+            if (r_id != ident || r_seq != (uint16_t)ttl) continue;
+
+            struct timeval t1; gettimeofday(&t1, NULL);
+            inet_ntop(AF_INET, &from.sin_addr, h.addr, sizeof(h.addr));
+            h.rtt_us = usec_diff(&t0, &t1);
+            if (type == 0)       h.reached_dst = (from.sin_addr.s_addr == dst.sin_addr.s_addr);
+            else if (type == 11) h.reached_dst = 0;
+            got = 1;
+            break;
         }
-        uint8_t type = icmp_hdr[0];
-        struct timeval t1; gettimeofday(&t1, NULL);
-        inet_ntop(AF_INET, &from.sin_addr, h.addr, sizeof(h.addr));
-        h.rtt_us = usec_diff(&t0, &t1);
-        if (type == 0)       h.reached_dst = (from.sin_addr.s_addr == dst.sin_addr.s_addr);
-        else if (type == 11) h.reached_dst = 0;
+
+        (void)got;  /* h is a timeout entry (zeroed) when got == 0 */
         if (ps_tr_sink_emit(sink, &h)) return 0;
     }
     return 0;
