@@ -58,6 +58,7 @@ set(CLI_SOURCES
     audit/opnsense.c
     audit/audit_common.c
     probe/tcp.c
+    probe/udp.c
     probe/icmp.c
     probe/traceroute.c
     discover/neighbors.c
@@ -233,6 +234,18 @@ if(BUILD_TESTING)
     add_test(NAME test_via_probe_tcp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_tcp.sh)
     set_tests_properties(test_via_probe_tcp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_probe_udp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_probe_udp.sh)
+    set_tests_properties(test_probe_udp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_via_probe_udp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_udp.sh)
+    set_tests_properties(test_via_probe_udp PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 

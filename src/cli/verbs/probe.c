@@ -7,6 +7,7 @@
 #include <string.h>
 
 int ps_probe_tcp_run       (int argc, char **argv, const struct ps_args *opts);
+int ps_probe_udp_run       (int argc, char **argv, const struct ps_args *opts);
 int ps_probe_icmp_run      (int argc, char **argv, const struct ps_args *opts);
 int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts);
 
@@ -18,6 +19,7 @@ struct probe_kind {
 
 static const struct probe_kind KINDS[] = {
     { "tcp",        ps_probe_tcp_run,        "Single TCP connect + banner" },
+    { "udp",        ps_probe_udp_run,        "Single UDP datagram probe"    },
     { "icmp",       ps_probe_icmp_run,       "ICMP echo reachability check" },
     { "traceroute", ps_probe_traceroute_run, "Multi-mode traceroute"        },
     { NULL, NULL, NULL }
