@@ -25,6 +25,7 @@ set(CLI_SOURCES
     recipe/authoring.c
     ../agent/src/config.c
     remote/audit_via.c
+    remote/remote_session.c
     remote/ingest_via.c
     audit_loader.c
     registry/agents.c
