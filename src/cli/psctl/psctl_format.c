@@ -489,7 +489,7 @@ void psctl_print_help(void)
     printf("  %-20s %s\n", "help",            "Show this help");
     printf("  %-20s %s\n", "exit / quit",     "Exit interactive shell");
     printf("\nOptions:\n");
-    printf("  %-20s %s\n", "-s/--socket PATH", "Agent socket path (default: /tmp/packetsonde-agent.sock)");
+    printf("  %-20s %s\n", "-s/--socket PATH", "Agent socket path (default: /run/packetsonde/agent.sock)");
     printf("  %-20s %s\n", "-j/--json",        "Output raw JSON");
     printf("  %-20s %s\n", "-q/--quiet",       "Tab-separated output for scripting");
     printf("  %-20s %s\n", "-h/--help",        "Show usage");

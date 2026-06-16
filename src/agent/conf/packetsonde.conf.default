@@ -11,7 +11,7 @@
 # log_level = info
 
 # Unix socket path for IPC (psctl connects here)
-# socket = /tmp/packetsonde-agent.sock
+# socket = /run/packetsonde/agent.sock
 
 # Drop privileges to this user after startup
 # user = packetsonde

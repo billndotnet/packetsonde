@@ -116,6 +116,7 @@ set(AGENT_CORE_SOURCES
     src/proc_enrich.c
     src/sock_snapshot.c
     src/fan_monitor.c
+    src/capture_session.c
 )
 
 # Agent binary
@@ -414,6 +415,13 @@ target_include_directories(test_baseline_monitor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
 target_link_libraries(test_baseline_monitor PRIVATE packetsonde_lib pthread)
 add_test(NAME test_baseline_monitor COMMAND test_baseline_monitor)
+
+# Test: capture session sink tee (brain-side state + per-session jsonl)
+add_executable(test_capture_session tests/test_capture_session.c src/capture_session.c)
+target_include_directories(test_capture_session PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_capture_session PRIVATE pthread)
+add_test(NAME test_capture_session COMMAND test_capture_session)
 
 include(GNUInstallDirs)
 
