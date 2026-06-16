@@ -4,7 +4,9 @@
  * Replaces the Python+nmap agent. Supports IPv4 and IPv6.
  * Up to 8 concurrent trace jobs, 3 probes per hop, 3-second timeout.
  *
- * Probe identifier: 0x5053 ("PS") in ICMP id field.
+ * Probe identifier: per-trace unique ICMP id (classic) or per-destination
+ *   paris_id (Paris). Each trace/process accepts only replies bearing its own
+ *   id, so concurrent traceroute processes don't capture each other's replies.
  * Sequence number: hop number (1-based).
  */
 
@@ -13,6 +15,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <unistd.h>   /* getpid */
+#include <time.h>     /* time (rand seed) */
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -74,6 +78,7 @@ struct trace_job {
 
     int      reached;             /* destination responded */
     uint16_t paris_id;            /* Per-destination flow ID for Paris mode */
+    uint16_t probe_id;            /* Per-trace unique ICMP id for classic mode */
 };
 
 struct icmp_tr_state {
@@ -138,6 +143,7 @@ static uint16_t icmp_checksum(const uint8_t *data, size_t len)
 static uint32_t build_icmpv4_probe(uint8_t *buf, size_t bufsz,
                                    uint8_t ttl,
                                    const struct sockaddr_in *dst,
+                                   uint16_t probe_id,
                                    uint16_t seq)
 {
     (void)ttl;
@@ -150,7 +156,7 @@ static uint32_t build_icmpv4_probe(uint8_t *buf, size_t bufsz,
     buf[1] = 0;
     buf[2] = 0;  /* checksum placeholder */
     buf[3] = 0;
-    uint16_t id = htons(ICMP_TR_PROBE_ID);
+    uint16_t id = htons(probe_id);
     memcpy(buf + 4, &id, 2);
     uint16_t s  = htons(seq);
     memcpy(buf + 6, &s, 2);
@@ -252,6 +258,7 @@ static uint16_t icmpv6_checksum(const struct in6_addr *src,
  */
 static uint32_t build_icmpv6_probe(uint8_t *buf, size_t bufsz,
                                    const struct sockaddr_in6 *dst,
+                                   uint16_t probe_id,
                                    uint16_t seq)
 {
     if (bufsz < 8) return 0;
@@ -260,7 +267,7 @@ static uint32_t build_icmpv6_probe(uint8_t *buf, size_t bufsz,
     buf[1] = 0;                          /* code */
     buf[2] = 0;                          /* checksum hi */
     buf[3] = 0;                          /* checksum lo */
-    uint16_t id = htons(ICMP_TR_PROBE_ID);
+    uint16_t id = htons(probe_id);
     memcpy(buf + 4, &id, 2);
     uint16_t s = htons(seq);
     memcpy(buf + 6, &s, 2);
@@ -579,6 +586,7 @@ static void send_probes(ps_module_ctx_t *ctx, struct icmp_tr_state *st,
                 pkt_len = build_icmpv4_probe(buf, sizeof(buf),
                                              (uint8_t)job->cur_hop,
                                              (const struct sockaddr_in *)&job->dest_sa,
+                                             job->probe_id,
                                              (uint16_t)job->cur_hop);
             }
             if (pkt_len == 0) {
@@ -599,6 +607,7 @@ static void send_probes(ps_module_ctx_t *ctx, struct icmp_tr_state *st,
             } else {
                 pkt_len = build_icmpv6_probe(buf, sizeof(buf),
                                               (const struct sockaddr_in6 *)&job->dest_sa,
+                                              job->probe_id,
                                               (uint16_t)job->cur_hop);
             }
             if (pkt_len == 0) {
@@ -764,6 +773,26 @@ static int tr_on_job(ps_module_ctx_t *ctx, const struct ps_job *job)
     tj->active   = 1;
     tj->paris    = is_paris;
 
+    /*
+     * Classic mode: give this trace a UNIQUE non-zero ICMP id so that when
+     * many traceroute processes run concurrently, each only accepts its own
+     * echo replies (raw ICMP sockets receive a copy of every reply on the
+     * host). Derive from PID + a per-job counter + a random word so distinct
+     * processes AND distinct jobs within a process differ.
+     */
+    {
+        static int seeded = 0;
+        static uint32_t job_counter = 0;
+        if (!seeded) {
+            srand((unsigned)(time(NULL) ^ (getpid() << 16)));
+            seeded = 1;
+        }
+        uint16_t rand16 = (uint16_t)(rand() & 0xFFFF);
+        uint16_t pid16  = (uint16_t)(((unsigned)getpid() << 4) & 0xFFFF);
+        tj->probe_id = (uint16_t)(pid16 ^ (job_counter++ & 0xFFFF) ^ rand16);
+        if (tj->probe_id == 0) tj->probe_id = 1;  /* never zero */
+    }
+
     /* Paris mode: derive a per-destination flow ID from the destination
      * address so all probes to the same target hash identically at ECMP
      * routers. Use a simple hash of the address string. */
@@ -833,24 +862,16 @@ static void tr_on_response(ps_module_ctx_t *ctx, const uint8_t *pkt,
 
     if (!pr.valid) return;
 
-    /* Check if this is one of our probes — classic uses ICMP_TR_PROBE_ID,
-     * Paris uses a per-destination ID. Accept any known ID. */
-    int is_our_probe = (pr.id == ICMP_TR_PROBE_ID);
-    if (!is_our_probe) {
-        /* Check if any active Paris job uses this ID */
-        for (int j = 0; j < ICMP_TR_MAX_JOBS; j++) {
-            if (st->jobs[j].active && st->jobs[j].paris &&
-                st->jobs[j].paris_id == pr.id) {
-                is_our_probe = 1;
-                break;
-            }
-        }
-    }
-    if (!is_our_probe) return;
-
     uint16_t hop_num = pr.seq;
 
-    /* Find matching job */
+    /*
+     * Find matching job. A reply matches a job iff its ICMP id equals that
+     * job's effective id: paris jobs match by paris_id, classic jobs match by
+     * their per-trace-unique probe_id. This means each job (and each process)
+     * accepts ONLY replies bearing its own id; siblings' replies — which carry
+     * a different id — are ignored, eliminating cross-talk between concurrent
+     * traceroute processes.
+     */
     for (int i = 0; i < ICMP_TR_MAX_JOBS; i++) {
         struct trace_job *tj = &st->jobs[i];
         if (!tj->active) continue;
@@ -858,8 +879,8 @@ static void tr_on_response(ps_module_ctx_t *ctx, const uint8_t *pkt,
         /* Address family must match */
         if (tj->af != resp_af) continue;
 
-        /* Probe ID must match this job's ID */
-        uint16_t expected_id = tj->paris ? tj->paris_id : ICMP_TR_PROBE_ID;
+        /* Probe ID must match this job's effective id */
+        uint16_t expected_id = tj->paris ? tj->paris_id : tj->probe_id;
         if (pr.id != expected_id) continue;
 
         /* Sequence (hop number) must match current hop */
