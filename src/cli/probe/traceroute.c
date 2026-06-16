@@ -140,12 +140,6 @@ int ps_probe_traceroute_run(int argc, char **argv, const struct ps_args *opts) {
     /* TCP traceroute targets a service port, not the UDP traceroute port. */
     if (to.proto == PS_TR_PROTO_TCP && !port_set) to.dst_port = 80;
 
-    if (opts->via_count > 0) {
-        fprintf(stderr, "probe traceroute: --via is not supported yet "
-                        "(traceroute-over-agent lands in a follow-on)\n");
-        return 2;
-    }
-
     char self_host[256] = ""; gethostname(self_host, sizeof(self_host));
     char run_id[PS_ULID_STRLEN + 1]; ps_ulid_new(run_id, sizeof(run_id));
 

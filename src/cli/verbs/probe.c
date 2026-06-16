@@ -1,4 +1,7 @@
 #include "../verbs.h"
+#include "../output/output.h"
+#include "../runstate.h"
+#include "remote/probe_via.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -31,6 +34,28 @@ int ps_verb_probe_run(int argc, char **argv, const struct ps_args *opts) {
     if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
         usage(); return 0;
     }
+
+    /* --via <agent>: dispatch to a remote agent over mTLS. The local
+     * kind table is consulted only when --via is absent; the remote
+     * side does its own dispatch. */
+    if (opts->via && *opts->via) {
+        struct ps_output_opts oopts; memset(&oopts, 0, sizeof(oopts));
+        switch (opts->fmt) {
+            case PS_FMT_TEXT:  oopts.fmt_force = PS_OFMT_TEXT;  break;
+            case PS_FMT_JSON:  oopts.fmt_force = PS_OFMT_JSON;  break;
+            case PS_FMT_JSONL: oopts.fmt_force = PS_OFMT_JSONL; break;
+            case PS_FMT_QUIET: oopts.fmt_force = PS_OFMT_QUIET; break;
+            default:           oopts.fmt_force = 0;             break;
+        }
+        oopts.color = opts->no_color ? 0 : 1;
+        struct ps_output out;
+        ps_output_init(&out, &oopts);
+        int rc = ps_probe_via_run(argc - 1, argv + 1, opts, &out);
+        ps_output_snapshot(&out, &g_last_run_counts);
+        ps_output_close(&out);
+        return rc;
+    }
+
     for (const struct probe_kind *k = KINDS; k->name; k++) {
         if (strcmp(k->name, argv[1]) == 0) {
             return k->run(argc - 1, argv + 1, opts);
