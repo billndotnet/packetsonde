@@ -126,6 +126,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_recipe_engine PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_engine COMMAND test_recipe_engine)
 
+    add_executable(test_recipe_nmap tests/test_recipe_nmap.c)
+    target_link_libraries(test_recipe_nmap PRIVATE packetsonde_lib)
+    target_compile_definitions(test_recipe_nmap PRIVATE
+        NMAP_RECIPE_DIR="${CMAKE_SOURCE_DIR}/recipes/nmap")
+    add_test(NAME test_recipe_nmap COMMAND test_recipe_nmap)
+
     add_executable(test_recipe_sign tests/test_recipe_sign.c)
     target_link_libraries(test_recipe_sign PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_sign COMMAND test_recipe_sign)

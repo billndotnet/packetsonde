@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-ssh","version":1,"kind_prefix":"nmap","default_port":22,
+ "description":"ssh service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"recv","conn":"c","until":"newline","max_bytes":256,"out":"banner"},
+  {"op":"match","in":"banner","regex":"-(OpenSSH)[_-]([0-9][0-9A-Za-z._+-]*)",
+   "captures":[{"name":"product","as":"string"},{"name":"version","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"version","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"confirmed",
+     "title":"ssh $product $version",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"ssh","product":"$product","version":"$version","banner":"$banner"}}]},
+  {"op":"close","conn":"c"}]}
