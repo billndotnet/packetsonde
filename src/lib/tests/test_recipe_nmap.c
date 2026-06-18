@@ -1,4 +1,5 @@
 #include "recipe.h"
+#include "tls_probe.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -36,6 +37,12 @@ static int mock_tls_upgrade(void *ctx, int c, const char *sni,
                             const char *const *alpn, int t) {
     (void)ctx; (void)c; (void)sni; (void)alpn; (void)t; return 0;
 }
+static int mock_tls_session(void *ctx, int c, struct ps_tls_info *o) {
+    (void)ctx; (void)c;
+    memset(o, 0, sizeof *o);
+    snprintf(o->version, sizeof o->version, "TLSv1.3");
+    return 0;
+}
 
 /* ---- sink: capture emitted findings ---- */
 struct emit_capture { char kind[64], severity[16], confidence[16], title[256], evidence[2048]; };
@@ -68,6 +75,7 @@ static int run_recipe_io(const char *fname, int port, const uint8_t *resp,
         .ctx = &io, .connect_tcp = mock_connect, .connect_udp = mock_connect,
         .send_all = mock_send, .recv_some = mock_recv, .close_conn = mock_close,
         .tls_upgrade = with_tls ? mock_tls_upgrade : NULL,
+        .tls_session = with_tls ? mock_tls_session : NULL,
     };
     struct ps_recipe_sink sink_api = { .ctx = sink, .emit = mock_emit };
     struct ps_recipe_target tgt = { .host = "10.0.0.1", .port = port };
@@ -99,9 +107,104 @@ static int test_ssh(void) {
     return 0;
 }
 
+static int test_ftp(void) {
+    static const uint8_t B[] = "220 (vsFTPd 3.0.5)\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-ftp.json", 21, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].kind, "nmap.service") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"vsFTPd\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"3.0.5\"") != NULL);
+    return 0;
+}
+static int test_smtp(void) {
+    static const uint8_t B[] = "220 mail.example.com ESMTP Postfix (Ubuntu)\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-smtp.json", 25, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "firm") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"service\":\"smtp\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"Postfix\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"\"") != NULL);
+    return 0;
+}
+static int test_pop3(void) {
+    static const uint8_t B[] = "+OK Dovecot ready.\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-pop3.json", 110, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "firm") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"Dovecot\"") != NULL);
+    return 0;
+}
+static int test_imap(void) {
+    static const uint8_t B[] = "* OK [CAPABILITY IMAP4rev1] Dovecot (Ubuntu) ready.\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-imap.json", 143, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "firm") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"Dovecot\"") != NULL);
+    return 0;
+}
+static int test_http(void) {
+    static const uint8_t B[] =
+      "HTTP/1.1 200 OK\r\nDate: Wed, 18 Jun 2026 00:00:00 GMT\r\n"
+      "Server: nginx/1.25.3\r\nContent-Length: 0\r\n\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-http.json", 80, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "confirmed") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"nginx\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"1.25.3\"") != NULL);
+    return 0;
+}
+static int test_memcached(void) {
+    static const uint8_t B[] = "VERSION 1.6.21\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-memcached.json", 11211, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "confirmed") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"memcached\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"1.6.21\"") != NULL);
+    return 0;
+}
+static int test_redis(void) {
+    static const uint8_t B[] =
+      "$120\r\n# Server\r\nredis_version:7.2.4\r\nredis_mode:standalone\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-redis.json", 6379, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "confirmed") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"Redis\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"7.2.4\"") != NULL);
+    return 0;
+}
+static int test_vnc(void) {
+    static const uint8_t B[] = "RFB 003.008\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-vnc.json", 5900, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "confirmed") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"VNC\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"3.8\"") != NULL);
+    return 0;
+}
+static int test_https(void) {
+    static const uint8_t B[] =
+      "HTTP/1.1 200 OK\r\nServer: Apache/2.4.58\r\nContent-Length: 0\r\n\r\n";
+    struct mock_sink sk = {0};
+    CHECK(run_recipe_tls("nmap-https.json", 443, B, sizeof B - 1, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "confirmed") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"service\":\"https\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"product\":\"Apache\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"version\":\"2.4.58\"") != NULL);
+    return 0;
+}
+
 int main(void) {
     int rc = 0;
     rc |= test_ssh();
+    rc |= test_ftp();
+    rc |= test_smtp();
+    rc |= test_pop3();
+    rc |= test_imap();
+    rc |= test_http();
+    rc |= test_memcached();
+    rc |= test_redis();
+    rc |= test_vnc();
+    rc |= test_https();
     if (rc == 0) printf("test_recipe_nmap: OK\n");
     return rc;
 }

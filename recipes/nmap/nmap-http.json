@@ -1,0 +1,14 @@
+{"schema":1,"name":"nmap-http","version":1,"kind_prefix":"nmap","default_port":80,
+ "description":"http service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":"GET / HTTP/1.0\r\nHost: $target.host\r\nConnection: close\r\n\r\n"},
+  {"op":"recv","conn":"c","until":"regex","regex":"\r\n\r\n","max_bytes":8192,"out":"resp"},
+  {"op":"match","in":"resp","regex":"Server: ([A-Za-z][A-Za-z0-9._+-]*)/([0-9][0-9A-Za-z._-]*)",
+   "captures":[{"name":"product","as":"string"},{"name":"version","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"version","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"confirmed",
+     "title":"http $product $version",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"http","product":"$product","version":"$version","banner":"$product/$version"}}]},
+  {"op":"close","conn":"c"}]}

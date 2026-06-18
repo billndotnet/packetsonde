@@ -1,0 +1,14 @@
+{"schema":1,"name":"nmap-redis","version":1,"kind_prefix":"nmap","default_port":6379,
+ "description":"redis service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":"INFO server\r\n"},
+  {"op":"recv","conn":"c","until":"regex","regex":"redis_version:[0-9.]+","max_bytes":4096,"out":"resp"},
+  {"op":"match","in":"resp","regex":"redis_version:([0-9][0-9A-Za-z._-]*)",
+   "captures":[{"name":"version","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"version","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"confirmed",
+     "title":"redis $version",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"redis","product":"Redis","version":"$version","banner":"redis_version:$version"}}]},
+  {"op":"close","conn":"c"}]}
