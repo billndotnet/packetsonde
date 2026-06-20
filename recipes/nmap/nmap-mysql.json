@@ -1,0 +1,12 @@
+{"schema":1,"name":"nmap-mysql","version":1,"kind_prefix":"nmap","default_port":3306,
+ "description":"mysql presence detection (binary handshake; version blocked by NUL truncation)",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":64,"max_bytes":64,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"mysql (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"mysql","product":"","version":"","banner":"mysql reply"}}]},
+  {"op":"close","conn":"c"}]}

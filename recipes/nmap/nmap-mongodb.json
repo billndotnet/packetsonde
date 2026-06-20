@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-mongodb","version":1,"kind_prefix":"nmap","default_port":27017,
+ "description":"mongodb presence detection (OP_QUERY isMaster -> OP_REPLY)",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"3b0000000100000000000000d40700000000000061646d696e2e24636d640000000000ffffffff140000001069736d617374657200010000000000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":128,"max_bytes":128,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"mongodb (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"mongodb","product":"","version":"","banner":"mongodb reply"}}]},
+  {"op":"close","conn":"c"}]}

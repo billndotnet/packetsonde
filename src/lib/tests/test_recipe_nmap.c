@@ -193,6 +193,75 @@ static int test_https(void) {
     return 0;
 }
 
+/* ---- presence-only (binary/UDP): assert tentative nmap.service, no version ---- */
+static int presence(const char *fname, int port, const uint8_t *r, size_t n,
+                    const char *svc) {
+    struct mock_sink sk = {0};
+    char needle[32];
+    if (run_recipe(fname, port, r, n, &sk) != 0) return 1;
+    if (sk.n != 1) { fprintf(stderr, "FAIL %s: n=%zu\n", fname, sk.n); return 1; }
+    if (strcmp(sk.f[0].kind, "nmap.service") != 0) { fprintf(stderr, "FAIL %s kind\n", fname); return 1; }
+    if (strcmp(sk.f[0].confidence, "tentative") != 0) { fprintf(stderr, "FAIL %s conf\n", fname); return 1; }
+    snprintf(needle, sizeof needle, "\"service\":\"%s\"", svc);
+    if (!strstr(sk.f[0].evidence, needle)) { fprintf(stderr, "FAIL %s svc: %s\n", fname, sk.f[0].evidence); return 1; }
+    return 0;
+}
+static int test_mysql(void) {
+    static const uint8_t R[] = {0x4a,0x00,0x00,0x00,0x0a,'8','.','0','.','3','6',0x00};
+    return presence("nmap-mysql.json", 3306, R, sizeof R, "mysql");
+}
+static int test_telnet(void) {
+    static const uint8_t R[] = {0xff,0xfd,0x18,0xff,0xfd,0x20};
+    return presence("nmap-telnet.json", 23, R, sizeof R, "telnet");
+}
+static int test_postgresql(void) {
+    static const uint8_t R[] = {'R',0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x00};
+    return presence("nmap-postgresql.json", 5432, R, sizeof R, "postgresql");
+}
+static int test_rdp(void) {
+    static const uint8_t R[] = {0x03,0x00,0x00,0x13,0x0e,0xd0,0x00,0x00,0x12,0x34,0x00};
+    return presence("nmap-rdp.json", 3389, R, sizeof R, "rdp");
+}
+static int test_dns(void) {
+    static const uint8_t R[] = {0x13,0x37,0x84,0x80,0x00,0x01,0x00,0x01};
+    return presence("nmap-dns.json", 53, R, sizeof R, "dns");
+}
+static int test_snmp_v1(void) {
+    static const uint8_t R[] = {0x30,0x29,0x02,0x01,0x00};
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-snmp-v1.json", 161, R, sizeof R, &sk) == 0);
+    CHECK(sk.n == 1 && strcmp(sk.f[0].confidence, "tentative") == 0);
+    CHECK(strstr(sk.f[0].evidence, "\"service\":\"snmp\"") != NULL);
+    CHECK(strstr(sk.f[0].evidence, "\"snmp_version\":\"1\"") != NULL);
+    return 0;
+}
+static int test_snmp_v2c(void) {
+    static const uint8_t R[] = {0x30,0x29,0x02,0x01,0x01};
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-snmp-v2c.json", 161, R, sizeof R, &sk) == 0);
+    CHECK(sk.n == 1 && strstr(sk.f[0].evidence, "\"snmp_version\":\"2c\"") != NULL);
+    return 0;
+}
+static int test_snmp_v3(void) {
+    static const uint8_t R[] = {0x30,0x3e,0x02,0x01,0x03};
+    struct mock_sink sk = {0};
+    CHECK(run_recipe("nmap-snmp-v3.json", 161, R, sizeof R, &sk) == 0);
+    CHECK(sk.n == 1 && strstr(sk.f[0].evidence, "\"snmp_version\":\"3\"") != NULL);
+    return 0;
+}
+static int test_ntp(void) {
+    static const uint8_t R[] = {0x1e,0x80,0x00,0x01,0x00,0x00};
+    return presence("nmap-ntp.json", 123, R, sizeof R, "ntp");
+}
+static int test_mongodb(void) {
+    static const uint8_t R[] = {0x24,0x00,0x00,0x00,0x01,0x00,0x00,0x00};
+    return presence("nmap-mongodb.json", 27017, R, sizeof R, "mongodb");
+}
+static int test_mssql(void) {
+    static const uint8_t R[] = {0x04,0x01,0x00,0x2b,0x00,0x00,0x01,0x00};
+    return presence("nmap-mssql.json", 1433, R, sizeof R, "mssql");
+}
+
 int main(void) {
     int rc = 0;
     rc |= test_ssh();
@@ -205,6 +274,17 @@ int main(void) {
     rc |= test_redis();
     rc |= test_vnc();
     rc |= test_https();
+    rc |= test_mysql();
+    rc |= test_telnet();
+    rc |= test_postgresql();
+    rc |= test_rdp();
+    rc |= test_dns();
+    rc |= test_snmp_v1();
+    rc |= test_snmp_v2c();
+    rc |= test_snmp_v3();
+    rc |= test_ntp();
+    rc |= test_mongodb();
+    rc |= test_mssql();
     if (rc == 0) printf("test_recipe_nmap: OK\n");
     return rc;
 }

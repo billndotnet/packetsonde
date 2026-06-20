@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-rdp","version":1,"kind_prefix":"nmap","default_port":3389,
+ "description":"rdp presence detection (X.224 Connection Request -> Connection Confirm)",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"030000130ee000000000000100080003000000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":19,"max_bytes":19,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"rdp (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"rdp","product":"","version":"","banner":"rdp reply"}}]},
+  {"op":"close","conn":"c"}]}
