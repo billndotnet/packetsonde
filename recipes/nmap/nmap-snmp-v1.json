@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-snmp-v1","version":1,"kind_prefix":"nmap","default_port":161,
+ "description":"snmp v1 presence detection (GetRequest sysDescr.0, community public)",
+ "steps":[
+  {"op":"connect_udp","host":"$target.host","port":"$target.port","timeout_ms":4000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"302902010004067075626c6963a01c020400000001020100020100300e300c06082b060102010101000500"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":512,"max_bytes":512,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(0)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"snmp v1 (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"snmp","product":"","version":"","snmp_version":"1","banner":"snmp reply"}}]},
+  {"op":"close","conn":"c"}]}

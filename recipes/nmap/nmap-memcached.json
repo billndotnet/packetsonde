@@ -1,0 +1,14 @@
+{"schema":1,"name":"nmap-memcached","version":1,"kind_prefix":"nmap","default_port":11211,
+ "description":"memcached service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":"version\r\n"},
+  {"op":"recv","conn":"c","until":"newline","max_bytes":128,"out":"banner"},
+  {"op":"match","in":"banner","regex":"VERSION ([0-9][0-9A-Za-z._-]*)",
+   "captures":[{"name":"version","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"version","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"confirmed",
+     "title":"memcached $version",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"memcached","product":"memcached","version":"$version","banner":"$banner"}}]},
+  {"op":"close","conn":"c"}]}

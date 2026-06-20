@@ -1,0 +1,14 @@
+{"schema":1,"name":"nmap-smtp","version":1,"kind_prefix":"nmap","default_port":25,
+ "description":"smtp service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"recv","conn":"c","until":"newline","max_bytes":256,"out":"banner"},
+  {"op":"match","in":"banner",
+   "regex":"(Postfix|Exim|Sendmail|OpenSMTPD|Microsoft ESMTP MAIL Service|Exchange)",
+   "captures":[{"name":"product","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"product","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"firm",
+     "title":"smtp $product",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"smtp","product":"$product","version":"","banner":"$banner"}}]},
+  {"op":"close","conn":"c"}]}

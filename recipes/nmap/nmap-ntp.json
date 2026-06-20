@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-ntp","version":1,"kind_prefix":"nmap","default_port":123,
+ "description":"ntp presence detection (mode-6 control read-status)",
+ "steps":[
+  {"op":"connect_udp","host":"$target.host","port":"$target.port","timeout_ms":4000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"1e000000000000000000000000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":128,"max_bytes":128,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"ntp (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"ntp","product":"","version":"","banner":"ntp reply"}}]},
+  {"op":"close","conn":"c"}]}

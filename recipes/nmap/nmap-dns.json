@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-dns","version":1,"kind_prefix":"nmap","default_port":53,
+ "description":"dns presence detection (CHAOS TXT version.bind query)",
+ "steps":[
+  {"op":"connect_udp","host":"$target.host","port":"$target.port","timeout_ms":4000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"1337010000010000000000000776657273696f6e0462696e640000100003"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":512,"max_bytes":512,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"dns (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"dns","product":"","version":"","banner":"dns reply"}}]},
+  {"op":"close","conn":"c"}]}
