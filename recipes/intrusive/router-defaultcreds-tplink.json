@@ -1,0 +1,94 @@
+{
+ "schema": 1,
+ "name": "router-defaultcreds-tplink",
+ "version": 1,
+ "kind_prefix": "router",
+ "default_port": 80,
+ "description": "INTRUSIVE: tests TP-Link default admin creds (admin/admin) via HTTP Basic auth",
+ "budgets": {
+  "max_steps": 32
+ },
+ "steps": [
+  {
+   "op": "connect_tcp",
+   "host": "$target.host",
+   "port": "$target.port",
+   "timeout_ms": 5000,
+   "out": "c1"
+  },
+  {
+   "op": "send",
+   "conn": "c1",
+   "bytes": "GET / HTTP/1.0\r\nHost: $target.host\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
+  },
+  {
+   "op": "recv",
+   "conn": "c1",
+   "until": "n_bytes",
+   "n_bytes": 4096,
+   "max_bytes": 4096,
+   "out": "r1"
+  },
+  {
+   "op": "close",
+   "conn": "c1"
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "r1",
+   "literal": "^HTTP/1\\.[01] 401",
+   "then": [
+    {
+     "op": "connect_tcp",
+     "host": "$target.host",
+     "port": "$target.port",
+     "timeout_ms": 5000,
+     "out": "c2"
+    },
+    {
+     "op": "send",
+     "conn": "c2",
+     "bytes": "GET / HTTP/1.0\r\nHost: $target.host\r\nAuthorization: Basic YWRtaW46YWRtaW4=\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
+    },
+    {
+     "op": "recv",
+     "conn": "c2",
+     "until": "n_bytes",
+     "n_bytes": 4096,
+     "max_bytes": 4096,
+     "out": "r2"
+    },
+    {
+     "op": "close",
+     "conn": "c2"
+    },
+    {
+     "op": "if",
+     "cond": "matches",
+     "binding": "r2",
+     "literal": "^HTTP/1\\.[01] 200",
+     "then": [
+      {
+       "op": "emit",
+       "kind": "router.default_creds",
+       "severity": "critical",
+       "confidence": "firm",
+       "title": "Default admin credentials accepted: TP-Link (admin/admin)",
+       "evidence": {
+        "vendor": "TP-Link",
+        "username": "admin",
+        "password": "admin",
+        "transport": "http",
+        "port": {
+         "as": "int",
+         "value": "$target.port"
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

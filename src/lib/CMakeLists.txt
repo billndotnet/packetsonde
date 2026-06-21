@@ -132,6 +132,18 @@ if(BUILD_TESTING)
         NMAP_RECIPE_DIR="${CMAKE_SOURCE_DIR}/recipes/nmap")
     add_test(NAME test_recipe_nmap COMMAND test_recipe_nmap)
 
+    add_executable(test_recipe_router tests/test_recipe_router.c)
+    target_link_libraries(test_recipe_router PRIVATE packetsonde_lib)
+    target_compile_definitions(test_recipe_router PRIVATE
+        ROUTER_RECIPE_DIR="${CMAKE_SOURCE_DIR}/recipes")
+    add_test(NAME test_recipe_router COMMAND test_recipe_router)
+
+    add_executable(test_recipe_defaultcreds tests/test_recipe_defaultcreds.c)
+    target_link_libraries(test_recipe_defaultcreds PRIVATE packetsonde_lib)
+    target_compile_definitions(test_recipe_defaultcreds PRIVATE
+        INTRUSIVE_RECIPE_DIR="${CMAKE_SOURCE_DIR}/recipes/intrusive")
+    add_test(NAME test_recipe_defaultcreds COMMAND test_recipe_defaultcreds)
+
     add_executable(test_recipe_sign tests/test_recipe_sign.c)
     target_link_libraries(test_recipe_sign PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_sign COMMAND test_recipe_sign)
