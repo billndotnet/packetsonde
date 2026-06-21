@@ -1056,8 +1056,20 @@ int main(int argc, char **argv)
     ps_priv_client_init(&g_priv, priv_fd);
 
     /* --- Init IPC server --- */
+    /* Socket path resolution order: [agent] socket config, then the
+     * PS_AGENT_SOCKET env var, then a platform default. macOS has no /run
+     * (and can't mkdir it), so default to /tmp there -- which is also the UE
+     * client's default (/tmp/packetsonde-agent.sock). Linux keeps the systemd
+     * RuntimeDirectory path. */
     const char *sock_path = ps_config_get(&cfg, "agent", "socket");
-    if (!sock_path) sock_path = "/run/packetsonde/agent.sock";
+    if (!sock_path || !*sock_path) sock_path = getenv("PS_AGENT_SOCKET");
+    if (!sock_path || !*sock_path) {
+#if defined(__APPLE__)
+        sock_path = "/tmp/packetsonde-agent.sock";
+#else
+        sock_path = "/run/packetsonde/agent.sock";
+#endif
+    }
 
     if (ps_ipc_server_init(&g_ipc, sock_path, on_ipc_frame, NULL) < 0) {
         ps_error("main: failed to init IPC server on '%s'", sock_path);
