@@ -61,6 +61,7 @@ set(CLI_SOURCES
     probe/tcp.c
     probe/udp.c
     probe/icmp.c
+    probe/sweep.c
     probe/traceroute.c
     discover/neighbors.c
     discover/hosts.c
