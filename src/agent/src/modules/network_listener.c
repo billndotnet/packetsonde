@@ -237,7 +237,7 @@ static const char *AUDIT_KIND_ALLOWLIST[] = {
 /* Probe kinds the subprocess is allowed to invoke under the `probe` verb.
  * Same threat model as AUDIT_KIND_ALLOWLIST: an authorized client must not
  * be able to inject arbitrary verbs/tokens via the JSON 'kind' field. */
-static const char *PROBE_KIND_ALLOWLIST[] = { "tcp", "udp", "icmp", "traceroute", NULL };
+static const char *PROBE_KIND_ALLOWLIST[] = { "tcp", "udp", "icmp", "sweep", "traceroute", NULL };
 
 /* Validate `kind` against the allowlist matching the request verb. */
 static int kind_is_allowed(const char *kind, bool is_probe) {
