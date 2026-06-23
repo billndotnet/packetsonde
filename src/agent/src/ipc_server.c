@@ -1,17 +1,115 @@
 #include "ipc_server.h"
 #include "log.h"
+#include "agent_transport.h"   /* ps_at_* mTLS helpers (pulls in keystore.h + openssl) */
+#include "keystore.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
+#include <openssl/ssl.h>
+
+/* ---------------------------------------------------------------------------
+ * TLS state for the TCP listener (opaque to the header)
+ * -------------------------------------------------------------------------*/
+
+#define PS_IPC_MAX_AUTHORIZED 64
+/* Bound the TLS handshake + per-record reads so a slow/stalled TCP peer can't
+ * freeze the single-threaded poll loop. */
+#define PS_IPC_TLS_IO_TIMEOUT_SEC 10
+
+struct ps_ipc_tls {
+    struct ps_at_ctx ctx;
+    uint8_t authorized[PS_IPC_MAX_AUTHORIZED][PS_KEYSTORE_PUBKEY_SIZE];
+    size_t  authorized_n;
+};
+
+/* Load raw 32-byte client pubkeys from <dir>/*.pub into the allowlist.
+ * Mirrors network_listener.c load_authorized(). */
+static void ipc_tls_load_authorized(struct ps_ipc_tls *t, const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (!d) {
+        ps_info("ipc_server: authorized dir '%s' missing -- no TCP clients can connect", dir);
+        return;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && t->authorized_n < PS_IPC_MAX_AUTHORIZED) {
+        size_t n = strlen(de->d_name);
+        if (n < 5 || strcmp(de->d_name + n - 4, ".pub") != 0) continue;
+        char p[1100]; snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
+        FILE *f = fopen(p, "rb");
+        if (!f) continue;
+        if (fread(t->authorized[t->authorized_n], 1,
+                  PS_KEYSTORE_PUBKEY_SIZE, f) == PS_KEYSTORE_PUBKEY_SIZE) {
+            t->authorized_n++;
+        }
+        fclose(f);
+    }
+    closedir(d);
+    ps_info("ipc_server: %zu authorized client pubkey(s) loaded from %s",
+            t->authorized_n, dir);
+}
+
+/* Is the connected peer's pubkey fingerprint in the allowlist? Walks the full
+ * list even after a match so timing can't enumerate it. */
+static int ipc_tls_is_authorized(struct ps_ipc_tls *t, SSL *ssl)
+{
+    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
+    if (ps_at_peer_fingerprint(ssl, fpr, sizeof(fpr)) != 0) return 0;
+    int matched = 0;
+    for (size_t i = 0; i < t->authorized_n; i++) {
+        char expected[PS_KEYSTORE_FPR_HEX_SIZE];
+        ps_keystore_fingerprint(t->authorized[i], expected);
+        if (strcmp(fpr, expected) == 0) matched = 1;
+    }
+    return matched;
+}
+
+/* ssl-aware client I/O. ssl==NULL -> plaintext fd. */
+static ssize_t ipc_client_read(struct ps_ipc_client *c, uint8_t *buf, size_t n)
+{
+    if (c->ssl) {
+        int r = SSL_read((SSL *)c->ssl, buf, (int)n);
+        return (r > 0) ? (ssize_t)r : (r == 0 ? 0 : -1);
+    }
+    return read(c->fd, buf, n);
+}
+
+/* Write the whole buffer; returns 0 on success, -1 on error. */
+static int ipc_client_write_all(struct ps_ipc_client *c,
+                                const uint8_t *buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        if (c->ssl) {
+            int w = SSL_write((SSL *)c->ssl, buf + off, (int)(n - off));
+            if (w <= 0) return -1;
+            off += (size_t)w;
+        } else {
+            ssize_t w = write(c->fd, buf + off, n - off);
+            if (w < 0) { if (errno == EINTR) continue; return -1; }
+            off += (size_t)w;
+        }
+    }
+    return 0;
+}
+
+static struct ps_ipc_client *ipc_find_by_fd(struct ps_ipc_server *srv, int fd)
+{
+    for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++)
+        if (srv->clients[i].fd == fd) return &srv->clients[i];
+    return NULL;
+}
 
 /* ---------------------------------------------------------------------------
  * Frame encoding
@@ -158,10 +256,17 @@ int ps_frame_reader_feed(struct ps_frame_reader *r, uint8_t byte)
 
             r->payload_pos = 0;
 
-            /* Zero-length payload is valid — complete immediately */
+            /* Zero-length payload is valid — complete immediately. Reset only
+             * the parse STATE for the next frame; preserve channel[]/payload[]
+             * so the caller can read them (mirrors the PS_FRAME_PL_DATA path).
+             * NOTE: must NOT call ps_frame_reader_reset() here -- it memsets
+             * channel[], which would hand the callback an empty channel and
+             * silently break every empty-payload request (query.hosts, etc.). */
             if (r->payload_len == 0) {
                 if (r->payload) r->payload[0] = '\0';
-                ps_frame_reader_reset(r);
+                r->state       = PS_FRAME_CH_LEN;
+                r->len_pos     = 0;
+                r->channel_pos = 0;
                 return 1;
             }
 
@@ -313,12 +418,81 @@ int ps_ipc_server_add_tcp(struct ps_ipc_server *srv,
     return 0;
 }
 
+int ps_ipc_server_enable_tls(struct ps_ipc_server *srv)
+{
+    struct ps_ipc_tls *t = calloc(1, sizeof(*t));
+    if (!t) {
+        ps_error("ipc_server_enable_tls: calloc failed");
+        return -1;
+    }
+
+    /* Keystore dir: PS_KEY_DIR, else the keystore default. */
+    char kdir[1024];
+    const char *kd = getenv("PS_KEY_DIR");
+    if (kd && *kd) {
+        snprintf(kdir, sizeof(kdir), "%s", kd);
+    } else if (ps_keystore_default_dir(kdir, sizeof(kdir)) != 0) {
+        ps_error("ipc_server_enable_tls: cannot resolve key dir");
+        free(t);
+        return -1;
+    }
+
+    const char *kname = getenv("PS_NETWORK_KEY");
+    if (!kname || !*kname) kname = "agent";
+
+    struct ps_keypair kp;
+    if (ps_keystore_load(kdir, kname, &kp) != 0) {
+        ps_error("ipc_server_enable_tls: cannot load key '%s' from %s", kname, kdir);
+        free(t);
+        return -1;
+    }
+    /* Need the secret half to present our own cert. */
+    int has_sec = 0;
+    for (size_t i = 0; i < PS_KEYSTORE_SECKEY_SIZE; i++)
+        if (kp.seckey[i]) { has_sec = 1; break; }
+    if (!has_sec) {
+        ps_error("ipc_server_enable_tls: key '%s' is pubkey-only", kname);
+        free(t);
+        return -1;
+    }
+
+    /* Authorized client pubkeys. */
+    char auth_dir[1100];
+    const char *ad = getenv("PS_NETWORK_AUTHORIZED_DIR");
+    if (ad && *ad) snprintf(auth_dir, sizeof(auth_dir), "%s", ad);
+    else           snprintf(auth_dir, sizeof(auth_dir), "%s/authorized", kdir);
+    ipc_tls_load_authorized(t, auth_dir);
+
+    /* Don't die on a write to a half-closed TLS client. */
+    ps_at_block_sigpipe();
+
+    /* SERVER ctx with empty expected_fpr (NULL) -> accept any well-formed peer
+     * cert in the handshake; the authorized-dir check runs post-handshake. */
+    if (ps_at_ctx_init(&t->ctx, PS_AT_SERVER, &kp, NULL) != 0) {
+        ps_error("ipc_server_enable_tls: ps_at_ctx_init failed");
+        free(t);
+        return -1;
+    }
+
+    srv->tls = t;
+    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
+    ps_keystore_fingerprint(kp.pubkey, fpr);
+    ps_info("ipc_server: TCP mTLS enabled (identity sha256:%s, %zu authorized client(s))",
+            fpr, t->authorized_n);
+    return 0;
+}
+
 void ps_ipc_server_shutdown(struct ps_ipc_server *srv)
 {
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
         if (srv->clients[i].fd >= 0) {
             ps_frame_reader_free(&srv->clients[i].reader);
-            close(srv->clients[i].fd);
+            if (srv->clients[i].ssl) {
+                ps_at_close((SSL *)srv->clients[i].ssl);  /* also closes the fd */
+                srv->clients[i].ssl = NULL;
+            } else {
+                close(srv->clients[i].fd);
+            }
             srv->clients[i].fd = -1;
         }
     }
@@ -329,6 +503,11 @@ void ps_ipc_server_shutdown(struct ps_ipc_server *srv)
     if (srv->tcp_listen_fd >= 0) {
         close(srv->tcp_listen_fd);
         srv->tcp_listen_fd = -1;
+    }
+    if (srv->tls) {
+        ps_at_ctx_destroy(&srv->tls->ctx);
+        free(srv->tls);
+        srv->tls = NULL;
     }
     srv->client_count = 0;
 }
@@ -356,7 +535,8 @@ static int ipc_accept_client(struct ps_ipc_server *srv)
 
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
         if (srv->clients[i].fd < 0) {
-            srv->clients[i].fd = cfd;
+            srv->clients[i].fd  = cfd;
+            srv->clients[i].ssl = NULL;   /* Unix clients are plaintext */
             ps_frame_reader_init(&srv->clients[i].reader);
             srv->client_count++;
             ps_info("ipc_server: client connected (slot %d, fd %d)", i, cfd);
@@ -377,7 +557,12 @@ static void ipc_drop_client(struct ps_ipc_server *srv, int slot)
     ps_info("ipc_server: client disconnected (slot %d, fd %d)",
             slot, srv->clients[slot].fd);
     ps_frame_reader_free(&srv->clients[slot].reader);
-    close(srv->clients[slot].fd);
+    if (srv->clients[slot].ssl) {
+        ps_at_close((SSL *)srv->clients[slot].ssl);  /* also closes the fd */
+        srv->clients[slot].ssl = NULL;
+    } else {
+        close(srv->clients[slot].fd);
+    }
     srv->clients[slot].fd = -1;
     srv->client_count--;
 }
@@ -433,24 +618,50 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
 
     /* Check TCP listen_fd for new connections */
     if (tcp_poll_idx >= 0 && (fds[tcp_poll_idx].revents & POLLIN)) {
-        /* Accept TCP client into the same client array */
-        if (srv->client_count < PS_IPC_MAX_CLIENTS) {
-            int cfd = accept(srv->tcp_listen_fd, NULL, NULL);
-            if (cfd >= 0) {
+        int cfd = accept(srv->tcp_listen_fd, NULL, NULL);
+        if (cfd >= 0) {
+            void *ssl = NULL;
+            int ok = 1;
+
+            if (srv->client_count >= PS_IPC_MAX_CLIENTS) {
+                ps_warn("ipc_server: max clients, rejecting TCP connection");
+                close(cfd);
+                ok = 0;
+            } else if (srv->tls) {
+                /* Bound the handshake + subsequent SSL_read/write so a stalled
+                 * peer can't freeze the single-threaded poll loop. */
+                struct timeval tv = { PS_IPC_TLS_IO_TIMEOUT_SEC, 0 };
+                setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                /* ps_at_accept_fd runs the server handshake and closes cfd on
+                 * failure. expected_fpr is empty in ctx, so any well-formed
+                 * peer passes here; we enforce the allowlist next. */
+                SSL *s = ps_at_accept_fd(&srv->tls->ctx, cfd);
+                if (!s) {
+                    ps_warn("ipc_server: TCP TLS handshake failed");
+                    ok = 0;  /* cfd already closed by ps_at_accept_fd */
+                } else if (!ipc_tls_is_authorized(srv->tls, s)) {
+                    ps_warn("ipc_server: rejected TCP client; pubkey not authorized");
+                    ps_at_close(s);  /* close_notify + free + close(fd) */
+                    ok = 0;
+                } else {
+                    ssl = s;
+                }
+            }
+
+            if (ok) {
                 for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
                     if (srv->clients[i].fd < 0) {
-                        srv->clients[i].fd = cfd;
+                        srv->clients[i].fd  = cfd;
+                        srv->clients[i].ssl = ssl;
                         ps_frame_reader_init(&srv->clients[i].reader);
                         srv->client_count++;
-                        ps_info("ipc_server: TCP client connected (slot %d, fd %d)", i, cfd);
+                        ps_info("ipc_server: TCP client connected (slot %d, fd %d%s)",
+                                i, cfd, ssl ? ", mTLS" : "");
                         break;
                     }
                 }
             }
-        } else {
-            int tmp = accept(srv->tcp_listen_fd, NULL, NULL);
-            if (tmp >= 0) close(tmp);
-            ps_warn("ipc_server: max clients, rejecting TCP connection");
         }
     }
 
@@ -459,41 +670,55 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
     for (int j = 0; j < client_poll_count; j++) {
         int pfd_idx = j + client_start_idx;
         int slot    = slot_map[j];
+        struct ps_ipc_client *c = &srv->clients[slot];
 
-        if (!(fds[pfd_idx].revents & (POLLIN | POLLHUP | POLLERR)))
-            continue;
+        if (c->fd < 0) continue;  /* dropped earlier this pass */
 
-        if (fds[pfd_idx].revents & (POLLHUP | POLLERR)) {
+        short re = fds[pfd_idx].revents;
+        if (re & (POLLHUP | POLLERR)) {
             ipc_drop_client(srv, slot);
             continue;
         }
 
-        /* Read available bytes and feed to frame reader */
-        uint8_t read_buf[4096];
-        ssize_t n = read(srv->clients[slot].fd, read_buf, sizeof(read_buf));
-        if (n <= 0) {
-            ipc_drop_client(srv, slot);
+        /* Service when the socket is readable OR the TLS layer already has
+         * decrypted bytes buffered. The latter is essential: with TLS 1.3 the
+         * client's first app-data record can be coalesced into the same TCP
+         * segment as its handshake Finished and consumed by SSL_accept, so the
+         * socket looks empty and poll() never flags it -- but SSL_pending() is
+         * non-zero. Without this check that first frame (e.g. query.hosts)
+         * would sit unread forever. */
+        int pending = (c->ssl && SSL_pending((SSL *)c->ssl) > 0);
+        if (!(re & POLLIN) && !pending)
             continue;
-        }
 
-        for (ssize_t k = 0; k < n; k++) {
-            int fr = ps_frame_reader_feed(&srv->clients[slot].reader, read_buf[k]);
-            if (fr == 1) {
-                /* Complete frame — invoke callback */
-                if (srv->on_frame) {
-                    srv->on_frame(srv->clients[slot].fd,
-                                  srv->clients[slot].reader.channel,
-                                  srv->clients[slot].reader.payload,
-                                  srv->clients[slot].reader.payload_len,
-                                  srv->userdata);
-                }
-                /* reader has already reset itself in ps_frame_reader_feed */
-            } else if (fr < 0) {
-                ps_warn("ipc_server: frame error on slot %d, dropping client", slot);
+        /* Drain: one read for plaintext (poll is level-triggered and will
+         * re-signal), and keep reading while the TLS layer still buffers data. */
+        int dropped = 0;
+        do {
+            uint8_t read_buf[4096];
+            ssize_t n = ipc_client_read(c, read_buf, sizeof(read_buf));
+            if (n <= 0) {
                 ipc_drop_client(srv, slot);
+                dropped = 1;
                 break;
             }
-        }
+            for (ssize_t k = 0; k < n; k++) {
+                int fr = ps_frame_reader_feed(&c->reader, read_buf[k]);
+                if (fr == 1) {
+                    /* Complete frame — invoke callback (reader self-resets) */
+                    if (srv->on_frame) {
+                        srv->on_frame(c->fd, c->reader.channel,
+                                      c->reader.payload, c->reader.payload_len,
+                                      srv->userdata);
+                    }
+                } else if (fr < 0) {
+                    ps_warn("ipc_server: frame error on slot %d, dropping client", slot);
+                    ipc_drop_client(srv, slot);
+                    dropped = 1;
+                    break;
+                }
+            }
+        } while (!dropped && c->fd >= 0 && c->ssl && SSL_pending((SSL *)c->ssl) > 0);
     }
 
     return 0;
@@ -522,24 +747,12 @@ int ps_ipc_server_broadcast(struct ps_ipc_server *srv,
     int sent = 0;
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
         if (srv->clients[i].fd < 0) continue;
-
-        size_t  remaining = (size_t)frame_len;
-        const uint8_t *wp = buf;
-        int ok = 1;
-        while (remaining > 0) {
-            ssize_t w = write(srv->clients[i].fd, wp, remaining);
-            if (w < 0) {
-                if (errno == EINTR) continue;
-                ps_warn("ipc_server_broadcast: write to slot %d failed: %s",
-                        i, strerror(errno));
-                ipc_drop_client(srv, i);
-                ok = 0;
-                break;
-            }
-            wp        += w;
-            remaining -= (size_t)w;
+        if (ipc_client_write_all(&srv->clients[i], buf, (size_t)frame_len) != 0) {
+            ps_warn("ipc_server_broadcast: write to slot %d failed", i);
+            ipc_drop_client(srv, i);
+        } else {
+            sent++;
         }
-        if (ok) sent++;
     }
 
     free(buf);
@@ -565,21 +778,22 @@ int ps_ipc_server_send_to(struct ps_ipc_server *srv, int client_fd,
         return -1;
     }
 
-    size_t remaining = (size_t)frame_len;
-    const uint8_t *wp = buf;
-    while (remaining > 0) {
-        ssize_t w = write(client_fd, wp, remaining);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            ps_warn("ipc_server_send_to: write to fd %d failed: %s",
-                    client_fd, strerror(errno));
-            free(buf);
-            return -1;
-        }
-        wp        += w;
-        remaining -= (size_t)w;
+    /* Route through the client slot so TLS clients go via SSL_write. The fd
+     * comes from the on_frame callback, so the slot is normally live; fall
+     * back to a plaintext write if it has already been dropped. */
+    struct ps_ipc_client *c = ipc_find_by_fd(srv, client_fd);
+    int rc;
+    if (c) {
+        rc = ipc_client_write_all(c, buf, (size_t)frame_len);
+    } else {
+        struct ps_ipc_client tmp = { .fd = client_fd, .ssl = NULL };
+        rc = ipc_client_write_all(&tmp, buf, (size_t)frame_len);
     }
 
     free(buf);
+    if (rc != 0) {
+        ps_warn("ipc_server_send_to: write to fd %d failed", client_fd);
+        return -1;
+    }
     return 1;
 }

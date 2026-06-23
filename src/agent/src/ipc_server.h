@@ -40,11 +40,18 @@ int  ps_frame_reader_feed(struct ps_frame_reader *r, uint8_t byte);
 struct ps_ipc_client {
     int fd;
     struct ps_frame_reader reader;
+    void *ssl;   /* SSL* when this client arrived over the mTLS TCP listener;
+                  * NULL for plaintext (Unix socket or non-TLS TCP). Opaque
+                  * here so the header stays free of <openssl/ssl.h>. */
 };
 
 typedef void (*ps_ipc_on_frame_fn)(int client_fd, const char *channel,
                                     const char *payload, uint32_t payload_len,
                                     void *userdata);
+
+/* TLS state for the TCP listener; opaque (defined in ipc_server.c so the
+ * header pulls in no OpenSSL / keystore types). NULL = plaintext TCP. */
+struct ps_ipc_tls;
 
 struct ps_ipc_server {
     int listen_fd;      /* AF_UNIX listener (-1 if not used) */
@@ -53,6 +60,8 @@ struct ps_ipc_server {
     int client_count;
     ps_ipc_on_frame_fn on_frame;
     void *userdata;
+    struct ps_ipc_tls *tls;  /* when set, TCP clients must complete an mTLS
+                              * handshake and present an authorized pubkey */
 };
 
 /** Initialize with a Unix domain socket (local IPC). */
@@ -64,6 +73,22 @@ int  ps_ipc_server_init(struct ps_ipc_server *srv, const char *socket_path,
  *  Returns 0 on success, -1 on error. */
 int  ps_ipc_server_add_tcp(struct ps_ipc_server *srv,
                             const char *bind_addr, int port);
+
+/** Require mTLS on the TCP listener: every TCP client must complete a TLS 1.3
+ *  handshake with a self-signed Ed25519 cert and present a pubkey whose
+ *  fingerprint appears in the authorized-keys directory. The channel/payload
+ *  wire protocol is unchanged -- it just runs inside the TLS tunnel.
+ *
+ *  Identity + allowlist are resolved from the environment (matching the
+ *  network_listener module so operators configure keys once):
+ *    PS_KEY_DIR                 keystore dir (else keystore default dir)
+ *    PS_NETWORK_KEY             agent keypair name (default "agent")
+ *    PS_NETWORK_AUTHORIZED_DIR  client pubkey dir (default <keydir>/authorized)
+ *
+ *  Call after ps_ipc_server_add_tcp(). Returns 0 on success, -1 on error
+ *  (missing/!secret key, ctx init failure). On failure the TCP listener is
+ *  left plaintext; the caller decides whether that is fatal. */
+int  ps_ipc_server_enable_tls(struct ps_ipc_server *srv);
 
 void ps_ipc_server_shutdown(struct ps_ipc_server *srv);
 int  ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms);
