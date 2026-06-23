@@ -21,11 +21,13 @@ set -euo pipefail
 NAME="ui"
 LISTEN="127.0.0.1:4701"   # loopback by default; use 0.0.0.0:PORT for LAN access
 LAUNCH=0
+AUTHORIZE_PUB=""   # authorize an EXISTING pubkey (e.g. a UE UI identity) instead of generating one
 while [ $# -gt 0 ]; do
   case "$1" in
-    --name)   NAME="$2"; shift 2 ;;
-    --listen) LISTEN="$2"; shift 2 ;;
-    --launch) LAUNCH=1; shift ;;
+    --name)      NAME="$2"; shift 2 ;;
+    --listen)    LISTEN="$2"; shift 2 ;;
+    --launch)    LAUNCH=1; shift ;;
+    --authorize) AUTHORIZE_PUB="$2"; shift 2 ;;   # path to an existing <id>.pub to authorize
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -60,20 +62,30 @@ if [ ! -f "$KEYDIR/agent.sec" ]; then
 fi
 
 # --- 2. client identity ----------------------------------------------------
-if [ ! -f "$KEYDIR/$NAME.sec" ]; then
-  echo "==> generating client identity '$NAME'"
-  "$PACKETSONDE" key generate --name "$NAME" >/dev/null
+# Either authorize an existing pubkey (--authorize, e.g. a UE UI's
+# Saved/agent-id/agent.pub) or generate a standalone client key here.
+if [ -n "$AUTHORIZE_PUB" ]; then
+  [ -f "$AUTHORIZE_PUB" ] || { echo "error: --authorize pubkey not found: $AUTHORIZE_PUB" >&2; exit 1; }
+  client_pub="$AUTHORIZE_PUB"
+  client_sec="${AUTHORIZE_PUB%.pub}.sec"   # sibling seed (lives with the UE identity)
 else
-  echo "==> reusing existing client identity '$NAME'"
+  if [ ! -f "$KEYDIR/$NAME.sec" ]; then
+    echo "==> generating client identity '$NAME'"
+    "$PACKETSONDE" key generate --name "$NAME" >/dev/null
+  else
+    echo "==> reusing existing client identity '$NAME'"
+  fi
+  client_pub="$KEYDIR/$NAME.pub"
+  client_sec="$KEYDIR/$NAME.sec"
 fi
 
 # --- 3. authorize the client with the agent --------------------------------
-cp -f "$KEYDIR/$NAME.pub" "$KEYDIR/authorized/$NAME.pub"
-echo "==> authorized $NAME.pub in $KEYDIR/authorized/"
+cp -f "$client_pub" "$KEYDIR/authorized/$NAME.pub"
+echo "==> authorized $(basename "$client_pub") as $NAME.pub in $KEYDIR/authorized/"
 
 # --- 4. fingerprints -------------------------------------------------------
-agent_fpr="$("$PACKETSONDE" key fingerprint agent  | grep -oE 'sha256:[0-9a-f]+' | head -1)"
-client_fpr="$("$PACKETSONDE" key fingerprint "$NAME" | grep -oE 'sha256:[0-9a-f]+' | head -1)"
+agent_fpr="$("$PACKETSONDE" key fingerprint agent       | grep -oE 'sha256:[0-9a-f]+' | head -1)"
+client_fpr="$("$PACKETSONDE" key fingerprint "$client_pub" | grep -oE 'sha256:[0-9a-f]+' | head -1)"
 
 host="${LISTEN%:*}"; port="${LISTEN##*:}"
 psctl="$here/../go/psctl/psctl"
@@ -82,7 +94,7 @@ psctl="$here/../go/psctl/psctl"
 cat <<EOF
 
 ================ client bootstrap complete ================
-client key   : $KEYDIR/$NAME.sec   (keep private)
+client key   : $client_sec   (keep private)
 client fpr   : $client_fpr
 agent  fpr   : $agent_fpr   <-- pin this from the client
 
@@ -94,7 +106,11 @@ or in packetsonded.toml:
   tls    = "1"
 
 Connect with psctl:
-  $psctl --host $host --port $port --key "$KEYDIR/$NAME.sec" --agent-fpr $agent_fpr hosts
+  $psctl --host $host --port $port --key "$client_sec" --agent-fpr $agent_fpr hosts
+
+Or, for a UE UI using this identity, launch the editor with:
+  PS_AGENT_TCP=$host:$port
+  PS_AGENT_FINGERPRINT=$agent_fpr
 ===========================================================
 EOF
 

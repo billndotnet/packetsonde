@@ -28,7 +28,12 @@ param(
   [string]$WslKeyDir      = '$HOME/.config/packetsonde/keys',
   [string]$PacketsondeBin = "/home/billn/packetsonde/build/src/cli/packetsonde",
   [string]$VMHost         = "127.0.0.1",
-  [int]$Port              = 4701
+  [int]$Port              = 4701,
+  # UE mode: authorize the UE UI's own identity instead of a standalone client.
+  # Point this at the project's Saved\agent-id dir (the UI's keystore). The key
+  # is created in-place if absent (same raw format the UI's LoadOrCreate uses),
+  # then authorized; the script prints the editor env vars to set.
+  [string]$UeIdentityDir  = ""
 )
 $ErrorActionPreference = "Stop"
 
@@ -49,14 +54,28 @@ if (-not $Psctl) {
   else { throw "psctl.exe not found. Build it (GOOS=windows go build) and pass -Psctl <path>." }
 }
 
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$prefix = Join-Path $OutDir $ClientName
-
-# --- 1. generate the client key on Windows ---------------------------------
-Write-Host "==> generating client identity '$ClientName' in $OutDir"
-& $Psctl gen-key $prefix
+$isUe = -not [string]::IsNullOrEmpty($UeIdentityDir)
+if ($isUe) {
+  New-Item -ItemType Directory -Force -Path $UeIdentityDir | Out-Null
+  $prefix  = Join-Path $UeIdentityDir "agent"   # the UE keystore name is "agent"
+  $authName = "ue"
+  $idLabel = "UE UI identity"
+} else {
+  New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+  $prefix  = Join-Path $OutDir $ClientName
+  $authName = $ClientName
+  $idLabel = "client identity '$ClientName'"
+}
 $pubWin = "$prefix.pub"
-if (-not (Test-Path $pubWin)) { throw "psctl gen-key did not produce $pubWin" }
+
+# --- 1. client/UE identity (idempotent: never clobber an existing key) ------
+if (Test-Path $pubWin) {
+  Write-Host "==> reusing existing $idLabel at $prefix.{sec,pub}"
+} else {
+  Write-Host "==> generating $idLabel at $prefix.{sec,pub}"
+  & $Psctl gen-key $prefix
+  if (-not (Test-Path $pubWin)) { throw "psctl gen-key did not produce $pubWin" }
+}
 
 # --- 2+3. authorize in WSL + fetch agent fingerprint -----------------------
 # Run the agent-side work via a generated bash script (avoids cross-shell
@@ -71,8 +90,8 @@ chmod 700 "`$PS_KEY_DIR" 2>/dev/null || true
 if [ ! -f "`$PS_KEY_DIR/agent.sec" ]; then
   "$PacketsondeBin" key generate --name agent >/dev/null
 fi
-cp -f "$pubWsl" "`$PS_KEY_DIR/authorized/$ClientName.pub"
-echo "AUTHORIZED `$PS_KEY_DIR/authorized/$ClientName.pub"
+cp -f "$pubWsl" "`$PS_KEY_DIR/authorized/$authName.pub"
+echo "AUTHORIZED `$PS_KEY_DIR/authorized/$authName.pub"
 "$PacketsondeBin" key fingerprint agent | grep -oE 'sha256:[0-9a-f]+' | head -1
 "@
 $innerPath = Join-Path $env:TEMP "ps-client-bootstrap-inner.sh"
@@ -85,15 +104,22 @@ $out = & wsl -d $Distro -u root -- bash $innerWsl
 $out | ForEach-Object { Write-Host "   $_" }
 $agentFpr = ($out | Select-String -Pattern 'sha256:[0-9a-f]+').Matches.Value | Select-Object -Last 1
 
-# --- 4. print connect command ----------------------------------------------
+# --- 4. print next steps ----------------------------------------------------
+$daemon = $PacketsondeBin -replace 'cli/packetsonde','agent/packetsonded'
 Write-Host ""
-Write-Host "================ client bootstrap complete ================"
-Write-Host "client key : $prefix.sec   (keep private)"
-Write-Host "agent fpr  : $agentFpr"
+Write-Host "================ bootstrap complete ================"
+Write-Host "identity  : $prefix.sec   (keep private)"
+Write-Host "agent fpr : $agentFpr"
 Write-Host ""
-Write-Host "Make sure the WSL agent runs with mTLS TCP enabled, e.g.:"
-Write-Host "  wsl -d $Distro -- env PS_KEY_DIR=$WslKeyDir PS_NETWORK_LISTEN=0.0.0.0:$Port PS_NETWORK_TLS=1 $($PacketsondeBin -replace 'cli/packetsonde','agent/packetsonded')"
+Write-Host "Run the WSL agent with mTLS TCP enabled, e.g.:"
+Write-Host "  wsl -d $Distro -- env PS_KEY_DIR=$WslKeyDir PS_NETWORK_LISTEN=0.0.0.0:$Port PS_NETWORK_TLS=1 $daemon"
 Write-Host ""
-Write-Host "Then connect from Windows:"
-Write-Host "  $Psctl --host $VMHost --port $Port --key `"$prefix.sec`" --agent-fpr $agentFpr hosts"
-Write-Host "==========================================================="
+if ($isUe) {
+  Write-Host "Then launch the UE editor with these env vars (the UI auto-connects):"
+  Write-Host "  PS_AGENT_TCP=${VMHost}:${Port}"
+  Write-Host "  PS_AGENT_FINGERPRINT=$agentFpr"
+} else {
+  Write-Host "Then connect from Windows:"
+  Write-Host "  $Psctl --host $VMHost --port $Port --key `"$prefix.sec`" --agent-fpr $agentFpr hosts"
+}
+Write-Host "===================================================="
