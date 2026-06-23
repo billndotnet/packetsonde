@@ -1082,6 +1082,10 @@ int main(int argc, char **argv)
         /* Check config file */
         listen_addr = ps_config_get(&cfg, "network", "listen");
     }
+    if (!listen_addr || !*listen_addr) {
+        /* Env override (also set from [network] listen by ps_config_to_env). */
+        listen_addr = getenv("PS_NETWORK_LISTEN");
+    }
     if (listen_addr && listen_addr[0] != '\0') {
         /* Parse addr:port */
         char tcp_addr[64] = "0.0.0.0";
@@ -1106,8 +1110,25 @@ int main(int argc, char **argv)
                 strncpy(tcp_addr, listen_addr, sizeof(tcp_addr) - 1);
             }
         }
-        if (tcp_port > 0) {
-            ps_ipc_server_add_tcp(&g_ipc, tcp_addr, tcp_port);
+        if (tcp_port > 0 && ps_ipc_server_add_tcp(&g_ipc, tcp_addr, tcp_port) == 0) {
+            const char *tls_on = getenv("PS_NETWORK_TLS");
+            int want_tls = tls_on && (*tls_on == '1' || *tls_on == 't' ||
+                                      *tls_on == 'T' || *tls_on == 'y' || *tls_on == 'Y');
+            if (want_tls) {
+                if (ps_ipc_server_enable_tls(&g_ipc) != 0) {
+                    /* Fail closed: never expose a plaintext control channel when
+                     * mTLS was requested. Drop the TCP listener; Unix IPC stays up. */
+                    ps_error("main: PS_NETWORK_TLS requested but mTLS setup failed; "
+                             "disabling TCP listener (Unix IPC still available)");
+                    close(g_ipc.tcp_listen_fd);
+                    g_ipc.tcp_listen_fd = -1;
+                } else {
+                    ps_info("main: TCP IPC requires mTLS");
+                }
+            } else {
+                ps_warn("main: TCP IPC listener is PLAINTEXT -- set [network] tls=1 "
+                        "(or PS_NETWORK_TLS=1) to require mTLS");
+            }
         }
     }
 
