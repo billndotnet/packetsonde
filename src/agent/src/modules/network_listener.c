@@ -55,6 +55,14 @@
  * and recursion depth across the agent fleet. */
 #define PS_NL_MAX_VIA_HOPS 8
 
+/* Bulk probe support (e.g.  over agent_proto): allow a large
+ * target list. Ceiling covers a /22 (1024 hosts) + kind + a couple of flags;
+ * the client chunks anything larger. argbuf holds that many IPv6-length
+ * tokens. Per-connection thread stack is the glibc 8 MB default, so these
+ * auto buffers are safe. */
+#define PS_NL_MAX_ARGS  1056
+#define PS_NL_ARGBUF_SZ (64 * 1024)
+
 struct nl_state {
     int                listen_fd;
     struct ps_at_ctx   tctx;
@@ -292,17 +300,17 @@ static void run_subprocess(struct nl_state *st,
          * the subprocess opens another --via session to the next hop.
          * The receiving agent there sees one fewer entry, and so on. */
         const char *verb = is_probe ? "probe" : "audit";
-        const char *argv[32] = {0};
+        const char *argv[PS_NL_MAX_ARGS + 24] = {0};
         int i = 0;
         argv[i++] = st->packetsonde_bin;
         argv[i++] = "--jsonl";
-        for (int v = 0; v < via_count && i + 2 < 31; v++) {
+        for (int v = 0; v < via_count && i + 2 < (int)(sizeof(argv)/sizeof(argv[0])) - 1; v++) {
             argv[i++] = "--via";
             argv[i++] = via_chain[v];
         }
         argv[i++] = verb;
         argv[i++] = audit_kind;
-        for (int j = 1; j < audit_argc && i < 31; j++) argv[i++] = audit_argv[j];
+        for (int j = 1; j < audit_argc && i < (int)(sizeof(argv)/sizeof(argv[0])) - 1; j++) argv[i++] = audit_argv[j];
         argv[i] = NULL;
         execvp(argv[0], (char *const *)argv);
         _exit(127);
@@ -497,10 +505,10 @@ static void *session_thread(void *arg) {
         }
         /* Parse + dispatch. The request shape is identical for audit and
          * probe ({type,kind,args[],via_chain[]?}); only the verb differs. */
-        char argbuf[2048]; char *av[16] = {0}; int ac = 0;
+        char argbuf[PS_NL_ARGBUF_SZ]; char *av[PS_NL_MAX_ARGS] = {0}; int ac = 0;
         const char *via_chain[PS_NL_MAX_VIA_HOPS] = {0};
         int vc = 0;
-        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, 16, &ac,
+        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, PS_NL_MAX_ARGS, &ac,
                                 via_chain, PS_NL_MAX_VIA_HOPS, &vc) != 0 || ac < 1) {
             const char *e = "{\"type\":\"error\",\"message\":\"bad request\"}";
             ps_ap_write_frame(&io, e, strlen(e));
