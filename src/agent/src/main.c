@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 #include "build_config.h"
 #include "log.h"
@@ -243,6 +245,114 @@ static int ctx_capture_remove(ps_module_ctx_t *ctx, const char *iface)
 }
 
 /* ------------------------------------------------------------------ */
+/* Bulk-ICMP sweep over channel/payload (sweep.request)                 */
+/* ------------------------------------------------------------------ */
+/* Tactical operator sweeps: fork `packetsonde --jsonl probe sweep <targets> -t <ms>`
+ * (the same subprocess the agent_proto path uses) and stream its JSONL probe.sweep.*
+ * findings to channel/payload clients on the "probe.sweep" channel. The ipc loop is
+ * single-threaded, so the subprocess pipe is drained NON-BLOCKING in the main loop
+ * (ps_sweep_drain) — it never blocks other clients or the passive listeners. */
+#define PS_SWEEP_MAX_SLOTS   4
+#define PS_SWEEP_MAX_TARGETS 1024   /* matches the client's SweepBatchSize ceiling */
+
+struct ps_sweep_slot {
+    pid_t  pid;          /* 0 = free */
+    int    fd;           /* read end of child stdout (non-blocking) */
+    char   buf[65536];   /* line-assembly buffer */
+    size_t len;
+};
+static struct ps_sweep_slot g_sweeps[PS_SWEEP_MAX_SLOTS];
+
+static const char *ps_sweep_bin(void)
+{
+    const char *b = getenv("PS_PACKETSONDE_BIN");
+    return (b && *b) ? b : "packetsonde";
+}
+
+/* Fork a sweep subprocess for the given targets/timeout. argv strings point into the
+ * caller's buffer; valid through the child's immediate execvp (fork copies the AS). */
+static int ps_sweep_launch(char **targets, int ntargets, int timeout_ms)
+{
+    if (ntargets < 1) return -1;
+    int slot = -1;
+    for (int i = 0; i < PS_SWEEP_MAX_SLOTS; i++) if (g_sweeps[i].pid == 0) { slot = i; break; }
+    if (slot < 0) { ps_warn("sweep: all %d slots busy, dropping request", PS_SWEEP_MAX_SLOTS); return -1; }
+
+    int pfd[2];
+    if (pipe(pfd) < 0) { ps_warn("sweep: pipe failed: %s", strerror(errno)); return -1; }
+
+    char ms_str[16];
+    snprintf(ms_str, sizeof(ms_str), "%d", timeout_ms);
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); ps_warn("sweep: fork failed"); return -1; }
+    if (pid == 0) {
+        dup2(pfd[1], 1);
+        int n = open("/dev/null", O_WRONLY); if (n >= 0) { dup2(n, 2); close(n); }
+        close(pfd[0]); close(pfd[1]);
+        const char *argv[PS_SWEEP_MAX_TARGETS + 8] = {0};
+        int i = 0;
+        argv[i++] = ps_sweep_bin();
+        argv[i++] = "--jsonl";
+        argv[i++] = "probe";
+        argv[i++] = "sweep";
+        for (int t = 0; t < ntargets && i < PS_SWEEP_MAX_TARGETS + 6; t++) argv[i++] = targets[t];
+        argv[i++] = "-t";
+        argv[i++] = ms_str;
+        argv[i]   = NULL;
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    close(pfd[1]);
+    int fl = fcntl(pfd[0], F_GETFL, 0); if (fl >= 0) fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+    g_sweeps[slot].pid = pid;
+    g_sweeps[slot].fd  = pfd[0];
+    g_sweeps[slot].len = 0;
+    ps_info("sweep: launched pid=%d targets=%d timeout=%dms (slot %d)", pid, ntargets, timeout_ms, slot);
+    return 0;
+}
+
+/* Drain active sweep subprocesses (called each main-loop tick). Each complete `{...}`
+ * JSONL line is broadcast verbatim as a "probe.sweep" finding to channel/payload clients. */
+static void ps_sweep_drain(void)
+{
+    for (int s = 0; s < PS_SWEEP_MAX_SLOTS; s++) {
+        struct ps_sweep_slot *sl = &g_sweeps[s];
+        if (sl->pid == 0) continue;
+        for (;;) {
+            if (sl->len >= sizeof(sl->buf) - 1) { sl->len = 0; } /* overlong line: drop (defensive) */
+            ssize_t r = read(sl->fd, sl->buf + sl->len, sizeof(sl->buf) - sl->len - 1);
+            if (r > 0) {
+                sl->len += (size_t)r;
+                size_t from = 0;
+                for (;;) {
+                    char *nl = memchr(sl->buf + from, '\n', sl->len - from);
+                    if (!nl) break;
+                    size_t line_len = (size_t)(nl - (sl->buf + from));
+                    if (line_len > 0 && sl->buf[from] == '{')
+                        ps_ipc_server_broadcast(&g_ipc, "probe.sweep", sl->buf + from, (uint32_t)line_len);
+                    from += line_len + 1;
+                }
+                if (from > 0) { memmove(sl->buf, sl->buf + from, sl->len - from); sl->len -= from; }
+                continue;
+            }
+            if (r == 0) { /* EOF */
+                int st; waitpid(sl->pid, &st, 0);
+                close(sl->fd);
+                ps_info("sweep: pid=%d complete (slot %d)", sl->pid, s);
+                memset(sl, 0, sizeof(*sl));
+                break;
+            }
+            if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            int st; waitpid(sl->pid, &st, WNOHANG);
+            close(sl->fd);
+            memset(sl, 0, sizeof(*sl));
+            break;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* IPC frame handler                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -420,6 +530,43 @@ static void on_ipc_frame(int client_fd, const char *channel,
 
         if (port_count == 0)
             ps_warn("main: probe.request contained no valid ports");
+    } else if (strcmp(channel, "sweep.request") == 0) {
+        /*
+         * Bulk-ICMP reachability sweep (tactical discovery/monitoring), distinct from
+         * the port-based probe.request and from single-ICMP traceroute.request.
+         * Payload: {"job_id":"..","targets":["ip",..],"timeout_ms":N}. We fork
+         * `packetsonde --jsonl probe sweep <targets> -t <ms>` and stream its
+         * probe.sweep.{up,down,unresolved,summary} findings back on "probe.sweep".
+         */
+        if (!payload || !payload[0]) { ps_warn("main: sweep.request had empty payload"); return; }
+        int timeout_ms = 2000;
+        const char *tp = strstr(payload, "\"timeout_ms\"");
+        if (tp) { int v = 0; if (sscanf(tp, "\"timeout_ms\" : %d", &v) == 1 ||
+                                  sscanf(tp, "\"timeout_ms\":%d", &v) == 1) timeout_ms = v; }
+
+        /* Parse the targets[] string array. Copy the payload so we can NUL-terminate
+         * each target in place and point argv at it (the child fork-copies it). */
+        char *copy = strdup(payload);
+        char *targets[PS_SWEEP_MAX_TARGETS];
+        int ntargets = 0;
+        if (copy) {
+            char *ts = strstr(copy, "\"targets\"");
+            if (ts) ts = strchr(ts, '[');
+            char *end = ts ? strchr(ts, ']') : NULL;
+            char *cur = ts ? ts + 1 : NULL;
+            while (cur && end && cur < end && ntargets < PS_SWEEP_MAX_TARGETS) {
+                char *q1 = memchr(cur, '"', (size_t)(end - cur));
+                if (!q1 || q1 >= end) break;
+                char *q2 = memchr(q1 + 1, '"', (size_t)(end - (q1 + 1)));
+                if (!q2 || q2 > end) break;
+                *q2 = '\0';
+                targets[ntargets++] = q1 + 1;
+                cur = q2 + 1;
+            }
+        }
+        if (ntargets > 0) ps_sweep_launch(targets, ntargets, timeout_ms);
+        else ps_warn("main: sweep.request had no targets");
+        free(copy);
     } else if (strcmp(channel, "flow.control") == 0) {
         /*
          * flow.control payload format:
@@ -1259,6 +1406,9 @@ int main(int argc, char **argv)
     while (g_running) {
         /* Poll IPC clients (non-blocking) */
         ps_ipc_server_poll(&g_ipc, 0);
+
+        /* Drain any in-flight bulk-ICMP sweeps -> "probe.sweep" finding broadcasts */
+        ps_sweep_drain();
 
 #ifdef HAVE_HIREDIS
         /* Poll Redis for incoming messages (non-blocking) */
