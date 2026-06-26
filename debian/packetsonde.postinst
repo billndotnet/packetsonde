@@ -1,0 +1,36 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Unprivileged service account the systemd unit runs as.
+        if ! getent passwd packetsonded >/dev/null; then
+            adduser --system --no-create-home --group \
+                    --shell /usr/sbin/nologin packetsonded
+        fi
+        # The key directory (created empty by cmake install) holds the
+        # agent identity and authorized CLI pubkeys; the daemon reads it.
+        if [ -d /etc/packetsonded/keys ]; then
+            chown -R packetsonded:packetsonded /etc/packetsonded/keys
+            chmod 0750 /etc/packetsonded/keys
+        fi
+
+        if [ -z "${2:-}" ]; then
+            echo ""
+            echo "=== packetsonde installed. The agent is NOT started. ==="
+            echo "Next steps:"
+            echo "  1. sudo cp /etc/packetsonded/packetsonded.toml.example \\"
+            echo "             /etc/packetsonded/packetsonded.toml"
+            echo "  2. sudo PS_KEY_DIR=/etc/packetsonded/keys \\"
+            echo "          packetsonde key generate --name agent"
+            echo "  3. sudo cp ~/.config/packetsonde/keys/default.pub \\"
+            echo "             /etc/packetsonded/keys/authorized/"
+            echo "  4. sudo systemctl enable --now packetsonded"
+            echo ""
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
