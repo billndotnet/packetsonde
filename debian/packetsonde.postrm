@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+# The packetsonded system user is intentionally left in place on purge:
+# it may own files under /etc, /var/lib, or /var/log that survive removal.
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,28 @@
+Source: packetsonde
+Section: net
+Priority: optional
+Maintainer: Bill Nash <billn@billn.net>
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake,
+ pkg-config,
+ libssl-dev,
+ libedit-dev,
+ libpcap-dev,
+ libhiredis-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/billndotnet/packetsonde
+Rules-Requires-Root: no
+
+Package: packetsonde
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, adduser
+Description: CLI-first network infrastructure and security auditing toolkit
+ packetsonde is an auditor's command-line tool (active TLS/HTTP/DNS/SSH and
+ 20+ other service audits, port scans, traceroute) and packetsonded, a
+ long-running passive observation agent (flow tracking, neighbour discovery,
+ L2/L3 control-plane listeners, and host process/file/socket monitoring).
+ .
+ Findings are emitted as JSONL on stdout for piping to jq, vector, or any
+ line-oriented log forwarder. The systemd service ships disabled; see
+ /usr/share/doc/packetsonde for first-deployment steps.

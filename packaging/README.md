@@ -8,6 +8,8 @@ Per-platform deployment artifacts for `packetsonded`.
 | `packetsonded.service`            | Linux    | systemd unit (user `packetsonded`)|
 | `net.billn.packetsonded.plist`    | macOS    | launchd plist (root-owned)       |
 | `Formula/packetsonde.rb`          | macOS    | Homebrew formula                 |
+| `../debian/`                      | Linux    | Debian source package (debhelper) |
+| `build-deb.sh`                    | Linux    | build the .deb (version-guarded)  |
 
 ## First-time deployment
 

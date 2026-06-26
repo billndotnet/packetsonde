@@ -128,6 +128,28 @@ sandboxes with `ProtectSystem=strict`, `NoNewPrivileges`,
 `MemoryDenyWriteExecute`, etc. Review `packaging/packetsonded.service`
 before deploying.
 
+### Debian package (.deb)
+
+Instead of `cmake --install` + manual systemd setup, build a native package:
+
+```bash
+sudo apt build-dep .          # or: sudo ./bootstrap.sh
+sudo apt install -y debhelper devscripts dpkg-dev
+packaging/build-deb.sh        # writes ../packetsonde_<ver>_<arch>.deb
+sudo apt install ./../packetsonde_*.deb
+```
+
+The package installs binaries under `/usr` (`/usr/bin/packetsonde`,
+`/usr/sbin/packetsonded`), the example config at
+`/etc/packetsonded/packetsonded.toml.example`, and the systemd unit at
+`/lib/systemd/system/packetsonded.service` **disabled**. It creates the
+`packetsonded` system user. Then run the operator next-steps the postinst
+prints (activate config, generate key, authorize a CLI pubkey,
+`systemctl enable --now packetsonded`).
+
+`build-deb.sh` refuses to build if `debian/changelog`'s version differs from
+`PS_VERSION_STR` in `CMakeLists.txt`; bump both in lockstep (`dch -v <ver>`).
+
 ## Linux (RHEL / Fedora / Alma / Rocky)
 
 ```bash

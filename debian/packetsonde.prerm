@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+# Stop the agent when the package is removed. dh_installsystemd's automatic
+# stop-on-remove snippet is suppressed by the --no-start flag we pass in
+# debian/rules (see dh_installsystemd(1): the prerm stop autoscript runs
+# "unless NO_START"). We use --no-start to keep the agent from being started
+# on install (it's a capture daemon the operator enables deliberately), so we
+# must stop it on removal ourselves — otherwise `apt remove` leaves a running
+# packetsonded whose binary has just been deleted.
+if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+    if [ -d /run/systemd/system ]; then
+        deb-systemd-invoke stop 'packetsonded.service' >/dev/null || true
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0
