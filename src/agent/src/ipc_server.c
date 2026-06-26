@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <dirent.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -26,6 +27,17 @@
 /* Bound the TLS handshake + per-record reads so a slow/stalled TCP peer can't
  * freeze the single-threaded poll loop. */
 #define PS_IPC_TLS_IO_TIMEOUT_SEC 10
+/* Client sockets are non-blocking after accept, so a broadcast write to a client
+ * whose send buffer is full returns EAGAIN instead of blocking the whole agent.
+ * We then wait briefly (POLL_MS) for it to drain, up to MAX_WAITS slices total,
+ * before giving up and dropping the client. ~750ms ceiling per stuck client. */
+#define PS_IPC_WRITE_POLL_MS   50
+#define PS_IPC_WRITE_MAX_WAITS 15
+/* ipc_client_read sentinel: the non-blocking socket has no data ready yet (a
+ * partial TLS record, or EAGAIN). NOT an error -- stop reading this pass and let
+ * the level-triggered poll re-signal when the rest arrives. Distinct from 0 (EOF
+ * -> drop) and -1 (real error -> drop). */
+#define PS_IPC_WOULDBLOCK (-2)
 
 struct ps_ipc_tls {
     struct ps_at_ctx ctx;
@@ -75,31 +87,56 @@ static int ipc_tls_is_authorized(struct ps_ipc_tls *t, SSL *ssl)
     return matched;
 }
 
-/* ssl-aware client I/O. ssl==NULL -> plaintext fd. */
+/* ssl-aware client I/O. ssl==NULL -> plaintext fd. Returns >0 bytes, 0 on EOF,
+ * -1 on a real error, or PS_IPC_WOULDBLOCK when the non-blocking socket has no
+ * data ready (partial TLS record / EAGAIN). Callers must treat PS_IPC_WOULDBLOCK
+ * as "retry later", NOT as a disconnect. */
 static ssize_t ipc_client_read(struct ps_ipc_client *c, uint8_t *buf, size_t n)
 {
     if (c->ssl) {
         int r = SSL_read((SSL *)c->ssl, buf, (int)n);
-        return (r > 0) ? (ssize_t)r : (r == 0 ? 0 : -1);
+        if (r > 0) return (ssize_t)r;
+        int err = SSL_get_error((SSL *)c->ssl, r);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+            return PS_IPC_WOULDBLOCK;
+        if (err == SSL_ERROR_ZERO_RETURN) return 0; /* clean TLS shutdown */
+        return -1;
     }
-    return read(c->fd, buf, n);
+    ssize_t r = read(c->fd, buf, n);
+    if (r >= 0) return r;
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        return PS_IPC_WOULDBLOCK;
+    return -1;
 }
 
-/* Write the whole buffer; returns 0 on success, -1 on error. */
+/* Write the whole buffer; returns 0 on success, -1 on error (caller drops the
+ * client). The client fd is non-blocking, so when its send buffer is full the
+ * write returns EAGAIN / SSL_ERROR_WANT_WRITE; we wait briefly for it to drain
+ * but bound the total wait so one slow or dead client can't freeze the
+ * single-threaded server -- we give up and let the caller drop it instead. */
 static int ipc_client_write_all(struct ps_ipc_client *c,
                                 const uint8_t *buf, size_t n)
 {
     size_t off = 0;
+    int waits = 0;
     while (off < n) {
         if (c->ssl) {
-            int w = SSL_write((SSL *)c->ssl, buf + off, (int)(n - off));
-            if (w <= 0) return -1;
-            off += (size_t)w;
+            int r = SSL_write((SSL *)c->ssl, buf + off, (int)(n - off));
+            if (r > 0) { off += (size_t)r; waits = 0; continue; }
+            int err = SSL_get_error((SSL *)c->ssl, r);
+            if (err != SSL_ERROR_WANT_WRITE && err != SSL_ERROR_WANT_READ)
+                return -1;  /* real TLS error */
+            /* socket buffer full -> fall through to the bounded drain wait */
         } else {
             ssize_t w = write(c->fd, buf + off, n - off);
-            if (w < 0) { if (errno == EINTR) continue; return -1; }
-            off += (size_t)w;
+            if (w > 0) { off += (size_t)w; waits = 0; continue; }
+            if (w == 0) return -1;
+            if (errno == EINTR) continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
         }
+        if (++waits > PS_IPC_WRITE_MAX_WAITS) return -1; /* too slow -> drop */
+        struct pollfd p = { .fd = c->fd, .events = POLLOUT };
+        poll(&p, 1, PS_IPC_WRITE_POLL_MS);
     }
     return 0;
 }
@@ -310,6 +347,16 @@ int ps_ipc_server_init(struct ps_ipc_server *srv, const char *socket_path,
 
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++)
         srv->clients[i].fd = -1;
+
+    /* The Unix domain socket is optional. A TCP-only deployment (UE client over
+     * mTLS TCP) passes a NULL/empty/"none" path to skip binding it entirely --
+     * it's dead surface there. The poll loop already treats listen_fd == -1 as
+     * "no unix listener", and a TCP listener is added separately via add_tcp. */
+    if (!socket_path || !*socket_path ||
+        strcmp(socket_path, "none") == 0 || strcmp(socket_path, "-") == 0) {
+        ps_info("ipc_server: Unix domain socket disabled (TCP-only)");
+        return 0;
+    }
 
     /* Ensure the socket's parent directory exists. Under systemd this is
      * created host-visibly by RuntimeDirectory= (/run/packetsonde), but
@@ -533,6 +580,12 @@ static int ipc_accept_client(struct ps_ipc_server *srv)
         return -1;
     }
 
+    /* Non-blocking so a stuck client can't block the agent on a broadcast write
+     * (mirrors the TCP path). */
+    {
+        int fl = fcntl(cfd, F_GETFL, 0);
+        if (fl >= 0) fcntl(cfd, F_SETFL, fl | O_NONBLOCK);
+    }
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
         if (srv->clients[i].fd < 0) {
             srv->clients[i].fd  = cfd;
@@ -650,6 +703,11 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
             }
 
             if (ok) {
+                /* Non-blocking from here on (the handshake above ran blocking,
+                 * bounded by SO_*TIMEO). A full send buffer now returns EAGAIN so
+                 * a broadcast can't block the whole agent on one slow client. */
+                int fl = fcntl(cfd, F_GETFL, 0);
+                if (fl >= 0) fcntl(cfd, F_SETFL, fl | O_NONBLOCK);
                 for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
                     if (srv->clients[i].fd < 0) {
                         srv->clients[i].fd  = cfd;
@@ -697,6 +755,7 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
         do {
             uint8_t read_buf[4096];
             ssize_t n = ipc_client_read(c, read_buf, sizeof(read_buf));
+            if (n == PS_IPC_WOULDBLOCK) break;  /* no data ready; wait for poll */
             if (n <= 0) {
                 ipc_drop_client(srv, slot);
                 dropped = 1;

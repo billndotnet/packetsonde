@@ -1210,7 +1210,15 @@ int main(int argc, char **argv)
      * RuntimeDirectory path. */
     const char *sock_path = ps_config_get(&cfg, "agent", "socket");
     if (!sock_path || !*sock_path) sock_path = getenv("PS_AGENT_SOCKET");
-    if (!sock_path || !*sock_path) {
+    /* TCP-only deployments (UE client over mTLS TCP) disable the legacy Unix
+     * domain socket entirely -- it's dead surface there. PS_AGENT_NO_UNIX=1 (or
+     * socket="none") skips the bind; the agent then serves only the TCP listener. */
+    const char *no_unix = getenv("PS_AGENT_NO_UNIX");
+    int unix_disabled = (no_unix && (*no_unix == '1' || *no_unix == 't' ||
+                                     *no_unix == 'T' || *no_unix == 'y' || *no_unix == 'Y'));
+    if (unix_disabled) {
+        sock_path = NULL;
+    } else if (!sock_path || !*sock_path) {
 #if defined(__APPLE__)
         sock_path = "/tmp/packetsonde-agent.sock";
 #else
@@ -1219,10 +1227,11 @@ int main(int argc, char **argv)
     }
 
     if (ps_ipc_server_init(&g_ipc, sock_path, on_ipc_frame, NULL) < 0) {
-        ps_error("main: failed to init IPC server on '%s'", sock_path);
+        ps_error("main: failed to init IPC server on '%s'", sock_path ? sock_path : "(disabled)");
         return EXIT_FAILURE;
     }
-    ps_info("main: IPC server listening on '%s'", sock_path);
+    if (sock_path) ps_info("main: IPC server listening on '%s'", sock_path);
+    else           ps_info("main: Unix IPC socket disabled (TCP-only)");
 
     /* --- Optional TCP listener for remote clients --- */
     if (!listen_addr) {
