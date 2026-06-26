@@ -67,6 +67,22 @@ if(BUILD_STATIC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
 endif()
 
+# Detect-track runtime sources now live in ../kernel. During the transition
+# packetsonded still compiles them; Task 5 removes them from packetsonded.
+set(KERNEL_DETECT_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/baseline_store.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/capture_session.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/policy_overwatch.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/baseline_monitor.c
+)
+set(KERNEL_DETECT_INCLUDE
+    ${CMAKE_SOURCE_DIR}/src/kernel/src
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules)
+
 set(AGENT_CORE_SOURCES
     src/host_table.c
     src/flow_tracker.c
@@ -95,19 +111,12 @@ set(AGENT_CORE_SOURCES
     src/modules/vrrp_listener.c
     src/modules/broadcast_listener.c
     src/modules/iface_monitor.c
-    src/modules/policy_overwatch.c
-    src/modules/baseline_monitor.c
     src/modules/honeypot_listener.c
     src/modules/discovery_listener.c
     src/modules/network_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
-    src/activity_ring.c
-    src/baseline_store.c
-    src/proc_enrich.c
-    src/sock_snapshot.c
-    src/fan_monitor.c
-    src/capture_session.c
+    ${KERNEL_DETECT_SOURCES}
 )
 
 # Runtime shared by both daemons (packetsonded + kernelsonded). Pure-logic
@@ -141,6 +150,7 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE}
 )
 target_link_libraries(packetsonde-agent PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
@@ -164,14 +174,15 @@ endif()
 # Priv worker binary
 add_executable(packetsonde-priv
     src/priv_worker.c
-    src/fan_monitor.c
-    src/proc_enrich.c
-    src/sock_snapshot.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c
 )
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE}
 )
 target_link_libraries(packetsonde-priv PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
@@ -361,75 +372,94 @@ target_link_libraries(test_obs_queue PRIVATE pthread)
 add_test(NAME test_obs_queue COMMAND test_obs_queue)
 
 # Test: bounded activity ring
-add_executable(test_activity_ring tests/test_activity_ring.c src/activity_ring.c)
+add_executable(test_activity_ring tests/test_activity_ring.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c)
 target_include_directories(test_activity_ring PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_activity_ring PRIVATE pthread)
 add_test(NAME test_activity_ring COMMAND test_activity_ring)
 
 # Test: process enrichment (meta + ancestry walk)
-add_executable(test_proc_enrich tests/test_proc_enrich.c src/proc_enrich.c)
+add_executable(test_proc_enrich tests/test_proc_enrich.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c)
 target_include_directories(test_proc_enrich PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_proc_enrich PRIVATE packetsonde_lib)
 add_test(NAME test_proc_enrich COMMAND test_proc_enrich)
 
 # Test: socket snapshot (/proc/<pid>/fd inode -> /proc/net endpoints)
-add_executable(test_sock_snapshot tests/test_sock_snapshot.c src/sock_snapshot.c)
+add_executable(test_sock_snapshot tests/test_sock_snapshot.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c)
 target_include_directories(test_sock_snapshot PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_sock_snapshot PRIVATE packetsonde_lib)
 add_test(NAME test_sock_snapshot COMMAND test_sock_snapshot)
 
 # Test: fan_build_record (suppress-gate -> enrich -> snapshot -> json)
 add_executable(test_fan_build tests/test_fan_build.c
-    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c)
 target_include_directories(test_fan_build PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_fan_build PRIVATE packetsonde_lib)
 add_test(NAME test_fan_build COMMAND test_fan_build)
 
 # test_fan_event exercises the fanotify FAN_* mask mapping -- Linux only.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 add_executable(test_fan_event tests/test_fan_event.c
-    src/fan_monitor.c src/proc_enrich.c src/sock_snapshot.c)
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c)
 target_include_directories(test_fan_event PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_fan_event PRIVATE packetsonde_lib)
 add_test(NAME test_fan_event COMMAND test_fan_event)
 endif()
 
 add_executable(test_overwatch_core tests/test_overwatch_core.c
-    src/modules/policy_overwatch.c src/activity_ring.c)
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/policy_overwatch.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c)
 target_include_directories(test_overwatch_core PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_overwatch_core PRIVATE packetsonde_lib pthread)
 add_test(NAME test_overwatch_core COMMAND test_overwatch_core)
 
 add_executable(test_overwatch_learn tests/test_overwatch_learn.c
-    src/modules/policy_overwatch.c src/activity_ring.c)
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/policy_overwatch.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c)
 target_include_directories(test_overwatch_learn PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_overwatch_learn PRIVATE packetsonde_lib pthread)
 add_test(NAME test_overwatch_learn COMMAND test_overwatch_learn)
 
-add_executable(test_baseline_store tests/test_baseline_store.c src/baseline_store.c)
+add_executable(test_baseline_store tests/test_baseline_store.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/baseline_store.c)
 target_include_directories(test_baseline_store PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_baseline_store PRIVATE packetsonde_lib)
 add_test(NAME test_baseline_store COMMAND test_baseline_store)
 
 add_executable(test_baseline_monitor tests/test_baseline_monitor.c
-    src/modules/baseline_monitor.c src/baseline_store.c src/activity_ring.c)
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/baseline_monitor.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/baseline_store.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c)
 target_include_directories(test_baseline_monitor PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/modules)
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_baseline_monitor PRIVATE packetsonde_lib pthread)
 add_test(NAME test_baseline_monitor COMMAND test_baseline_monitor)
 
 # Test: capture session sink tee (brain-side state + per-session jsonl)
-add_executable(test_capture_session tests/test_capture_session.c src/capture_session.c)
+add_executable(test_capture_session tests/test_capture_session.c
+    ${CMAKE_SOURCE_DIR}/src/kernel/src/capture_session.c)
 target_include_directories(test_capture_session PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${KERNEL_DETECT_INCLUDE})
 target_link_libraries(test_capture_session PRIVATE pthread)
 add_test(NAME test_capture_session COMMAND test_capture_session)
 
