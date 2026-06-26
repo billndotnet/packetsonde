@@ -415,6 +415,13 @@ target_include_directories(test_baseline_monitor PRIVATE
 target_link_libraries(test_baseline_monitor PRIVATE packetsonde_lib pthread)
 add_test(NAME test_baseline_monitor COMMAND test_baseline_monitor)
 
+# When packaging (deb/rpm), the package's maintainer scripts own systemd
+# unit placement and the operator next-steps message. Skip the from-source
+# versions so they don't conflict (e.g. a unit under /etc/systemd/system
+# shadows the packaged /lib/systemd/system one). Default OFF preserves
+# `make install` behavior exactly.
+option(PS_PACKAGED_BUILD "Skip from-source-only install steps (deb/rpm packaging owns them)" OFF)
+
 include(GNUInstallDirs)
 
 # Per-platform install layout, intended for `sudo make install` from a
@@ -443,11 +450,12 @@ install(FILES ${CMAKE_SOURCE_DIR}/packaging/packetsonded.toml
         DESTINATION ${PS_CONFIG_DIR}
         RENAME packetsonded.toml.example)
 
-# systemd unit (Linux). Installs to /etc/systemd/system regardless of
-# prefix because that's where systemd reads unconditionally; from-source
-# install at /usr/local/lib/systemd/system isn't picked up without an
-# operator step.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+# systemd unit (Linux, from-source only). Installs to /etc/systemd/system
+# regardless of prefix because that's where systemd reads unconditionally;
+# from-source install at /usr/local/lib/systemd/system isn't picked up
+# without an operator step. Package builds install the unit via
+# dh_installsystemd instead (see debian/rules).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PS_PACKAGED_BUILD)
     install(FILES ${CMAKE_SOURCE_DIR}/packaging/packetsonded.service
             DESTINATION /etc/systemd/system)
 endif()
@@ -461,6 +469,7 @@ endif()
 
 # Post-install message: operator next-steps. Printed by CMake at the
 # end of `make install` -- helpful for first-deploy walk-through.
+if(NOT PS_PACKAGED_BUILD)
 install(CODE "
 message(STATUS \"\")
 message(STATUS \"=== packetsonded install complete ===\")
@@ -480,3 +489,4 @@ message(STATUS \"       macOS:   sudo launchctl bootstrap system /Library/Launch
 message(STATUS \"       FreeBSD: sudo sysrc packetsonded_enable=YES && sudo service packetsonded start\")
 message(STATUS \"\")
 ")
+endif()
