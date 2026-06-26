@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DPS_PACKAGED_BUILD=ON
+
+override_dh_auto_test:
+	# packetsonde's suite is real-infrastructure (live ES/Redis) and is
+	# unsafe under the Release/NDEBUG flags dh uses (asserts stripped ->
+	# spurious segfaults). Package builds skip it; ctest runs separately
+	# on a Debug build in CI.
+
+override_dh_installsystemd:
+	# Generate the packaged unit from the canonical one, rewriting the
+	# from-source ExecStart (/usr/local/sbin) to the FHS path (/usr/sbin).
+	# Single checked-in unit file; no duplicate to drift.
+	sed 's#/usr/local/sbin/packetsonded#/usr/sbin/packetsonded#' \
+	    packaging/packetsonded.service > debian/packetsonded.service
+	dh_installsystemd --name=packetsonded --no-enable --no-start

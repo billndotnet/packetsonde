@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: packetsonde
+Source: https://github.com/billndotnet/packetsonde
+
+Files: *
+Copyright: 2025-2026 Bill Nash <billn@billn.net>
+License: PolyForm-Noncommercial-1.0.0-modified
+ PolyForm Noncommercial License 1.0.0, modified to exclude government use.
+ The full text is distributed in the source tree as LICENSE.
+ The canonical (unmodified) text is at
+ https://polyformproject.org/licenses/noncommercial/1.0.0

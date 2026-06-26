@@ -1,0 +1,7 @@
+packetsonde (0.1.4) unstable; urgency=medium
+
+  * Initial Debian packaging: single native package shipping the CLI, the
+    packetsonded agent, the privilege-separated worker, an example config,
+    and a systemd unit (installed disabled).
+
+ -- Bill Nash <billn@billn.net>  Fri, 26 Jun 2026 00:00:00 +0000
