@@ -68,20 +68,12 @@ if(BUILD_STATIC)
 endif()
 
 set(AGENT_CORE_SOURCES
-    src/config.c
-    src/config_to_env.c
-    src/central_checkin.c
-    src/module.c
     src/host_table.c
-    src/ipc_server.c
-    src/priv_client.c
-    src/platform/unix.c
     src/flow_tracker.c
     src/netflow_export.c
     src/redis_bridge.c
     src/iface_enum.c
     src/iface_snapshot.c
-    src/iso8601.c
     src/modules/icmp_traceroute.c
     src/modules/tcp_traceroute.c
     src/modules/udp_traceroute.c
@@ -110,7 +102,6 @@ set(AGENT_CORE_SOURCES
     src/modules/network_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
-    src/obs_queue.c
     src/activity_ring.c
     src/baseline_store.c
     src/proc_enrich.c
@@ -118,6 +109,26 @@ set(AGENT_CORE_SOURCES
     src/fan_monitor.c
     src/capture_session.c
 )
+
+# Runtime shared by both daemons (packetsonded + kernelsonded). Pure-logic
+# primitives stay in packetsonde_lib; this lib is the daemon plumbing.
+add_library(packetsonde_daemon STATIC
+    src/config.c
+    src/config_to_env.c
+    src/central_checkin.c
+    src/ipc_server.c
+    src/module.c
+    src/obs_queue.c
+    src/priv_client.c
+    src/iso8601.c
+    src/platform/unix.c
+)
+target_include_directories(packetsonde_daemon PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(packetsonde_daemon PUBLIC packetsonde_lib pthread)
+set_target_properties(packetsonde_daemon PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Agent binary
 add_executable(packetsonde-agent src/main.c ${AGENT_CORE_SOURCES})
@@ -131,7 +142,7 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-agent PRIVATE packetsonde_lib pthread)
+target_link_libraries(packetsonde-agent PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-agent PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-agent PRIVATE ${PCAP_INCLUDE_DIR})
@@ -153,7 +164,6 @@ endif()
 # Priv worker binary
 add_executable(packetsonde-priv
     src/priv_worker.c
-    src/platform/unix.c
     src/fan_monitor.c
     src/proc_enrich.c
     src/sock_snapshot.c
@@ -163,7 +173,7 @@ target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
 )
-target_link_libraries(packetsonde-priv PRIVATE packetsonde_lib pthread)
+target_link_libraries(packetsonde-priv PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
     target_compile_definitions(packetsonde-priv PRIVATE HAVE_PCAP=1)
     target_include_directories(packetsonde-priv PRIVATE ${PCAP_INCLUDE_DIR})
