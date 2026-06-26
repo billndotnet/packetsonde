@@ -27,4 +27,5 @@ endif()
 # Order matters: lib first (others depend on it), then agent and cli.
 add_subdirectory(src/lib)
 add_subdirectory(src/agent)
+add_subdirectory(src/kernel)
 add_subdirectory(src/cli)
