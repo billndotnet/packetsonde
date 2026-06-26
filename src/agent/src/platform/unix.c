@@ -9,6 +9,9 @@
 #include <sys/types.h>
 #include <pwd.h>
 #include <grp.h>
+#if defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#endif
 
 #ifdef __APPLE__
 #  include <mach/mach_time.h>
@@ -127,6 +130,24 @@ int ps_platform_exe_dir(char *buf, size_t bufsz)
     if (slash) {
         *slash = '\0';
     }
+    return 0;
+#elif defined(__FreeBSD__)
+    /* FreeBSD: no /proc/self/exe; use KERN_PROC_PATHNAME. */
+    char tmp[4096];
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+    size_t len = sizeof(tmp);
+    if (sysctl(mib, 4, tmp, &len, NULL, 0) != 0) {
+        perror("sysctl KERN_PROC_PATHNAME");
+        return -1;
+    }
+    char *slash = strrchr(tmp, '/');
+    if (slash) {
+        *slash = '\0';
+    }
+    if (strlen(tmp) + 1 > bufsz) {
+        return -1;
+    }
+    memcpy(buf, tmp, strlen(tmp) + 1);
     return 0;
 #else
     char tmp[4096];

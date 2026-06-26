@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-postgresql","version":1,"kind_prefix":"nmap","default_port":5432,
+ "description":"postgresql presence detection (StartupMessage -> auth-request/error)",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"00000017000300007573657200706f7374677265730000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":16,"max_bytes":16,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^([RE])","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"postgresql (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"postgresql","product":"","version":"","banner":"postgresql reply"}}]},
+  {"op":"close","conn":"c"}]}

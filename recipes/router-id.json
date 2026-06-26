@@ -1,0 +1,594 @@
+{
+ "schema": 1,
+ "name": "router-id",
+ "version": 1,
+ "kind_prefix": "router",
+ "default_port": 80,
+ "description": "COTS router/gateway identification via HTTP admin interface",
+ "budgets": {
+  "max_steps": 64
+ },
+ "steps": [
+  {
+   "op": "connect_tcp",
+   "host": "$target.host",
+   "port": "$target.port",
+   "timeout_ms": 5000,
+   "out": "c"
+  },
+  {
+   "op": "send",
+   "conn": "c",
+   "bytes": "GET / HTTP/1.0\r\nHost: $target.host\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
+  },
+  {
+   "op": "recv",
+   "conn": "c",
+   "until": "n_bytes",
+   "n_bytes": 8192,
+   "max_bytes": 8192,
+   "out": "resp"
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "NETGEAR",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: NETGEAR",
+     "evidence": {
+      "vendor": "NETGEAR",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(ASUS|asuswrt)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: ASUS",
+     "evidence": {
+      "vendor": "ASUS",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(TP-LINK|TP-Link)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: TP-Link",
+     "evidence": {
+      "vendor": "TP-Link",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(D-Link|DIR-[0-9]|DI-[0-9])",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: D-Link",
+     "evidence": {
+      "vendor": "D-Link",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Linksys",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Linksys",
+     "evidence": {
+      "vendor": "Linksys",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "pfSense",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: pfSense",
+     "evidence": {
+      "vendor": "pfSense",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "OPNsense",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: OPNsense",
+     "evidence": {
+      "vendor": "OPNsense",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(OpenWrt|LuCI)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: OpenWrt",
+     "evidence": {
+      "vendor": "OpenWrt",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(MikroTik|RouterOS)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: MikroTik",
+     "evidence": {
+      "vendor": "MikroTik",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(UniFi|UBNT|EdgeOS|EdgeMAX)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Ubiquiti",
+     "evidence": {
+      "vendor": "Ubiquiti",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "DD-WRT",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: DD-WRT",
+     "evidence": {
+      "vendor": "DD-WRT",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Tomato",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Tomato",
+     "evidence": {
+      "vendor": "Tomato",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(FortiGate|Fortinet)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: FortiGate",
+     "evidence": {
+      "vendor": "FortiGate",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Synology",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Synology",
+     "evidence": {
+      "vendor": "Synology",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Huawei",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Huawei",
+     "evidence": {
+      "vendor": "Huawei",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "ZTE",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: ZTE",
+     "evidence": {
+      "vendor": "ZTE",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(Cisco|level_15_access)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Cisco",
+     "evidence": {
+      "vendor": "Cisco",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Aruba",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "firm",
+     "title": "Gateway: Aruba",
+     "evidence": {
+      "vendor": "Aruba",
+      "signal": "http-body",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "RomPager",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "tentative",
+     "title": "Gateway: embedded web server (RomPager)",
+     "evidence": {
+      "vendor": "(embedded)",
+      "product": "RomPager",
+      "signal": "server-header",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "GoAhead",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "tentative",
+     "title": "Gateway: embedded web server (GoAhead)",
+     "evidence": {
+      "vendor": "(embedded)",
+      "product": "GoAhead",
+      "signal": "server-header",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "uhttpd",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "tentative",
+     "title": "Gateway: embedded web server (uhttpd)",
+     "evidence": {
+      "vendor": "(embedded)",
+      "product": "uhttpd",
+      "signal": "server-header",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "Boa/",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "tentative",
+     "title": "Gateway: embedded web server (Boa)",
+     "evidence": {
+      "vendor": "(embedded)",
+      "product": "Boa",
+      "signal": "server-header",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "if",
+   "cond": "matches",
+   "binding": "resp",
+   "literal": "(mini_httpd|micro_httpd)",
+   "then": [
+    {
+     "op": "emit",
+     "kind": "router.identified",
+     "severity": "info",
+     "confidence": "tentative",
+     "title": "Gateway: embedded web server (mini/micro-httpd)",
+     "evidence": {
+      "vendor": "(embedded)",
+      "product": "mini/micro-httpd",
+      "signal": "server-header",
+      "transport": "http",
+      "port": {
+       "as": "int",
+       "value": "$target.port"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "op": "close",
+   "conn": "c"
+  }
+ ]
+}

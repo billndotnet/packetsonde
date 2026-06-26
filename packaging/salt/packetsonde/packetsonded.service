@@ -1,3 +1,8 @@
+{#- Rendered as a jinja template by the packetsonde salt state. The detect
+    track (fanotify file/exec monitoring) needs CAP_SYS_ADMIN for fanotify_init
+    and an unsandboxed /tmp view; both are granted ONLY when detect is enabled
+    so the default network-only agent stays least-privileged. -#}
+{%- set detect = salt['pillar.get']('packetsonde:detect_enabled', '0') == '1' %}
 [Unit]
 Description=packetsonde network observation agent
 After=network-online.target
@@ -8,13 +13,32 @@ Type=simple
 ExecStart=/usr/local/sbin/packetsonded -c /etc/packetsonded/packetsonded.toml
 Restart=on-failure
 RestartSec=5s
+{%- if detect %}
+# Detect track enabled. CAP_SYS_ADMIN is required by fanotify_init(2);
+# CAP_DAC_READ_SEARCH lets the agent place inode marks on sensitive files it
+# cannot otherwise read (e.g. /etc/shadow, /etc/sudoers) — without it those
+# marks fail with EACCES. Ambient caps survive the execl() into packetsonde-priv
+# (where fanotify runs).
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+{%- else %}
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+{%- endif %}
 User=packetsonded
 Group=packetsonded
 ReadOnlyPaths=/etc/packetsonded
-StateDirectory=packetsonded
-LogsDirectory=packetsonded
+# StateDirectory MUST match the [detect] sink/baseline dir (/var/lib/packetsonde)
+# so it stays writable under ProtectSystem=strict. (Previously 'packetsonded'
+# with a trailing 'd' — a different dir — left the sink read-only and silent.)
+StateDirectory=packetsonde
+LogsDirectory=packetsonde
+# Host-visible /run/packetsonde for the IPC socket. PrivateTmp does NOT
+# privatize /run, so the agent's Unix socket (/run/packetsonde/agent.sock) is
+# reachable by a CLI run from the host namespace (e.g. over salt). The old
+# /tmp/packetsonde-agent.sock was hidden by PrivateTmp.
+RuntimeDirectory=packetsonde
+RuntimeDirectoryMode=0755
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes

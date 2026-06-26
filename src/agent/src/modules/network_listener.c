@@ -55,6 +55,14 @@
  * and recursion depth across the agent fleet. */
 #define PS_NL_MAX_VIA_HOPS 8
 
+/* Bulk probe support (e.g.  over agent_proto): allow a large
+ * target list. Ceiling covers a /22 (1024 hosts) + kind + a couple of flags;
+ * the client chunks anything larger. argbuf holds that many IPv6-length
+ * tokens. Per-connection thread stack is the glibc 8 MB default, so these
+ * auto buffers are safe. */
+#define PS_NL_MAX_ARGS  1056
+#define PS_NL_ARGBUF_SZ (64 * 1024)
+
 struct nl_state {
     int                listen_fd;
     struct ps_at_ctx   tctx;
@@ -234,9 +242,16 @@ static const char *AUDIT_KIND_ALLOWLIST[] = {
     "haproxy", "proxmox", "nginx", "opnsense", NULL
 };
 
-static int kind_is_allowed(const char *kind) {
+/* Probe kinds the subprocess is allowed to invoke under the `probe` verb.
+ * Same threat model as AUDIT_KIND_ALLOWLIST: an authorized client must not
+ * be able to inject arbitrary verbs/tokens via the JSON 'kind' field. */
+static const char *PROBE_KIND_ALLOWLIST[] = { "tcp", "udp", "icmp", "sweep", "traceroute", NULL };
+
+/* Validate `kind` against the allowlist matching the request verb. */
+static int kind_is_allowed(const char *kind, bool is_probe) {
     if (!kind || !*kind) return 0;
-    for (const char **p = AUDIT_KIND_ALLOWLIST; *p; p++) {
+    const char **allow = is_probe ? PROBE_KIND_ALLOWLIST : AUDIT_KIND_ALLOWLIST;
+    for (const char **p = allow; *p; p++) {
         if (strcmp(*p, kind) == 0) return 1;
     }
     return 0;
@@ -261,6 +276,7 @@ static int arg_is_safe(const char *s) {
 }
 
 static void run_subprocess(struct nl_state *st,
+                           bool is_probe,
                            const char *audit_kind,
                            char **audit_argv, int audit_argc,
                            const char **via_chain, int via_count,
@@ -276,22 +292,25 @@ static void run_subprocess(struct nl_state *st,
         dup2(pfd[1], 1);
         int n = open("/dev/null", O_WRONLY); if (n >= 0) { dup2(n, 2); close(n); }
         close(pfd[0]); close(pfd[1]);
-        /* argv: packetsonde --jsonl [--via X]... audit <kind> <args...> NULL
+        /* argv: packetsonde --jsonl [--via X]... <verb> <kind> <args...> NULL
+         *
+         * verb is "probe" or "audit" depending on the request type.
          *
          * Multi-hop: each entry in via_chain adds a `--via NAME` pair so
          * the subprocess opens another --via session to the next hop.
          * The receiving agent there sees one fewer entry, and so on. */
-        const char *argv[32] = {0};
+        const char *verb = is_probe ? "probe" : "audit";
+        const char *argv[PS_NL_MAX_ARGS + 24] = {0};
         int i = 0;
         argv[i++] = st->packetsonde_bin;
         argv[i++] = "--jsonl";
-        for (int v = 0; v < via_count && i + 2 < 31; v++) {
+        for (int v = 0; v < via_count && i + 2 < (int)(sizeof(argv)/sizeof(argv[0])) - 1; v++) {
             argv[i++] = "--via";
             argv[i++] = via_chain[v];
         }
-        argv[i++] = "audit";
+        argv[i++] = verb;
         argv[i++] = audit_kind;
-        for (int j = 1; j < audit_argc && i < 31; j++) argv[i++] = audit_argv[j];
+        for (int j = 1; j < audit_argc && i < (int)(sizeof(argv)/sizeof(argv[0])) - 1; j++) argv[i++] = audit_argv[j];
         argv[i] = NULL;
         execvp(argv[0], (char *const *)argv);
         _exit(127);
@@ -477,27 +496,30 @@ static void *session_thread(void *arg) {
             dispatched = 1;
             continue;
         }
-        if (strcmp(type, "audit") != 0) continue;
+        bool is_probe = strcmp(type, "probe") == 0;
+        if (!is_probe && strcmp(type, "audit") != 0) continue;
         if (!saw_hello) {
-            const char *e = "{\"type\":\"error\",\"message\":\"audit before hello\"}";
+            const char *e = "{\"type\":\"error\",\"message\":\"request before hello\"}";
             ps_ap_write_frame(&io, e, strlen(e));
             goto out;
         }
-        /* Parse + dispatch. */
-        char argbuf[2048]; char *av[16] = {0}; int ac = 0;
+        /* Parse + dispatch. The request shape is identical for audit and
+         * probe ({type,kind,args[],via_chain[]?}); only the verb differs. */
+        char argbuf[PS_NL_ARGBUF_SZ]; char *av[PS_NL_MAX_ARGS] = {0}; int ac = 0;
         const char *via_chain[PS_NL_MAX_VIA_HOPS] = {0};
         int vc = 0;
-        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, 16, &ac,
+        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, PS_NL_MAX_ARGS, &ac,
                                 via_chain, PS_NL_MAX_VIA_HOPS, &vc) != 0 || ac < 1) {
-            const char *e = "{\"type\":\"error\",\"message\":\"bad audit request\"}";
+            const char *e = "{\"type\":\"error\",\"message\":\"bad request\"}";
             ps_ap_write_frame(&io, e, strlen(e));
             goto out;
         }
-        /* C-2 / M-3: allowlist the kind and validate each arg before
-         * handing them to execvp. JSON-content tricks (escape sequences,
-         * embedded NULs, key-order confusion) all bottom out here. */
-        if (!kind_is_allowed(av[0])) {
-            const char *e = "{\"type\":\"error\",\"message\":\"unknown audit kind\"}";
+        /* C-2 / M-3: allowlist the kind (against the allowlist matching the
+         * request verb) and validate each arg before handing them to execvp.
+         * JSON-content tricks (escape sequences, embedded NULs, key-order
+         * confusion) all bottom out here. */
+        if (!kind_is_allowed(av[0], is_probe)) {
+            const char *e = "{\"type\":\"error\",\"message\":\"unknown kind\"}";
             ps_ap_write_frame(&io, e, strlen(e));
             goto out;
         }
@@ -517,7 +539,7 @@ static void *session_thread(void *arg) {
                 goto out;
             }
         }
-        run_subprocess(st, av[0], av, ac, via_chain, vc, &io);
+        run_subprocess(st, is_probe, av[0], av, ac, via_chain, vc, &io);
         dispatched = 1;
     }
 

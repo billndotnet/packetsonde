@@ -34,6 +34,7 @@ static void test_payload_signs_and_verifies(void) {
 }
 
 #include <stdlib.h>
+#include <unistd.h>   /* mkdtemp: <stdlib.h> on glibc (POSIX), <unistd.h> on macOS/BSD */
 static void test_build_envelopes(void) {
     struct ps_keypair kp; ps_keystore_generate(&kp);
     char dir[] = "/tmp/ps_env_XXXXXX"; assert(mkdtemp(dir));

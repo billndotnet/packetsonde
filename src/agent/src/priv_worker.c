@@ -60,6 +60,8 @@ static int write_all(int fd, const uint8_t *buf, size_t n);
 /* Fanotify emit callback + thread (wired when PS_DETECT_ENABLED=1)    */
 /* ------------------------------------------------------------------ */
 
+static unsigned long g_activity_dropped = 0;
+
 static void emit_activity(const char *json, size_t len, void *ctx)
 {
     (void)ctx;
@@ -68,7 +70,18 @@ static void emit_activity(const char *json, size_t len, void *ctx)
     size_t n = ps_priv_encode_activity(frame, sizeof frame, json, len);
     if (!n) return;
     pthread_mutex_lock(&g_write_mu);
-    write_all(g_brain_fd, frame, n);
+    /* Activity records are lossy-tolerant. If the brain's socketpair is backed up
+     * (e.g. a busy filesystem mark out-running the brain), DROP this frame rather
+     * than block the fanotify thread on write_all() — a blocked emit stalls all
+     * capture. Only proceed when the pipe is writable now. Other frame types keep
+     * the blocking write_all for integrity. */
+    struct pollfd pw = { .fd = g_brain_fd, .events = POLLOUT, .revents = 0 };
+    if (poll(&pw, 1, 0) == 1 && (pw.revents & POLLOUT)) {
+        write_all(g_brain_fd, frame, n);
+    } else {
+        if ((++g_activity_dropped % 1000) == 1)
+            ps_warn("priv_worker: brain pipe backed up, dropped %lu activity record(s)", g_activity_dropped);
+    }
     pthread_mutex_unlock(&g_write_mu);
 }
 

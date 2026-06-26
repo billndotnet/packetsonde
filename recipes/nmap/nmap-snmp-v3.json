@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-snmp-v3","version":1,"kind_prefix":"nmap","default_port":161,
+ "description":"snmp v3 presence detection (USM engine-ID discovery, reportable msgFlags)",
+ "steps":[
+  {"op":"connect_udp","host":"$target.host","port":"$target.port","timeout_ms":4000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"303e020103301102040000162e020300ffe30401040201030410300e0400020100020100040004000400301404000400a00e02040000162e0201000201003000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":512,"max_bytes":512,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(0)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"snmp v3 (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"snmp","product":"","version":"","snmp_version":"3","banner":"snmp reply"}}]},
+  {"op":"close","conn":"c"}]}

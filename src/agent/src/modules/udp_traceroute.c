@@ -421,6 +421,7 @@ static void udp_publish_hop(ps_module_ctx_t *ctx,
     ps_json_object_begin(&j);
     ps_json_key_string(&j, "job_id",      job->job_id);
     ps_json_key_string(&j, "destination", job->destination);
+    ps_json_key_string(&j, "dest_ip",     job->dest_addr_str);
     ps_json_key_int   (&j, "hop_number",  hop_number);
     ps_json_key_string(&j, "address",     addr ? addr : "");
     ps_json_key_string(&j, "hostname",    hostname ? hostname : "");
@@ -452,6 +453,7 @@ static void udp_publish_complete(ps_module_ctx_t *ctx,
     ps_json_object_begin(&j);
     ps_json_key_string(&j, "job_id",              job->job_id);
     ps_json_key_string(&j, "destination",         job->destination);
+    ps_json_key_string(&j, "dest_ip",             job->dest_addr_str);
     ps_json_key_bool  (&j, "reached_destination", reached);
     ps_json_key_int   (&j, "hop_count",            hop_count);
     ps_json_object_end(&j);

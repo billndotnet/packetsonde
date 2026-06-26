@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 #include "build_config.h"
 #include "log.h"
@@ -25,6 +27,7 @@
 #include "iso8601.h"
 #include "priv_client.h"
 #include "activity_record.h"
+#include "capture_session.h"
 #include "provenance.h"
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
@@ -242,6 +245,114 @@ static int ctx_capture_remove(ps_module_ctx_t *ctx, const char *iface)
 }
 
 /* ------------------------------------------------------------------ */
+/* Bulk-ICMP sweep over channel/payload (sweep.request)                 */
+/* ------------------------------------------------------------------ */
+/* Tactical operator sweeps: fork `packetsonde --jsonl probe sweep <targets> -t <ms>`
+ * (the same subprocess the agent_proto path uses) and stream its JSONL probe.sweep.*
+ * findings to channel/payload clients on the "probe.sweep" channel. The ipc loop is
+ * single-threaded, so the subprocess pipe is drained NON-BLOCKING in the main loop
+ * (ps_sweep_drain) — it never blocks other clients or the passive listeners. */
+#define PS_SWEEP_MAX_SLOTS   4
+#define PS_SWEEP_MAX_TARGETS 1024   /* matches the client's SweepBatchSize ceiling */
+
+struct ps_sweep_slot {
+    pid_t  pid;          /* 0 = free */
+    int    fd;           /* read end of child stdout (non-blocking) */
+    char   buf[65536];   /* line-assembly buffer */
+    size_t len;
+};
+static struct ps_sweep_slot g_sweeps[PS_SWEEP_MAX_SLOTS];
+
+static const char *ps_sweep_bin(void)
+{
+    const char *b = getenv("PS_PACKETSONDE_BIN");
+    return (b && *b) ? b : "packetsonde";
+}
+
+/* Fork a sweep subprocess for the given targets/timeout. argv strings point into the
+ * caller's buffer; valid through the child's immediate execvp (fork copies the AS). */
+static int ps_sweep_launch(char **targets, int ntargets, int timeout_ms)
+{
+    if (ntargets < 1) return -1;
+    int slot = -1;
+    for (int i = 0; i < PS_SWEEP_MAX_SLOTS; i++) if (g_sweeps[i].pid == 0) { slot = i; break; }
+    if (slot < 0) { ps_warn("sweep: all %d slots busy, dropping request", PS_SWEEP_MAX_SLOTS); return -1; }
+
+    int pfd[2];
+    if (pipe(pfd) < 0) { ps_warn("sweep: pipe failed: %s", strerror(errno)); return -1; }
+
+    char ms_str[16];
+    snprintf(ms_str, sizeof(ms_str), "%d", timeout_ms);
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); ps_warn("sweep: fork failed"); return -1; }
+    if (pid == 0) {
+        dup2(pfd[1], 1);
+        int n = open("/dev/null", O_WRONLY); if (n >= 0) { dup2(n, 2); close(n); }
+        close(pfd[0]); close(pfd[1]);
+        const char *argv[PS_SWEEP_MAX_TARGETS + 8] = {0};
+        int i = 0;
+        argv[i++] = ps_sweep_bin();
+        argv[i++] = "--jsonl";
+        argv[i++] = "probe";
+        argv[i++] = "sweep";
+        for (int t = 0; t < ntargets && i < PS_SWEEP_MAX_TARGETS + 6; t++) argv[i++] = targets[t];
+        argv[i++] = "-t";
+        argv[i++] = ms_str;
+        argv[i]   = NULL;
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    close(pfd[1]);
+    int fl = fcntl(pfd[0], F_GETFL, 0); if (fl >= 0) fcntl(pfd[0], F_SETFL, fl | O_NONBLOCK);
+    g_sweeps[slot].pid = pid;
+    g_sweeps[slot].fd  = pfd[0];
+    g_sweeps[slot].len = 0;
+    ps_info("sweep: launched pid=%d targets=%d timeout=%dms (slot %d)", pid, ntargets, timeout_ms, slot);
+    return 0;
+}
+
+/* Drain active sweep subprocesses (called each main-loop tick). Each complete `{...}`
+ * JSONL line is broadcast verbatim as a "probe.sweep" finding to channel/payload clients. */
+static void ps_sweep_drain(void)
+{
+    for (int s = 0; s < PS_SWEEP_MAX_SLOTS; s++) {
+        struct ps_sweep_slot *sl = &g_sweeps[s];
+        if (sl->pid == 0) continue;
+        for (;;) {
+            if (sl->len >= sizeof(sl->buf) - 1) { sl->len = 0; } /* overlong line: drop (defensive) */
+            ssize_t r = read(sl->fd, sl->buf + sl->len, sizeof(sl->buf) - sl->len - 1);
+            if (r > 0) {
+                sl->len += (size_t)r;
+                size_t from = 0;
+                for (;;) {
+                    char *nl = memchr(sl->buf + from, '\n', sl->len - from);
+                    if (!nl) break;
+                    size_t line_len = (size_t)(nl - (sl->buf + from));
+                    if (line_len > 0 && sl->buf[from] == '{')
+                        ps_ipc_server_broadcast(&g_ipc, "probe.sweep", sl->buf + from, (uint32_t)line_len);
+                    from += line_len + 1;
+                }
+                if (from > 0) { memmove(sl->buf, sl->buf + from, sl->len - from); sl->len -= from; }
+                continue;
+            }
+            if (r == 0) { /* EOF */
+                int st; waitpid(sl->pid, &st, 0);
+                close(sl->fd);
+                ps_info("sweep: pid=%d complete (slot %d)", sl->pid, s);
+                memset(sl, 0, sizeof(*sl));
+                break;
+            }
+            if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            int st; waitpid(sl->pid, &st, WNOHANG);
+            close(sl->fd);
+            memset(sl, 0, sizeof(*sl));
+            break;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* IPC frame handler                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -419,6 +530,43 @@ static void on_ipc_frame(int client_fd, const char *channel,
 
         if (port_count == 0)
             ps_warn("main: probe.request contained no valid ports");
+    } else if (strcmp(channel, "sweep.request") == 0) {
+        /*
+         * Bulk-ICMP reachability sweep (tactical discovery/monitoring), distinct from
+         * the port-based probe.request and from single-ICMP traceroute.request.
+         * Payload: {"job_id":"..","targets":["ip",..],"timeout_ms":N}. We fork
+         * `packetsonde --jsonl probe sweep <targets> -t <ms>` and stream its
+         * probe.sweep.{up,down,unresolved,summary} findings back on "probe.sweep".
+         */
+        if (!payload || !payload[0]) { ps_warn("main: sweep.request had empty payload"); return; }
+        int timeout_ms = 2000;
+        const char *tp = strstr(payload, "\"timeout_ms\"");
+        if (tp) { int v = 0; if (sscanf(tp, "\"timeout_ms\" : %d", &v) == 1 ||
+                                  sscanf(tp, "\"timeout_ms\":%d", &v) == 1) timeout_ms = v; }
+
+        /* Parse the targets[] string array. Copy the payload so we can NUL-terminate
+         * each target in place and point argv at it (the child fork-copies it). */
+        char *copy = strdup(payload);
+        char *targets[PS_SWEEP_MAX_TARGETS];
+        int ntargets = 0;
+        if (copy) {
+            char *ts = strstr(copy, "\"targets\"");
+            if (ts) ts = strchr(ts, '[');
+            char *end = ts ? strchr(ts, ']') : NULL;
+            char *cur = ts ? ts + 1 : NULL;
+            while (cur && end && cur < end && ntargets < PS_SWEEP_MAX_TARGETS) {
+                char *q1 = memchr(cur, '"', (size_t)(end - cur));
+                if (!q1 || q1 >= end) break;
+                char *q2 = memchr(q1 + 1, '"', (size_t)(end - (q1 + 1)));
+                if (!q2 || q2 > end) break;
+                *q2 = '\0';
+                targets[ntargets++] = q1 + 1;
+                cur = q2 + 1;
+            }
+        }
+        if (ntargets > 0) ps_sweep_launch(targets, ntargets, timeout_ms);
+        else ps_warn("main: sweep.request had no targets");
+        free(copy);
     } else if (strcmp(channel, "flow.control") == 0) {
         /*
          * flow.control payload format:
@@ -682,6 +830,70 @@ static void on_ipc_frame(int client_fd, const char *channel,
             ps_warn("main: query.flows malloc failed");
         }
 
+    } else if (strcmp(channel, "detect.capture.control") == 0) {
+        /*
+         * detect.capture.control — start/stop a detect capture session.
+         * Payload: {"action":"start","session_id":"<id>"}
+         *          {"action":"stop"}
+         * Response channel: "response.capture"
+         *   {"ok":true,"session_id":"<id>","action":"<a>"} on success
+         *   {"ok":false,"error":"..."} on bad/missing fields
+         */
+        char action[16]      = {0};
+        char session_id[128] = {0};
+        const char *p;
+
+        if ((p = strstr(payload, "\"action\"")) != NULL) {
+            sscanf(p, "\"action\" : \"%15[^\"]\"", action);
+            if (action[0] == '\0')
+                sscanf(p, "\"action\":\"%15[^\"]\"", action);
+        }
+        if ((p = strstr(payload, "\"session_id\"")) != NULL) {
+            sscanf(p, "\"session_id\" : \"%127[^\"]\"", session_id);
+            if (session_id[0] == '\0')
+                sscanf(p, "\"session_id\":\"%127[^\"]\"", session_id);
+        }
+
+        char resp[256];
+        struct ps_json j;
+        ps_json_init(&j, resp, sizeof(resp));
+
+        if (strcmp(action, "start") == 0) {
+            if (session_id[0] == '\0') {
+                ps_warn("main: detect.capture.control start missing session_id");
+                ps_json_object_begin(&j);
+                ps_json_key_bool(&j,   "ok", false);
+                ps_json_key_string(&j, "error", "missing session_id");
+                ps_json_object_end(&j);
+            } else {
+                ps_capture_session_set(session_id);
+                ps_info("main: detect capture session started '%s'", session_id);
+                ps_json_object_begin(&j);
+                ps_json_key_bool(&j,   "ok", true);
+                ps_json_key_string(&j, "session_id", session_id);
+                ps_json_key_string(&j, "action", "start");
+                ps_json_object_end(&j);
+            }
+        } else if (strcmp(action, "stop") == 0) {
+            ps_capture_session_clear();
+            ps_info("main: detect capture session stopped");
+            ps_json_object_begin(&j);
+            ps_json_key_bool(&j,   "ok", true);
+            ps_json_key_string(&j, "action", "stop");
+            ps_json_object_end(&j);
+        } else {
+            ps_warn("main: detect.capture.control bad action '%s'", action);
+            ps_json_object_begin(&j);
+            ps_json_key_bool(&j,   "ok", false);
+            ps_json_key_string(&j, "error", "unknown action");
+            ps_json_object_end(&j);
+        }
+
+        int rlen = ps_json_finish(&j);
+        if (rlen > 0)
+            ps_ipc_server_send_to(&g_ipc, client_fd, "response.capture",
+                                  resp, (uint32_t)rlen);
+
     } else {
         ps_debug("main: unknown IPC channel '%s'", channel);
     }
@@ -707,6 +919,10 @@ static void activity_sink_append(const char *json, size_t len)
     fwrite(json, 1, len, f);
     fputc('\n', f);
     fclose(f);
+
+    /* Tee into the active detect capture session, if one is set. The helper
+     * no-ops when there is no session; it supplies its own trailing newline. */
+    ps_capture_session_append(json);
 }
 
 /* If an activity record carries a provenance trigger, build the
@@ -987,19 +1203,44 @@ int main(int argc, char **argv)
     ps_priv_client_init(&g_priv, priv_fd);
 
     /* --- Init IPC server --- */
+    /* Socket path resolution order: [agent] socket config, then the
+     * PS_AGENT_SOCKET env var, then a platform default. macOS has no /run
+     * (and can't mkdir it), so default to /tmp there -- which is also the UE
+     * client's default (/tmp/packetsonde-agent.sock). Linux keeps the systemd
+     * RuntimeDirectory path. */
     const char *sock_path = ps_config_get(&cfg, "agent", "socket");
-    if (!sock_path) sock_path = "/tmp/packetsonde-agent.sock";
+    if (!sock_path || !*sock_path) sock_path = getenv("PS_AGENT_SOCKET");
+    /* TCP-only deployments (UE client over mTLS TCP) disable the legacy Unix
+     * domain socket entirely -- it's dead surface there. PS_AGENT_NO_UNIX=1 (or
+     * socket="none") skips the bind; the agent then serves only the TCP listener. */
+    const char *no_unix = getenv("PS_AGENT_NO_UNIX");
+    int unix_disabled = (no_unix && (*no_unix == '1' || *no_unix == 't' ||
+                                     *no_unix == 'T' || *no_unix == 'y' || *no_unix == 'Y'));
+    if (unix_disabled) {
+        sock_path = NULL;
+    } else if (!sock_path || !*sock_path) {
+#if defined(__APPLE__)
+        sock_path = "/tmp/packetsonde-agent.sock";
+#else
+        sock_path = "/run/packetsonde/agent.sock";
+#endif
+    }
 
     if (ps_ipc_server_init(&g_ipc, sock_path, on_ipc_frame, NULL) < 0) {
-        ps_error("main: failed to init IPC server on '%s'", sock_path);
+        ps_error("main: failed to init IPC server on '%s'", sock_path ? sock_path : "(disabled)");
         return EXIT_FAILURE;
     }
-    ps_info("main: IPC server listening on '%s'", sock_path);
+    if (sock_path) ps_info("main: IPC server listening on '%s'", sock_path);
+    else           ps_info("main: Unix IPC socket disabled (TCP-only)");
 
     /* --- Optional TCP listener for remote clients --- */
     if (!listen_addr) {
         /* Check config file */
         listen_addr = ps_config_get(&cfg, "network", "listen");
+    }
+    if (!listen_addr || !*listen_addr) {
+        /* Env override (also set from [network] listen by ps_config_to_env). */
+        listen_addr = getenv("PS_NETWORK_LISTEN");
     }
     if (listen_addr && listen_addr[0] != '\0') {
         /* Parse addr:port */
@@ -1025,8 +1266,25 @@ int main(int argc, char **argv)
                 strncpy(tcp_addr, listen_addr, sizeof(tcp_addr) - 1);
             }
         }
-        if (tcp_port > 0) {
-            ps_ipc_server_add_tcp(&g_ipc, tcp_addr, tcp_port);
+        if (tcp_port > 0 && ps_ipc_server_add_tcp(&g_ipc, tcp_addr, tcp_port) == 0) {
+            const char *tls_on = getenv("PS_NETWORK_TLS");
+            int want_tls = tls_on && (*tls_on == '1' || *tls_on == 't' ||
+                                      *tls_on == 'T' || *tls_on == 'y' || *tls_on == 'Y');
+            if (want_tls) {
+                if (ps_ipc_server_enable_tls(&g_ipc) != 0) {
+                    /* Fail closed: never expose a plaintext control channel when
+                     * mTLS was requested. Drop the TCP listener; Unix IPC stays up. */
+                    ps_error("main: PS_NETWORK_TLS requested but mTLS setup failed; "
+                             "disabling TCP listener (Unix IPC still available)");
+                    close(g_ipc.tcp_listen_fd);
+                    g_ipc.tcp_listen_fd = -1;
+                } else {
+                    ps_info("main: TCP IPC requires mTLS");
+                }
+            } else {
+                ps_warn("main: TCP IPC listener is PLAINTEXT -- set [network] tls=1 "
+                        "(or PS_NETWORK_TLS=1) to require mTLS");
+            }
         }
     }
 
@@ -1157,6 +1415,9 @@ int main(int argc, char **argv)
     while (g_running) {
         /* Poll IPC clients (non-blocking) */
         ps_ipc_server_poll(&g_ipc, 0);
+
+        /* Drain any in-flight bulk-ICMP sweeps -> "probe.sweep" finding broadcasts */
+        ps_sweep_drain();
 
 #ifdef HAVE_HIREDIS
         /* Poll Redis for incoming messages (non-blocking) */

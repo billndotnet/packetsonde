@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-mssql","version":1,"kind_prefix":"nmap","default_port":1433,
+ "description":"mssql presence detection (TDS7 pre-login -> TDS response)",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"send","conn":"c","bytes":{"hex":"1201002f0000000000001a00060100200001020021000103002200040400260001ff09000000000000000000000000"}},
+  {"op":"recv","conn":"c","until":"n_bytes","n_bytes":128,"max_bytes":128,"out":"resp"},
+  {"op":"match","in":"resp","regex":"^(.)","captures":[{"name":"hit","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"hit","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"tentative",
+     "title":"mssql (presence)",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"mssql","product":"","version":"","banner":"mssql reply"}}]},
+  {"op":"close","conn":"c"}]}

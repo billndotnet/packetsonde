@@ -1,0 +1,5 @@
+# Built binaries (produced by build.sh / go build)
+/psctl
+/psctl.exe
+/psctl-macos
+*.exe

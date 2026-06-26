@@ -15,6 +15,7 @@ set(CLI_SOURCES
     verbs/collect.c
     verbs/recipe.c
     verbs/watch.c
+    verbs/detect.c
     verbs/inspect.c
     inspect/subject.c
     inspect/render_stream.c
@@ -25,6 +26,8 @@ set(CLI_SOURCES
     recipe/authoring.c
     ../agent/src/config.c
     remote/audit_via.c
+    remote/probe_via.c
+    remote/remote_session.c
     remote/ingest_via.c
     audit_loader.c
     registry/agents.c
@@ -56,7 +59,9 @@ set(CLI_SOURCES
     audit/opnsense.c
     audit/audit_common.c
     probe/tcp.c
+    probe/udp.c
     probe/icmp.c
+    probe/sweep.c
     probe/traceroute.c
     discover/neighbors.c
     discover/hosts.c
@@ -225,6 +230,30 @@ if(BUILD_TESTING)
     add_test(NAME test_via_fail_on
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_fail_on.sh)
     set_tests_properties(test_via_fail_on PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_via_probe_tcp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_tcp.sh)
+    set_tests_properties(test_via_probe_tcp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_probe_udp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_probe_udp.sh)
+    set_tests_properties(test_probe_udp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_via_probe_udp
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_udp.sh)
+    set_tests_properties(test_via_probe_udp PROPERTIES
+        SKIP_RETURN_CODE 77
+        ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+
+    add_test(NAME test_via_traceroute
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_traceroute.sh)
+    set_tests_properties(test_via_traceroute PROPERTIES
         SKIP_RETURN_CODE 77
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 

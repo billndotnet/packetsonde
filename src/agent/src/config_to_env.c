@@ -27,6 +27,12 @@ static const struct mapping MAPPINGS[] = {
     { "agent_listen", "max_clients",     "PS_AGENT_MAX_CLIENTS" },
     { "agent_listen", "packetsonde_bin", "PS_PACKETSONDE_BIN" },
 
+    /* network -- TCP IPC listener (channel/payload protocol), optional mTLS */
+    { "network", "listen",         "PS_NETWORK_LISTEN" },
+    { "network", "tls",            "PS_NETWORK_TLS" },
+    { "network", "key",            "PS_NETWORK_KEY" },
+    { "network", "authorized_dir", "PS_NETWORK_AUTHORIZED_DIR" },
+
     /* capture -- passive pcap interface selection */
     { "capture", "exclude", "PS_CAPTURE_EXCLUDE" },
 

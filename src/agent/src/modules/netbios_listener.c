@@ -475,8 +475,5 @@ const ps_module_t netbios_module = {
     .tick        = NULL,
 };
 
-__attribute__((constructor))
-static void register_netbios(void)
-{
-    ps_module_register(&netbios_module);
-}
+/* Self-registration via constructor was deleted -- main.c registers
+ * this module explicitly so the global registry exists by then. */

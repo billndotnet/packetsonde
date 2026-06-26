@@ -1,0 +1,13 @@
+{"schema":1,"name":"nmap-pop3","version":1,"kind_prefix":"nmap","default_port":110,
+ "description":"pop3 service/version detection",
+ "steps":[
+  {"op":"connect_tcp","host":"$target.host","port":"$target.port","timeout_ms":5000,"out":"c"},
+  {"op":"recv","conn":"c","until":"newline","max_bytes":256,"out":"banner"},
+  {"op":"match","in":"banner","regex":"(Dovecot|Courier|Cyrus|Zimbra|Microsoft Exchange)",
+   "captures":[{"name":"product","as":"string"}]},
+  {"op":"if","cond":"exists","binding":"product","then":[
+    {"op":"emit","kind":"nmap.service","severity":"info","confidence":"firm",
+     "title":"pop3 $product",
+     "evidence":{"port":{"as":"int","value":"$target.port"},
+       "service":"pop3","product":"$product","version":"","banner":"$banner"}}]},
+  {"op":"close","conn":"c"}]}

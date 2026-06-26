@@ -133,7 +133,7 @@ static int overwatch_init(ps_module_ctx_t *ctx) {
         mkdir(st->state_dir, 0700);   /* best-effort; ignore EEXIST */
     }
     ctx->userdata = st;
-    if (ctx->log) ctx->log(ctx, 6, "policy_overwatch: mode=%s",
+    if (ctx->log) ctx->log(ctx, 1 /* PS_LOG_INFO */, "policy_overwatch: mode=%s",
                            mode == 2 ? "learn" : mode == 1 ? "overwatch" : "off");
     return 0;
 }
