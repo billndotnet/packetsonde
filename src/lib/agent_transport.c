@@ -223,6 +223,28 @@ SSL *ps_at_accept_fd(struct ps_at_ctx *ctx, int client_fd) {
     return ssl;
 }
 
+/* Non-blocking handshake: bind an SSL to the (already non-blocking) fd in accept state, drive nothing
+ * yet. The caller polls the fd and calls ps_at_accept_drive() as it signals. On any failure the caller
+ * frees the SSL via ps_at_close (which closes the fd). */
+SSL *ps_at_accept_begin(struct ps_at_ctx *ctx, int client_fd) {
+    if (client_fd < 0) return NULL;
+    SSL *ssl = SSL_new(ctx->ssl_ctx);
+    if (!ssl) return NULL;          /* caller owns + closes client_fd */
+    SSL_set_fd(ssl, client_fd);
+    SSL_set_accept_state(ssl);
+    return ssl;
+}
+
+/* Advance the server handshake once. 1 = done + pinned ok, 0 = in progress (WANT_*), -1 = failed. */
+int ps_at_accept_drive(struct ps_at_ctx *ctx, SSL *ssl) {
+    if (!ssl) return -1;
+    int r = SSL_accept(ssl);
+    if (r == 1) return enforce_pin(ctx, ssl) == 0 ? 1 : -1;
+    int err = SSL_get_error(ssl, r);
+    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) return 0;
+    return -1;
+}
+
 void ps_at_close(SSL *ssl) {
     if (!ssl) return;
     int fd = SSL_get_fd(ssl);

@@ -43,6 +43,9 @@ struct ps_ipc_client {
     void *ssl;   /* SSL* when this client arrived over the mTLS TCP listener;
                   * NULL for plaintext (Unix socket or non-TLS TCP). Opaque
                   * here so the header stays free of <openssl/ssl.h>. */
+    int handshaking;   /* 1 while the mTLS server handshake is still in progress -- the poll loop drives
+                        * it incrementally so one client's handshake never blocks serving the others */
+    long hs_deadline;  /* time(NULL) by which the handshake must finish, else the slot is reclaimed */
 };
 
 typedef void (*ps_ipc_on_frame_fn)(int client_fd, const char *channel,

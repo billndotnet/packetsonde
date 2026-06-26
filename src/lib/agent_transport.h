@@ -77,6 +77,16 @@ SSL *ps_at_accept(struct ps_at_ctx *ctx, int listen_fd);
  * make sure enforce_pin() runs before any application data flows. */
 SSL *ps_at_accept_fd(struct ps_at_ctx *ctx, int client_fd);
 
+/* NON-BLOCKING server handshake (for a single-threaded poll loop serving many clients):
+ * ps_at_accept_begin creates an SSL in accept state bound to an already-NON-BLOCKING fd and returns
+ * immediately WITHOUT driving the handshake (NULL on alloc failure; caller closes the fd).
+ * ps_at_accept_drive advances the handshake once: returns 1 = handshake done AND pin enforced OK,
+ * 0 = still in progress (WANT_READ/WANT_WRITE -> call again when the fd signals), -1 = failed.
+ * This lets the accept loop hand off a new client's handshake to the poll loop so it never blocks
+ * serving the other clients. */
+SSL *ps_at_accept_begin(struct ps_at_ctx *ctx, int client_fd);
+int  ps_at_accept_drive(struct ps_at_ctx *ctx, SSL *ssl);
+
 /* Fingerprint of the connected peer's pubkey, written as sha256:<64 hex>.
  * Returns 0 on success. */
 int  ps_at_peer_fingerprint(SSL *ssl, char *out_hex, size_t out_cap);

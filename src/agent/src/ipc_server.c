@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include <dirent.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -588,8 +589,10 @@ static int ipc_accept_client(struct ps_ipc_server *srv)
     }
     for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
         if (srv->clients[i].fd < 0) {
-            srv->clients[i].fd  = cfd;
-            srv->clients[i].ssl = NULL;   /* Unix clients are plaintext */
+            srv->clients[i].fd          = cfd;
+            srv->clients[i].ssl         = NULL;   /* Unix clients are plaintext */
+            srv->clients[i].handshaking = 0;      /* no TLS handshake (clear any stale slot state) */
+            srv->clients[i].hs_deadline = 0;
             ps_frame_reader_init(&srv->clients[i].reader);
             srv->client_count++;
             ps_info("ipc_server: client connected (slot %d, fd %d)", i, cfd);
@@ -617,11 +620,24 @@ static void ipc_drop_client(struct ps_ipc_server *srv, int slot)
         close(srv->clients[slot].fd);
     }
     srv->clients[slot].fd = -1;
+    srv->clients[slot].handshaking = 0;
     srv->client_count--;
 }
 
 int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
 {
+    /* Reap any handshake past its deadline (a stalled/half-open peer holding a slot). Runs every poll
+     * call -- even idle ones (timeout 0 -> rc 0 returns early) -- so a stuck handshake can't leak a slot. */
+    {
+        long now = (long)time(NULL);
+        for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
+            if (srv->clients[i].fd >= 0 && srv->clients[i].handshaking && now >= srv->clients[i].hs_deadline) {
+                ps_warn("ipc_server: TLS handshake timed out (slot %d)", i);
+                ipc_drop_client(srv, i);
+            }
+        }
+    }
+
     /* Build pollfd array: listen fds first, then active clients */
     struct pollfd fds[PS_IPC_MAX_CLIENTS + 2]; /* +2 for unix + tcp listeners */
     int slot_map[PS_IPC_MAX_CLIENTS];
@@ -650,7 +666,8 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
         if (srv->clients[i].fd >= 0) {
             slot_map[nfds - client_start_idx] = i;
             fds[nfds].fd       = srv->clients[i].fd;
-            fds[nfds].events   = POLLIN;
+            /* A handshaking client may be waiting to WRITE a handshake record, so poll both ways. */
+            fds[nfds].events   = srv->clients[i].handshaking ? (short)(POLLIN | POLLOUT) : (short)POLLIN;
             fds[nfds].revents  = 0;
             nfds++;
         }
@@ -669,54 +686,40 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
         ipc_accept_client(srv);
     }
 
-    /* Check TCP listen_fd for new connections */
+    /* Check TCP listen_fd for new connections. The mTLS handshake is NON-BLOCKING from accept: set the
+     * fd non-blocking, BEGIN the handshake, and add the client in a HANDSHAKING state. The poll loop
+     * below drives it (ps_at_accept_drive) as the fd signals, so one client's slow handshake never
+     * freezes the single-threaded loop -- the agent keeps serving every other client meanwhile. */
     if (tcp_poll_idx >= 0 && (fds[tcp_poll_idx].revents & POLLIN)) {
         int cfd = accept(srv->tcp_listen_fd, NULL, NULL);
         if (cfd >= 0) {
-            void *ssl = NULL;
-            int ok = 1;
-
             if (srv->client_count >= PS_IPC_MAX_CLIENTS) {
                 ps_warn("ipc_server: max clients, rejecting TCP connection");
                 close(cfd);
-                ok = 0;
-            } else if (srv->tls) {
-                /* Bound the handshake + subsequent SSL_read/write so a stalled
-                 * peer can't freeze the single-threaded poll loop. */
-                struct timeval tv = { PS_IPC_TLS_IO_TIMEOUT_SEC, 0 };
-                setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-                setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-                /* ps_at_accept_fd runs the server handshake and closes cfd on
-                 * failure. expected_fpr is empty in ctx, so any well-formed
-                 * peer passes here; we enforce the allowlist next. */
-                SSL *s = ps_at_accept_fd(&srv->tls->ctx, cfd);
-                if (!s) {
-                    ps_warn("ipc_server: TCP TLS handshake failed");
-                    ok = 0;  /* cfd already closed by ps_at_accept_fd */
-                } else if (!ipc_tls_is_authorized(srv->tls, s)) {
-                    ps_warn("ipc_server: rejected TCP client; pubkey not authorized");
-                    ps_at_close(s);  /* close_notify + free + close(fd) */
-                    ok = 0;
-                } else {
-                    ssl = s;
-                }
-            }
-
-            if (ok) {
-                /* Non-blocking from here on (the handshake above ran blocking,
-                 * bounded by SO_*TIMEO). A full send buffer now returns EAGAIN so
-                 * a broadcast can't block the whole agent on one slow client. */
+            } else {
                 int fl = fcntl(cfd, F_GETFL, 0);
                 if (fl >= 0) fcntl(cfd, F_SETFL, fl | O_NONBLOCK);
-                for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
-                    if (srv->clients[i].fd < 0) {
-                        srv->clients[i].fd  = cfd;
-                        srv->clients[i].ssl = ssl;
-                        ps_frame_reader_init(&srv->clients[i].reader);
-                        srv->client_count++;
-                        ps_info("ipc_server: TCP client connected (slot %d, fd %d%s)",
-                                i, cfd, ssl ? ", mTLS" : "");
-                        break;
+
+                void *ssl = NULL;
+                int handshaking = 0;
+                if (srv->tls) {
+                    SSL *s = ps_at_accept_begin(&srv->tls->ctx, cfd);
+                    if (!s) { ps_warn("ipc_server: ps_at_accept_begin failed"); close(cfd); cfd = -1; }
+                    else { ssl = s; handshaking = 1; }
+                }
+                if (cfd >= 0) {
+                    for (int i = 0; i < PS_IPC_MAX_CLIENTS; i++) {
+                        if (srv->clients[i].fd < 0) {
+                            srv->clients[i].fd          = cfd;
+                            srv->clients[i].ssl         = ssl;
+                            srv->clients[i].handshaking = handshaking;
+                            srv->clients[i].hs_deadline = (long)time(NULL) + PS_IPC_TLS_IO_TIMEOUT_SEC;
+                            ps_frame_reader_init(&srv->clients[i].reader);
+                            srv->client_count++;
+                            ps_info("ipc_server: TCP client %s (slot %d, fd %d%s)",
+                                    handshaking ? "handshaking" : "connected", i, cfd, ssl ? ", mTLS" : "");
+                            break;
+                        }
                     }
                 }
             }
@@ -735,6 +738,30 @@ int ps_ipc_server_poll(struct ps_ipc_server *srv, int timeout_ms)
         short re = fds[pfd_idx].revents;
         if (re & (POLLHUP | POLLERR)) {
             ipc_drop_client(srv, slot);
+            continue;
+        }
+
+        /* Drive an in-progress mTLS handshake incrementally (never read app data while handshaking).
+         * One client advancing its handshake here does not block the others -- each gets its turn as
+         * its fd signals. On completion, enforce the authorized-pubkey allowlist before going live. */
+        if (c->handshaking) {
+            if (re & (POLLIN | POLLOUT)) {
+                int hr = ps_at_accept_drive(&srv->tls->ctx, (SSL *)c->ssl);
+                if (hr == 1) {
+                    if (!ipc_tls_is_authorized(srv->tls, (SSL *)c->ssl)) {
+                        ps_warn("ipc_server: rejected TCP client; pubkey not authorized (slot %d)", slot);
+                        ipc_drop_client(srv, slot);
+                        continue;
+                    }
+                    c->handshaking = 0;
+                    ps_info("ipc_server: TCP client connected (slot %d, fd %d, mTLS)", slot, c->fd);
+                } else if (hr < 0) {
+                    ps_warn("ipc_server: TCP TLS handshake failed (slot %d)", slot);
+                    ipc_drop_client(srv, slot);
+                    continue;
+                }
+                /* hr == 0: still in progress -- wait for the next signal */
+            }
             continue;
         }
 
