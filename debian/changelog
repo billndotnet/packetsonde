@@ -1,3 +1,11 @@
+packetsonde (0.1.8) unstable; urgency=medium
+
+  * deb: ship kernelsonded as a second disabled systemd unit alongside
+    packetsonded; create the kernelsonded system user in postinst and
+    chown /etc/kernelsonded/keys; stop both units on prerm remove.
+
+ -- Bill Nash <billn@billn.net>  Sat, 27 Jun 2026 00:20:43 +0000
+
 packetsonde (0.1.7) unstable; urgency=medium
 
   * Track PS_VERSION_STR (0.1.7) after merging main; keeps the package

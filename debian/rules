@@ -13,9 +13,12 @@ override_dh_auto_test:
 	# on a Debug build in CI.
 
 override_dh_installsystemd:
-	# Generate the packaged unit from the canonical one, rewriting the
+	# Generate the packaged units from the canonical ones, rewriting the
 	# from-source ExecStart (/usr/local/sbin) to the FHS path (/usr/sbin).
-	# Single checked-in unit file; no duplicate to drift.
+	# Single checked-in unit file per daemon; no duplicate to drift.
 	sed 's#/usr/local/sbin/packetsonded#/usr/sbin/packetsonded#' \
 	    packaging/packetsonded.service > debian/packetsonded.service
+	sed 's#/usr/local/sbin/kernelsonded#/usr/sbin/kernelsonded#' \
+	    packaging/kernelsonded.service > debian/kernelsonded.service
 	dh_installsystemd --name=packetsonded --no-enable --no-start
+	dh_installsystemd --name=kernelsonded --no-enable --no-start
