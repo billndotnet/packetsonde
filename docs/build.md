@@ -150,6 +150,69 @@ prints (activate config, generate key, authorize a CLI pubkey,
 `build-deb.sh` refuses to build if `debian/changelog`'s version differs from
 `PS_VERSION_STR` in `CMakeLists.txt`; bump both in lockstep (`dch -v <ver>`).
 
+### kernelsonde (host detection agent)
+
+`kernelsonded` is the Linux host behavioral-detection daemon: fanotify
+file/exec/socket observation, declared-policy overwatch, learned baselines,
+capture sessions, and file provenance. It was previously the `[detect]` track
+embedded in `packetsonded`; it is now its own agent with its own capability
+set, system user, and configuration directory.
+
+The `.deb` installs `kernelsonded` **alongside `packetsonded` but disabled by
+default.** Capability isolation is the motivating split: `packetsonded` retains
+only `CAP_NET_RAW` + `CAP_NET_ADMIN` for packet capture; `kernelsonded`
+requires `CAP_SYS_ADMIN` + `CAP_DAC_READ_SEARCH` for `fanotify` and `/proc`
+traversal.
+
+Runtime directories:
+
+- `/etc/kernelsonded/` — configuration and keys (`kernelsonded.toml`, `keys/authorized/`)
+- `/run/kernelsonde/agent.sock` — IPC socket (CLI ↔ daemon)
+- `/var/lib/kernelsonde` — state: baselines, sandbox-learn envelopes, activity log
+
+The daemon runs as the `kernelsonded` system user.
+
+**Enabling kernelsonded:**
+
+```bash
+sudo cp /etc/kernelsonded/kernelsonded.toml.example /etc/kernelsonded/kernelsonded.toml
+sudo PS_KEY_DIR=/etc/kernelsonded/keys packetsonde key generate --name agent
+sudo packetsonde register …   # enrolls kernelsonded as its OWN agent in central
+sudo systemctl enable --now kernelsonded
+```
+
+`packetsonde register` here enrolls `kernelsonded` under its own identity — it
+is a distinct central agent from `packetsonded` on the same host.
+
+**CLI verbs:** `packetsonde watch`, `inspect`, `baseline`, and `sandbox-suggest`
+default to `/var/lib/kernelsonde/…`; `packetsonde detect` defaults to
+`/run/kernelsonde/agent.sock`. All paths are overridable via their flags. The
+verbs themselves are unchanged.
+
+**`PS_AGENT_SOCKET` caveat:** both daemons honour this environment variable. On
+a host running both `packetsonded` and `kernelsonded`, do **not** export a
+single `PS_AGENT_SOCKET` globally — it would redirect both agents to the same
+socket. Rely on the per-daemon defaults, or set `PS_AGENT_SOCKET` per-unit in a
+systemd drop-in.
+
+**Migration — hosts that ran `packetsonded` with `[detect]`:**
+
+1. Move the `[detect]` block from `/etc/packetsonded/packetsonded.toml` to
+   `/etc/kernelsonded/kernelsonded.toml`.
+2. Re-point `baseline_state_dir`, `learn_state_dir`, and `sink` to paths under
+   `/var/lib/kernelsonde/`, **or** copy existing state:
+   ```bash
+   sudo cp -r /var/lib/packetsonde/baseline      /var/lib/kernelsonde/
+   sudo cp -r /var/lib/packetsonde/sandbox-learn  /var/lib/kernelsonde/
+   sudo cp    /var/lib/packetsonde/activity.jsonl /var/lib/kernelsonde/
+   ```
+3. Enable and start `kernelsonded` (see above).
+4. `packetsonded` now **warns and ignores** a stale `[detect]` block; remove it
+   when convenient.
+
+The salt pillar split (per-host `kernelsonded` pillars, fleet-wide rollout) is
+tracked in the fleet-deploy plan.
+
 ## Linux (RHEL / Fedora / Alma / Rocky)
 
 ```bash
