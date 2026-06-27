@@ -1,0 +1,50 @@
+[Unit]
+Description=kernelsonde host behavioral-detection agent
+Documentation=https://github.com/billndotnet/packetsonde
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/kernelsonded -c /etc/kernelsonded/kernelsonded.toml
+Restart=on-failure
+RestartSec=5s
+
+# Capabilities: fanotify_init requires CAP_SYS_ADMIN; inode marks on
+# unreadable sensitive paths (e.g. /etc/shadow) require CAP_DAC_READ_SEARCH.
+# CAP_NET_RAW + CAP_NET_ADMIN are retained for sock_snapshot and any
+# pcap-adjacent proc enrichment paths.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+
+# Run as an unprivileged user with the right capabilities granted by
+# systemd. Create with: useradd --system --no-create-home --shell /usr/sbin/nologin kernelsonded
+User=kernelsonded
+Group=kernelsonded
+
+# Filesystem isolation. The agent only needs read access to its config
+# and key dirs, plus write to its state/log dirs.
+ReadOnlyPaths=/etc/kernelsonded
+# Must match the sink/baseline dir (/var/lib/kernelsonde) so it stays
+# writable under ProtectSystem=strict.
+StateDirectory=kernelsonde
+LogsDirectory=kernelsonde
+# Host-visible /run/kernelsonde for the IPC socket. PrivateTmp does NOT
+# privatize /run, so the agent's Unix socket (/run/kernelsonde/agent.sock) is
+# reachable by a CLI run from the host namespace (e.g. over salt).
+RuntimeDirectory=kernelsonde
+RuntimeDirectoryMode=0755
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

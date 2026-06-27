@@ -27,3 +27,22 @@ target_include_directories(kernelsonded PRIVATE
     ${CMAKE_SOURCE_DIR}/src/agent/src
     ${CMAKE_SOURCE_DIR}/src/agent/include)
 target_link_libraries(kernelsonded PRIVATE packetsonde_daemon packetsonde_lib pthread)
+
+# Install rules (mirror src/agent's pattern, gated by PS_PACKAGED_BUILD).
+# PS_PACKAGED_BUILD is defined in src/agent/CMakeLists.txt (processed first by
+# the root); it's a cache variable and therefore visible here.
+include(GNUInstallDirs)
+install(TARGETS kernelsonded kernelsonde-priv RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
+
+set(KS_CONFIG_DIR "/etc/kernelsonded" CACHE PATH "kernelsonded config + keys dir")
+install(DIRECTORY DESTINATION ${KS_CONFIG_DIR})
+install(DIRECTORY DESTINATION ${KS_CONFIG_DIR}/keys/authorized)
+install(FILES ${CMAKE_SOURCE_DIR}/packaging/kernelsonded.toml
+        DESTINATION ${KS_CONFIG_DIR} RENAME kernelsonded.toml.example)
+
+# systemd unit (Linux, from-source only). Package builds install the unit via
+# dh_installsystemd instead (see debian/rules).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT PS_PACKAGED_BUILD)
+    install(FILES ${CMAKE_SOURCE_DIR}/packaging/kernelsonded.service
+            DESTINATION /etc/systemd/system)
+endif()
