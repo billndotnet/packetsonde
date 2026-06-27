@@ -12,7 +12,7 @@
  * With --follow/-f: after reaching EOF, keep polling for new lines (tail -f style). */
 int ps_verb_watch_run(int argc, char **argv, const struct ps_args *opts) {
     (void)opts;
-    const char *src = "/var/lib/packetsonde/activity.jsonl";
+    const char *src = "/var/lib/kernelsonde/activity.jsonl";
     const char *path_filter = NULL, *comm_filter = NULL;
     int follow = 0;
     static struct option lo[] = {

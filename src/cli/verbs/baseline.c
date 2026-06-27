@@ -39,7 +39,7 @@ static int save_key(const char *dir, const char *slug, const char *file, const c
 
 int ps_verb_baseline_run(int argc, char **argv, const struct ps_args *opts) {
     (void)opts;
-    const char *dir = "/var/lib/packetsonde/baseline";
+    const char *dir = "/var/lib/kernelsonde/baseline";
     const char *exe = NULL, *sub = NULL, *entry = NULL, *form = "exact";
     int threshold = 3;
     for (int i = 1; i < argc; i++) {
