@@ -11,6 +11,7 @@ set -e
 if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
     if [ -d /run/systemd/system ]; then
         deb-systemd-invoke stop 'packetsonded.service' >/dev/null || true
+        deb-systemd-invoke stop 'kernelsonded.service' >/dev/null || true
     fi
 fi
 

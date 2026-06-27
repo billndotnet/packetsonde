@@ -11,7 +11,7 @@
  * Manual, order-independent arg scan (this CLI's getopt does not permute). */
 int ps_verb_sandbox_suggest_run(int argc, char **argv, const struct ps_args *opts) {
     (void)opts;
-    const char *dir = "/var/lib/packetsonde/sandbox-learn";
+    const char *dir = "/var/lib/kernelsonde/sandbox-learn";
     int threshold = 3, reset = 0;
     const char *unit = NULL;
     for (int i = 1; i < argc; i++) {

@@ -71,6 +71,10 @@ provenance_enabled`), suspicious writes/execs (droppers to `/tmp`, persistence
 writes, execs from transient dirs) are reported to central as
 `detect.file_provenance` findings answering "who wrote this, and from where?".
 
+> **kernelsonde:** This track now runs as a separate `kernelsonded` agent (same
+> unprivileged + ambient-caps model; same CLI verbs). See
+> [docs/build.md](docs/build.md) for enable steps and migration notes.
+
 ## Quick start
 
 ```bash

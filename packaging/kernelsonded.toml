@@ -1,0 +1,35 @@
+# kernelsonded -- example configuration.
+#
+# Sections map to env vars (see src/agent/src/config_to_env.c).
+# Pre-existing PS_* env vars always win over file values, so operator
+# overrides at launch take precedence.
+
+# ---- agent ------------------------------------------------------------
+[agent]
+user   = "kernelsonded"
+# socket = "/run/kernelsonde/agent.sock"   # default; uncomment to override
+
+# ---- detect -- process/file/socket collection (Linux) -----------------
+# Process/file/socket collection, policy overwatch, and learned per-exe
+# baseline (Linux). Off by default. See the detection-track overview in
+# README.md.
+[detect]
+enabled        = "0"
+# host baseline default; SERVICE ROLE template adds drop zones + role data dirs, e.g.
+#   watch_paths = "/etc,/home,/tmp,/dev/shm,/var/tmp,/var/www"
+watch_paths    = "/etc,/home"   # comma-separated; configurable + role-templated
+suppress_paths = ""             # coarse read-only suppression prefixes ("comm:/prefix" allowed)
+max_depth      = "16"           # ancestry-walk cap
+max_events_ps  = "2000"         # global events/sec cap (drop + count over)
+# sink = "/var/lib/kernelsonde/activity.jsonl"   # where collected records are written
+policy_mode      = "off"     # off | overwatch | learn
+policy_cache_ttl = "300"     # overwatch: per-unit systemctl-show cache seconds
+# learn (dev/staging): accumulate per-unit envelopes for `packetsonde sandbox-suggest <unit>`
+learn_state_dir  = "/var/lib/kernelsonde/sandbox-learn"
+rollup_threshold = "3"       # synth: distinct files/dir before rolling up to the dir rule
+# SP3 learned per-exe baseline (hybrid learn+enforce; runs alongside policy_mode via the ring fan-out)
+baseline_mode      = "off"     # off | on
+baseline_state_dir = "/var/lib/kernelsonde/baseline"
+baseline_reload    = "10"      # seconds between baseline/denials reloads (reserved; v1 loads per-record)
+# A mount-wide FAN_OPEN_EXEC mark is always set when enabled=1 (independent of
+# watch_paths) so any execve is caught — see the spec Detection-boundary section.

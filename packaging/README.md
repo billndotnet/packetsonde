@@ -6,6 +6,8 @@ Per-platform deployment artifacts for `packetsonded`.
 |-----------------------------------|----------|----------------------------------|
 | `packetsonded.toml`               | all      | example agent config             |
 | `packetsonded.service`            | Linux    | systemd unit (user `packetsonded`)|
+| `kernelsonded.service`            | Linux    | systemd unit (user `kernelsonded`)|
+| `kernelsonded.toml`               | Linux    | example kernelsonded config       |
 | `net.billn.packetsonded.plist`    | macOS    | launchd plist (root-owned)       |
 | `Formula/packetsonde.rb`          | macOS    | Homebrew formula                 |
 | `../debian/`                      | Linux    | Debian source package (debhelper) |

@@ -23,10 +23,23 @@ case "$1" in
             chmod 0750 /etc/packetsonded/keys
         fi
 
+        # Unprivileged service account for the kernel-observation daemon.
+        if ! getent passwd kernelsonded >/dev/null; then
+            adduser --system --group --no-create-home \
+                    --home /nonexistent \
+                    --shell /usr/sbin/nologin kernelsonded
+        fi
+        if [ -d /etc/kernelsonded/keys ]; then
+            chown kernelsonded:kernelsonded \
+                  /etc/kernelsonded/keys \
+                  /etc/kernelsonded/keys/authorized
+            chmod 0750 /etc/kernelsonded/keys
+        fi
+
         if [ -z "${2:-}" ]; then
             echo ""
-            echo "=== packetsonde installed. The agent is NOT started. ==="
-            echo "Next steps:"
+            echo "=== packetsonde installed. Neither agent is started. ==="
+            echo "Next steps (packetsonded):"
             echo "  1. sudo cp /etc/packetsonded/packetsonded.toml.example \\"
             echo "             /etc/packetsonded/packetsonded.toml"
             echo "  2. sudo PS_KEY_DIR=/etc/packetsonded/keys \\"
@@ -34,6 +47,11 @@ case "$1" in
             echo "  3. sudo cp ~/.config/packetsonde/keys/default.pub \\"
             echo "             /etc/packetsonded/keys/authorized/"
             echo "  4. sudo systemctl enable --now packetsonded"
+            echo ""
+            echo "Next steps (kernelsonded):"
+            echo "  1. sudo cp /etc/kernelsonded/kernelsonded.toml.example \\"
+            echo "             /etc/kernelsonded/kernelsonded.toml"
+            echo "  2. sudo systemctl enable --now kernelsonded"
             echo ""
         fi
         ;;
