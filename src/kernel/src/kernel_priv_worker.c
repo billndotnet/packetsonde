@@ -126,6 +126,8 @@ static void drain_loop(void)
             break;
         }
 
+        if (pfd.revents & (POLLERR | POLLNVAL)) break;
+
         if (pfd.revents & POLLIN) {
             struct ps_priv_msg hdr;
             if (read_all(g_brain_fd, (uint8_t *)&hdr, sizeof(hdr)) < 0) {
@@ -194,7 +196,11 @@ int main(int argc, char **argv)
         fan_cfg.prov.enabled         = prov_en ? atoi(prov_en) : 0;
         fan_cfg.prov.transient_paths = getenv("PS_DETECT_PROVENANCE_TRANSIENT_PATHS");
         fan_cfg.prov.sensitive_paths = getenv("PS_DETECT_PROVENANCE_SENSITIVE_PATHS");
-        pthread_t t; pthread_create(&t, NULL, fan_thread, &fan_cfg);
+        pthread_t t;
+        if (pthread_create(&t, NULL, fan_thread, &fan_cfg) != 0) {
+            ps_error("kernel_priv_worker: failed to create fan thread: %s", strerror(errno));
+            return EXIT_FAILURE;
+        }
         pthread_detach(t);
     }
 

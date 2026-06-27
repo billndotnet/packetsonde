@@ -193,7 +193,7 @@ verbs themselves are unchanged.
 a host running both `packetsonded` and `kernelsonded`, do **not** export a
 single `PS_AGENT_SOCKET` globally — it would redirect both agents to the same
 socket. Rely on the per-daemon defaults, or set `PS_AGENT_SOCKET` per-unit in a
-systemd drop-in.
+systemd drop-in. `PS_KEY_DIR` is the same class of shared env var: a globally-exported `PS_KEY_DIR` would redirect `kernelsonded`'s identity away from `/etc/kernelsonded/keys` (under systemd each unit gets a clean per-unit environment, so this only affects manual or CLI-shared shells).
 
 **Migration — hosts that ran `packetsonded` with `[detect]`:**
 

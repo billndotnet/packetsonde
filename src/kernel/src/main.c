@@ -90,14 +90,21 @@ static int ctx_publish(ps_module_ctx_t *ctx,
 
     int rc = ps_ipc_server_broadcast(&g_ipc, channel, json, json_len);
 
-    /* Queue detect findings for continuous shipping to central. */
-    char ts_iso[24];
-    if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof(ts_iso)) > 0) {
-        char event_json[PS_OBS_ITEM_MAX];
-        size_t evlen = ps_obs_build_event(event_json, sizeof(event_json),
-                                          channel, ts_iso, json, json_len);
-        if (evlen > 0)
-            ps_obs_queue_push(event_json, evlen);
+    /* Queue detect findings for continuous shipping to central.
+     * baseline.candidate is a high-volume learn-mode signal that fires on
+     * every novel path/dest/parent — it is a CLI-local approve/deny workflow
+     * item, not a central finding.  Exclude it to prevent flooding the
+     * 256-deep drop-oldest obs queue and evicting real baseline.anomaly /
+     * policy.sandbox.violation findings before they ship. */
+    if (strcmp(channel, "baseline.candidate") != 0) {
+        char ts_iso[24];
+        if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof(ts_iso)) > 0) {
+            char event_json[PS_OBS_ITEM_MAX];
+            size_t evlen = ps_obs_build_event(event_json, sizeof(event_json),
+                                              channel, ts_iso, json, json_len);
+            if (evlen > 0)
+                ps_obs_queue_push(event_json, evlen);
+        }
     }
 
     return rc;
