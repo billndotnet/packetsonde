@@ -23,12 +23,8 @@
 #include "module.h"
 #include "host_table.h"
 #include "obs_queue.h"
-#include "activity_ring.h"
 #include "iso8601.h"
 #include "priv_client.h"
-#include "activity_record.h"
-#include "capture_session.h"
-#include "provenance.h"
 #include "platform/platform.h"
 #include "capture/capture_handle.h"
 #include "capture/protocol_demux.h"
@@ -830,128 +826,9 @@ static void on_ipc_frame(int client_fd, const char *channel,
             ps_warn("main: query.flows malloc failed");
         }
 
-    } else if (strcmp(channel, "detect.capture.control") == 0) {
-        /*
-         * detect.capture.control — start/stop a detect capture session.
-         * Payload: {"action":"start","session_id":"<id>"}
-         *          {"action":"stop"}
-         * Response channel: "response.capture"
-         *   {"ok":true,"session_id":"<id>","action":"<a>"} on success
-         *   {"ok":false,"error":"..."} on bad/missing fields
-         */
-        char action[16]      = {0};
-        char session_id[128] = {0};
-        const char *p;
-
-        if ((p = strstr(payload, "\"action\"")) != NULL) {
-            sscanf(p, "\"action\" : \"%15[^\"]\"", action);
-            if (action[0] == '\0')
-                sscanf(p, "\"action\":\"%15[^\"]\"", action);
-        }
-        if ((p = strstr(payload, "\"session_id\"")) != NULL) {
-            sscanf(p, "\"session_id\" : \"%127[^\"]\"", session_id);
-            if (session_id[0] == '\0')
-                sscanf(p, "\"session_id\":\"%127[^\"]\"", session_id);
-        }
-
-        char resp[256];
-        struct ps_json j;
-        ps_json_init(&j, resp, sizeof(resp));
-
-        if (strcmp(action, "start") == 0) {
-            if (session_id[0] == '\0') {
-                ps_warn("main: detect.capture.control start missing session_id");
-                ps_json_object_begin(&j);
-                ps_json_key_bool(&j,   "ok", false);
-                ps_json_key_string(&j, "error", "missing session_id");
-                ps_json_object_end(&j);
-            } else {
-                ps_capture_session_set(session_id);
-                ps_info("main: detect capture session started '%s'", session_id);
-                ps_json_object_begin(&j);
-                ps_json_key_bool(&j,   "ok", true);
-                ps_json_key_string(&j, "session_id", session_id);
-                ps_json_key_string(&j, "action", "start");
-                ps_json_object_end(&j);
-            }
-        } else if (strcmp(action, "stop") == 0) {
-            ps_capture_session_clear();
-            ps_info("main: detect capture session stopped");
-            ps_json_object_begin(&j);
-            ps_json_key_bool(&j,   "ok", true);
-            ps_json_key_string(&j, "action", "stop");
-            ps_json_object_end(&j);
-        } else {
-            ps_warn("main: detect.capture.control bad action '%s'", action);
-            ps_json_object_begin(&j);
-            ps_json_key_bool(&j,   "ok", false);
-            ps_json_key_string(&j, "error", "unknown action");
-            ps_json_object_end(&j);
-        }
-
-        int rlen = ps_json_finish(&j);
-        if (rlen > 0)
-            ps_ipc_server_send_to(&g_ipc, client_fd, "response.capture",
-                                  resp, (uint32_t)rlen);
-
     } else {
         ps_debug("main: unknown IPC channel '%s'", channel);
     }
-}
-
-/* ------------------------------------------------------------------ */
-/* Activity JSONL sink                                                  */
-/* ------------------------------------------------------------------ */
-
-/* Append a single activity record (JSON bytes + newline) to the sink
- * file, if PS_DETECT_ENABLED is set.  Silently skips on open failure
- * (e.g. directory not yet created) — never crashes, never spams logs. */
-static void activity_sink_append(const char *json, size_t len)
-{
-    const char *enabled = getenv("PS_DETECT_ENABLED");
-    if (!enabled || !enabled[0]) return;
-
-    const char *path = getenv("PS_DETECT_SINK");
-    if (!path || !path[0]) path = "/var/lib/packetsonde/activity.jsonl";
-
-    FILE *f = fopen(path, "a");
-    if (!f) return;  /* dir missing or unwritable — skip silently */
-    fwrite(json, 1, len, f);
-    fputc('\n', f);
-    fclose(f);
-
-    /* Tee into the active detect capture session, if one is set. The helper
-     * no-ops when there is no session; it supplies its own trailing newline. */
-    ps_capture_session_append(json);
-}
-
-/* If an activity record carries a provenance trigger, build the
- * detect.file_provenance bundle and enqueue it for central shipping. `json`
- * must be NUL-terminated. Cheap strstr gate first — only provenance records
- * (rare) pay the parse cost. */
-static void maybe_ship_provenance(const char *json)
-{
-    if (!strstr(json, "\"prov_trigger\"")) return;
-
-    struct ps_activity a;
-    if (ps_activity_from_json(json, &a) != 0 || a.prov_trigger[0] == '\0') return;
-
-    static char hostbuf[256];
-    if (hostbuf[0] == '\0' && gethostname(hostbuf, sizeof hostbuf) != 0)
-        snprintf(hostbuf, sizeof hostbuf, "unknown");
-
-    char bundle[PS_OBS_ITEM_MAX];
-    int bn = ps_provenance_build_record(&a, a.prov_trigger, hostbuf, bundle, sizeof bundle);
-    if (bn <= 0) return;
-
-    char ts_iso[24];
-    if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof ts_iso) <= 0) return;
-
-    char event_json[PS_OBS_ITEM_MAX];
-    size_t evlen = ps_obs_build_event(event_json, sizeof event_json,
-                                      "detect.file_provenance", ts_iso,
-                                      bundle, (size_t)bn);
-    if (evlen > 0) ps_obs_queue_push(event_json, evlen);
 }
 
 /* ------------------------------------------------------------------ */
@@ -982,19 +859,6 @@ static void dispatch_priv_msg(const struct ps_priv_msg *hdr,
                                                   now, (int)hdr->handle_id);
             break;
         }
-        case PS_OP_ACTIVITY_DATA:
-            if (hdr->payload_len > 0) {
-                /* NUL-terminate for ring/sink/provenance (the record JSON is
-                 * text; the frame does not guarantee a trailing NUL). */
-                char rec[PS_MAX_MSG_PAYLOAD + 1];
-                uint32_t rlen = hdr->payload_len;
-                if (rlen > PS_MAX_MSG_PAYLOAD) rlen = PS_MAX_MSG_PAYLOAD;
-                memcpy(rec, payload, rlen); rec[rlen] = '\0';
-                ps_act_ring_push(rec, rlen);
-                activity_sink_append(rec, rlen);
-                maybe_ship_provenance(rec);
-            }
-            break;
         case PS_OP_ERROR:
             ps_warn("main: priv worker error status=%d handle=%d",
                     hdr->status, hdr->handle_id);
@@ -1030,8 +894,6 @@ extern const ps_module_t ospf_module;
 extern const ps_module_t vrrp_module;
 extern const ps_module_t broadcast_module;
 extern const ps_module_t ps_iface_monitor_module;
-extern const ps_module_t ps_policy_overwatch_module;
-extern const ps_module_t ps_baseline_monitor_module;
 extern const ps_module_t ps_honeypot_listener_module;
 extern const ps_module_t discovery_listener_module;
 extern const ps_module_t network_listener_module;
@@ -1292,7 +1154,6 @@ int main(int argc, char **argv)
     ps_module_registry_init(&g_registry);
     ps_host_table_init(&g_hosts);
     ps_obs_queue_init();
-    ps_act_ring_init();
 
     /* Register modules */
     if (ps_module_registry_add(&g_registry, &ps_icmp_traceroute_module) < 0) {
@@ -1337,10 +1198,13 @@ int main(int argc, char **argv)
         ps_module_registry_add(&g_registry, &broadcast_module);
     if (ps_config_get_bool(&cfg, "modules", "iface_monitor", 1))
         ps_module_registry_add(&g_registry, &ps_iface_monitor_module);
-    if (ps_config_get_bool(&cfg, "modules", "policy_overwatch", 1))
-        ps_module_registry_add(&g_registry, &ps_policy_overwatch_module);
-    if (ps_config_get_bool(&cfg, "modules", "baseline_monitor", 1))
-        ps_module_registry_add(&g_registry, &ps_baseline_monitor_module);
+    /* The detect track (file-activity monitoring, policy overwatch, baseline
+     * monitor) moved out of packetsonded into kernelsonded. Warn if an old
+     * [detect] block is still present so operators migrate their config. */
+    if (ps_config_get_bool(&cfg, "detect", "enabled", false)) {
+        ps_warn("main: [detect] is no longer handled by packetsonded; it moved to "
+                "kernelsonded. Configure /etc/kernelsonded/kernelsonded.toml instead.");
+    }
     if (ps_config_get_bool(&cfg, "modules", "honeypot_listener", 0))  /* off by default */
         ps_module_registry_add(&g_registry, &ps_honeypot_listener_module);
     /* Discovery + network listener: registered unconditionally. Each

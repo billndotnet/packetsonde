@@ -23,7 +23,6 @@
 #endif
 
 #include "priv_protocol.h"
-#include "fan_monitor.h"
 #include "log.h"
 #include "build_config.h"
 #include <pthread.h>
@@ -49,48 +48,9 @@ static struct raw_slot g_raw[PS_MAX_RAW_HANDLES];
 /* The socketpair fd connecting us to the brain */
 static int g_brain_fd = -1;
 
-/* Mutex that serialises all writes to g_brain_fd: both the poll-loop
- * paths (send_response, pcap/raw data) and the fanotify thread. */
+/* Mutex that serialises all writes to g_brain_fd: the poll-loop paths
+ * (send_response and pcap/raw data) share one writer fd. */
 static pthread_mutex_t g_write_mu = PTHREAD_MUTEX_INITIALIZER;
-
-/* Forward declaration — defined in "Write helpers" section below. */
-static int write_all(int fd, const uint8_t *buf, size_t n);
-
-/* ------------------------------------------------------------------ */
-/* Fanotify emit callback + thread (wired when PS_DETECT_ENABLED=1)    */
-/* ------------------------------------------------------------------ */
-
-static unsigned long g_activity_dropped = 0;
-
-static void emit_activity(const char *json, size_t len, void *ctx)
-{
-    (void)ctx;
-    if (len > PS_MAX_MSG_PAYLOAD) return;
-    uint8_t frame[PS_MAX_MSG_PAYLOAD + 16];
-    size_t n = ps_priv_encode_activity(frame, sizeof frame, json, len);
-    if (!n) return;
-    pthread_mutex_lock(&g_write_mu);
-    /* Activity records are lossy-tolerant. If the brain's socketpair is backed up
-     * (e.g. a busy filesystem mark out-running the brain), DROP this frame rather
-     * than block the fanotify thread on write_all() — a blocked emit stalls all
-     * capture. Only proceed when the pipe is writable now. Other frame types keep
-     * the blocking write_all for integrity. */
-    struct pollfd pw = { .fd = g_brain_fd, .events = POLLOUT, .revents = 0 };
-    if (poll(&pw, 1, 0) == 1 && (pw.revents & POLLOUT)) {
-        write_all(g_brain_fd, frame, n);
-    } else {
-        if ((++g_activity_dropped % 1000) == 1)
-            ps_warn("priv_worker: brain pipe backed up, dropped %lu activity record(s)", g_activity_dropped);
-    }
-    pthread_mutex_unlock(&g_write_mu);
-}
-
-static void *fan_thread(void *arg)
-{
-    struct ps_fan_cfg *cfg = arg;
-    ps_fan_monitor_run(cfg, emit_activity, NULL);
-    return NULL;
-}
 
 /* ------------------------------------------------------------------ */
 /* Write helpers                                                        */
@@ -619,24 +579,6 @@ int main(int argc, char **argv)
     for (int i = 0; i < PS_MAX_RAW_HANDLES; i++) g_raw[i].fd = -1;
 
     ps_info("priv_worker: started (fd=%d)", fd);
-
-    /* Start fanotify collection thread if PS_DETECT_ENABLED is set */
-    static struct ps_fan_cfg fan_cfg;
-    const char *detect_enabled = getenv("PS_DETECT_ENABLED");
-    if (detect_enabled && atoi(detect_enabled)) {
-        const char *max_depth_str     = getenv("PS_DETECT_MAX_DEPTH");
-        const char *max_events_ps_str = getenv("PS_DETECT_MAX_EVENTS_PS");
-        fan_cfg.watch_paths   = getenv("PS_DETECT_WATCH_PATHS");
-        fan_cfg.suppress      = getenv("PS_DETECT_SUPPRESS_PATHS");
-        fan_cfg.max_depth     = max_depth_str     ? atoi(max_depth_str)     : 16;
-        fan_cfg.max_events_ps = max_events_ps_str ? atoi(max_events_ps_str) : 2000;
-        const char *prov_en = getenv("PS_DETECT_PROVENANCE_ENABLED");
-        fan_cfg.prov.enabled         = prov_en ? atoi(prov_en) : 0;
-        fan_cfg.prov.transient_paths = getenv("PS_DETECT_PROVENANCE_TRANSIENT_PATHS");
-        fan_cfg.prov.sensitive_paths = getenv("PS_DETECT_PROVENANCE_SENSITIVE_PATHS");
-        pthread_t t; pthread_create(&t, NULL, fan_thread, &fan_cfg);
-        pthread_detach(t);
-    }
 
     run_loop();
 

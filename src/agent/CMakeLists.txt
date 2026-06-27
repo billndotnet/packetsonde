@@ -67,18 +67,10 @@ if(BUILD_STATIC)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
 endif()
 
-# Detect-track runtime sources now live in ../kernel. During the transition
-# packetsonded still compiles them; Task 5 removes them from packetsonded.
-set(KERNEL_DETECT_SOURCES
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/activity_ring.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/baseline_store.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/capture_session.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/policy_overwatch.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/modules/baseline_monitor.c
-)
+# The detect track now lives entirely in kernelsonded (src/kernel).
+# packetsonded / packetsonde-priv no longer compile or link any of it
+# (KERNEL_DETECT_SOURCES is gone). The detect unit tests further down still
+# compile the kernel sources directly, so they keep this include path.
 set(KERNEL_DETECT_INCLUDE
     ${CMAKE_SOURCE_DIR}/src/kernel/src
     ${CMAKE_SOURCE_DIR}/src/kernel/src/modules)
@@ -116,7 +108,6 @@ set(AGENT_CORE_SOURCES
     src/modules/network_listener.c
     src/capture/capture_handle.c
     src/capture/protocol_demux.c
-    ${KERNEL_DETECT_SOURCES}
 )
 
 # Runtime shared by both daemons (packetsonded + kernelsonded). Pure-logic
@@ -150,7 +141,6 @@ target_include_directories(packetsonde-agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/compat
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${KERNEL_DETECT_INCLUDE}
 )
 target_link_libraries(packetsonde-agent PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
@@ -171,18 +161,15 @@ endif()
 # (Install rules consolidated at the bottom of this file; the priv
 # worker target is declared just below so we install it there.)
 
-# Priv worker binary
+# Priv worker binary. Handles only the pcap/raw-socket opcodes (0x01–0x05);
+# the fanotify/detect path moved to kernelsonde-priv.
 add_executable(packetsonde-priv
     src/priv_worker.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/fan_monitor.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/proc_enrich.c
-    ${CMAKE_SOURCE_DIR}/src/kernel/src/sock_snapshot.c
 )
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${KERNEL_DETECT_INCLUDE}
 )
 target_link_libraries(packetsonde-priv PRIVATE packetsonde_daemon packetsonde_lib pthread)
 if(HAVE_PCAP)
