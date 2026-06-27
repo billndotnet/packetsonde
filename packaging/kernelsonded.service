@@ -12,10 +12,8 @@ RestartSec=5s
 
 # Capabilities: fanotify_init requires CAP_SYS_ADMIN; inode marks on
 # unreadable sensitive paths (e.g. /etc/shadow) require CAP_DAC_READ_SEARCH.
-# CAP_NET_RAW + CAP_NET_ADMIN are retained for sock_snapshot and any
-# pcap-adjacent proc enrichment paths.
-AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
 
 # Run as an unprivileged user with the right capabilities granted by
 # systemd. Create with: useradd --system --no-create-home --shell /usr/sbin/nologin kernelsonded
