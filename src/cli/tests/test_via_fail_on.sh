@@ -56,6 +56,10 @@ DRIVER_PID=$!
 cleanup() {
     kill $SSH_PID    2>/dev/null || true
     kill $DRIVER_PID 2>/dev/null || true
+    # Escalate to SIGKILL so a wedged driver never orphans (matches the
+    # reap pattern in test_via_e2e / test_via_probe_tcp).
+    for _ in 1 2 3; do kill -0 $DRIVER_PID 2>/dev/null || break; sleep 0.2; done
+    kill -9 $DRIVER_PID 2>/dev/null || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT

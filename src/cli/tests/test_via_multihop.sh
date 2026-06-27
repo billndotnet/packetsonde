@@ -24,6 +24,13 @@ cleanup() {
     [ -n "${BUNKER_PID:-}" ]   && kill $BUNKER_PID   2>/dev/null || true
     [ -n "${TRUNKBOX_PID:-}" ] && kill $TRUNKBOX_PID 2>/dev/null || true
     [ -n "${SSH_PID:-}" ]      && kill $SSH_PID      2>/dev/null || true
+    # Escalate to SIGKILL so a wedged driver never orphans (matches the
+    # reap pattern in test_via_e2e / test_via_probe_tcp).
+    for pid in "${BUNKER_PID:-}" "${TRUNKBOX_PID:-}"; do
+        [ -n "$pid" ] || continue
+        for _ in 1 2 3; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+        kill -9 "$pid" 2>/dev/null || true
+    done
     rm -rf "$WORK"
 }
 trap cleanup EXIT
