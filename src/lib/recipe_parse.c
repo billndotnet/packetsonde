@@ -991,10 +991,15 @@ void ps_recipe_free(struct ps_recipe *r) {
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
-static int b64_decode(const char *in, size_t in_len, uint8_t *out, size_t *out_len) {
-    /* Output cap: in_len * 3 / 4. */
+static int b64_decode(const char *in, size_t in_len, uint8_t *out, size_t out_cap,
+                      size_t *out_len) {
+    /* EVP_DecodeBlock writes (in_len/4)*3 bytes into `out`, sized by the *input*
+     * length. `out` here is a fixed stack/struct buffer, so an over-long field
+     * (attacker-controlled JSON string) would smash it. Reject before decoding
+     * anything that wouldn't fit. */
     size_t cap = (in_len / 4) * 3;
     if (cap == 0 && in_len > 0) return -1;
+    if (cap > out_cap) return -1;
     int n = EVP_DecodeBlock(out, (const unsigned char *)in, (int)in_len);
     if (n < 0) return -1;
     /* Adjust for padding. */
@@ -1063,11 +1068,11 @@ int ps_recipe_envelope_parse(const uint8_t *json, size_t json_len,
      * decoding straight into them overflows into the next field). */
     size_t n;
     uint8_t pub_tmp[48], sig_tmp[72];
-    if (b64_decode(pub_b64, strlen(pub_b64), pub_tmp, &n) != 0 || n != 32) {
+    if (b64_decode(pub_b64, strlen(pub_b64), pub_tmp, sizeof(pub_tmp), &n) != 0 || n != 32) {
         snprintf(err, err_sz, "envelope: bad author_pub base64"); goto fail;
     }
     memcpy(out->author_pub, pub_tmp, 32);
-    if (b64_decode(sig_b64, strlen(sig_b64), sig_tmp, &n) != 0 || n != 64) {
+    if (b64_decode(sig_b64, strlen(sig_b64), sig_tmp, sizeof(sig_tmp), &n) != 0 || n != 64) {
         snprintf(err, err_sz, "envelope: bad signature base64"); goto fail;
     }
     memcpy(out->signature, sig_tmp, 64);
@@ -1076,7 +1081,7 @@ int ps_recipe_envelope_parse(const uint8_t *json, size_t json_len,
     uint8_t *inner = arena_alloc(a, rb_len); /* upper bound */
     if (!inner) { snprintf(err, err_sz, "oom"); goto fail; }
     size_t inner_n = 0;
-    if (b64_decode(recipe_b64, rb_len, inner, &inner_n) != 0) {
+    if (b64_decode(recipe_b64, rb_len, inner, rb_len, &inner_n) != 0) {
         snprintf(err, err_sz, "envelope: bad recipe_b64"); goto fail;
     }
     /* Recompute SHA-256 over the inner bytes; must match the declared hash. */

@@ -324,7 +324,7 @@ static void dhcp_on_packet(ps_module_ctx_t *ctx,
 {
     struct dhcp_state *st = (struct dhcp_state *)ctx->userdata;
     if (!st) return;
-    if (handle_id != st->pcap_handle) return;
+    (void)handle_id;   /* shared capture: process every dispatched packet */
 
     (void)ts_usec;
     st->packets_seen++;
