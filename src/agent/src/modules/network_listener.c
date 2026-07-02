@@ -702,7 +702,16 @@ static void nl_shutdown(ps_module_ctx_t *ctx) {
     struct nl_state *st = ctx->userdata;
     if (!st) return;
     atomic_store(&st->stop, 1);
-    if (st->listen_fd >= 0) close(st->listen_fd);
+    if (st->listen_fd >= 0) {
+        /* shutdown() before close(): the accept thread is blocked in
+         * accept() on this fd, and close() alone does NOT unblock a
+         * concurrent accept() (the in-flight call keeps waiting on the old
+         * file description) -- the pthread_join below would then hang
+         * forever. shutdown(SHUT_RDWR) wakes accept() so the thread sees
+         * ->stop and exits cleanly. */
+        shutdown(st->listen_fd, SHUT_RDWR);
+        close(st->listen_fd);
+    }
     if (st->running) pthread_join(st->accept_tid, NULL);
     ps_at_ctx_destroy(&st->tctx);
     free(st);
