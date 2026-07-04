@@ -33,7 +33,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define UDP_TR_MAX_JOBS      8
+#define UDP_TR_MAX_JOBS      64
 #define UDP_TR_PROBES        3
 #define UDP_TR_TIMEOUT_USEC  (3 * 1000000ULL)   /* 3 seconds */
 #define UDP_TR_SRC_PORT      0x5053              /* "PS" */
