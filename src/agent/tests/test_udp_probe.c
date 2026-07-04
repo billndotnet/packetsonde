@@ -211,7 +211,7 @@ static void test_port_constants(void)
     CHECK(PORT_DNS  == 53,  "PORT_DNS == 53");
     CHECK(PORT_SNMP == 161, "PORT_SNMP == 161");
     CHECK(UDP_PROBE_TIMEOUT_SEC == 3, "UDP_PROBE_TIMEOUT_SEC == 3");
-    CHECK(UDP_PROBE_MAX_JOBS == 16,   "UDP_PROBE_MAX_JOBS == 16");
+    CHECK(UDP_PROBE_MAX_JOBS == 64,   "UDP_PROBE_MAX_JOBS == 64");
 }
 
 /* ------------------------------------------------------------------ */
