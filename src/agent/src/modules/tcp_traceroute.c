@@ -36,7 +36,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define TCP_TR_MAX_JOBS       8
+#define TCP_TR_MAX_JOBS       64
 #define TCP_TR_PROBES         3
 #define TCP_TR_TIMEOUT_USEC   (3 * 1000000ULL)   /* 3 seconds */
 #define TCP_TR_BASE_SRC_PORT  0x5053              /* "PS" — job_index added */

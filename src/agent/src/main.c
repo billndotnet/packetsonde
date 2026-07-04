@@ -766,14 +766,15 @@ static void on_ipc_frame(int client_fd, const char *channel,
 
     } else if (strcmp(channel, "query.stats") == 0) {
         /*
-         * query.stats — aggregate stats: host count, module count,
-         * client count, per-module event counts.
+         * query.stats — aggregate stats: agent version, host count, module
+         * count, client count, per-module event counts.
          * Response channel: "response.stats"
          */
         char resp[4096];
         struct ps_json j;
         ps_json_init(&j, resp, sizeof(resp));
         ps_json_object_begin(&j);
+        ps_json_key_string(&j, "version",   PS_VERSION);   /* agent build version -> client Check / version awareness */
         ps_json_key_int(&j, "host_count",   g_hosts.count);
         ps_json_key_int(&j, "module_count", g_registry.count);
         ps_json_key_int(&j, "client_count", g_ipc.client_count);

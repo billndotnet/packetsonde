@@ -73,7 +73,7 @@ sudo packetsonded \
     --socket /var/run/packetsonde-agent.sock
 ```
 
-(Or run via the systemd unit shipped under `src/agent/debian/`.)
+(Or run via the `packetsonded` systemd unit installed by the `.deb` — see `packaging/README.md`.)
 
 ## Running audits
 

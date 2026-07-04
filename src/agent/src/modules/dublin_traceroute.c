@@ -41,10 +41,14 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define DUBLIN_MAX_JOBS        4
+#define DUBLIN_MAX_JOBS        64
 #define DUBLIN_MAX_FLOWS       32
 #define DUBLIN_DEFAULT_FLOWS   6
-#define DUBLIN_TIMEOUT_USEC    (3 * 1000000ULL)
+#define DUBLIN_TIMEOUT_USEC    (800 * 1000ULL)   /* per-probe wait: 800ms (was 3s -> dominated wall time) */
+#define DUBLIN_MAX_DEAD_GAP    12                /* stop once N consecutive hops go dark after the path replied.
+                                                  * 12 (not 4): interior gaps of 4-8 silent hops are normal on
+                                                  * internet paths; a small threshold falsely cut reachable
+                                                  * targets short. Only trip on a genuine long dead tail. */
 #define DUBLIN_BASE_SRC_PORT   33000
 #define DUBLIN_PORT_STRIDE     1024
 #define DUBLIN_BASE_DST_PORT   33434
@@ -88,6 +92,8 @@ struct dublin_trace_job {
 
     int      cur_hop;           /* 1-based TTL currently being probed */
     int      cur_flow;          /* which flow is being probed at cur_hop */
+    int      any_reply_seen;    /* the path has started responding (arm the dead-gap early-stop) */
+    int      consec_dead_hops;  /* consecutive hops where no flow replied (early-stop when >= MAX_DEAD_GAP) */
     uint64_t probe_sent_usec;
     int      probe_replied;
     double   probe_rtt_ms;
@@ -585,11 +591,23 @@ static void dublin_advance(ps_module_ctx_t *ctx, struct dublin_state *st,
     job->cur_flow++;
 
     if (job->cur_flow >= job->flow_count) {
+        /* Early-stop: track whether ANY flow replied at the hop we just finished. Once the path has started
+         * responding, N consecutive all-timeout hops means the tail is filtered/dead -- stop instead of
+         * probing to max_hops (the main wall-time win on firewalled destinations). */
+        int hop_had_reply = 0;
+        for (int f = 0; f < job->flow_count; f++) {
+            if (hop - 1 < 64 && job->flows[f].hop_ips[hop - 1][0] &&
+                strcmp(job->flows[f].hop_ips[hop - 1], "timeout") != 0) { hop_had_reply = 1; break; }
+        }
+        if (hop_had_reply) { job->any_reply_seen = 1; job->consec_dead_hops = 0; }
+        else if (job->any_reply_seen) { job->consec_dead_hops++; }
+
         /* All flows probed at this hop — advance hop */
         job->cur_hop++;
         job->cur_flow = 0;
 
-        if (all_flows_reached || job->cur_hop > job->max_hops) {
+        if (all_flows_reached || job->cur_hop > job->max_hops ||
+            job->consec_dead_hops >= DUBLIN_MAX_DEAD_GAP) {
             /* Done */
             ps_info("dublin_traceroute: job '%s' complete at hop %d (%d unique paths)",
                     job->job_id, hop, job->flow_count);

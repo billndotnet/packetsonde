@@ -26,7 +26,7 @@ salt://packetsonde/bin/packetsonde           # the CLI
 ```
 
 (Build them per the top-level README; copy into `<file_root>/packetsonde/bin/`. For a
-production install, build a `.deb` from `src/agent/debian/` and switch the state to
+production install, build a `.deb` with `packaging/build-deb.sh` and switch the state to
 `pkg.installed` instead.)
 
 **Bump the build version on every push.** `file.managed` deploys by source hash, so an

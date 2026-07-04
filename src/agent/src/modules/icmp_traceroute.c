@@ -35,9 +35,17 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define ICMP_TR_MAX_JOBS      8
+#define ICMP_TR_MAX_JOBS      64
 #define ICMP_TR_PROBES        3
-#define ICMP_TR_TIMEOUT_USEC  (3 * 1000000ULL)   /* 3 seconds */
+#define ICMP_TR_WINDOW        4                  /* TTLs probed in PARALLEL per round (front-runs dead gaps):
+                                                  * one 800ms wait covers a chunk of hops instead of one each,
+                                                  * so a long dead tail costs ~ceil(gap/WINDOW) waits, not gap. */
+#define ICMP_TR_TIMEOUT_USEC  (800 * 1000ULL)    /* per-hop wait: 800ms (was 3s -> dominated wall time) */
+#define ICMP_TR_MAX_DEAD_GAP  12                 /* stop once N consecutive hops go dark after the path replied.
+                                                  * 12 (not 4): normal internet paths have interior gaps of
+                                                  * 4-8 silent hops (MPLS/firewalls that forward but send no
+                                                  * time-exceeded); a small threshold falsely cut reachable
+                                                  * targets short. 12 only trips on a genuine long dead tail. */
 #define ICMP_TR_PROBE_ID      0x5053              /* "PS" */
 #define ICMP_TR_DEFAULT_HOPS  30
 
@@ -72,11 +80,21 @@ struct trace_job {
     struct sockaddr_storage dest_sa;
     socklen_t               dest_sa_len;
 
-    int      cur_hop;             /* 1-based hop we're currently probing */
-    struct probe_slot probes[ICMP_TR_PROBES];
-    int      probes_replied;      /* count of replies received for cur_hop */
+    int      cur_hop;             /* 1-based: FIRST TTL of the current in-flight window */
+    /* Window of TTLs probed in PARALLEL each round (front-runs dead gaps): win[i] is TTL cur_hop+i.
+     * One 800ms timeout covers the whole chunk instead of one-per-hop. */
+    uint64_t win_sent_usec;       /* when the current window was fired */
+    struct hop_slot {
+        int    sent;              /* a probe was sent for this TTL */
+        int    replied;           /* a reply arrived for it */
+        int    is_dest;           /* the reply was an echo reply (destination reached at this TTL) */
+        double rtt_ms;
+        char   addr[64];          /* responding hop address ("" = silent) */
+    } win[ICMP_TR_WINDOW];
 
     int      reached;             /* destination responded */
+    int      any_reply_seen;      /* the path has replied at least once (arm the dead-gap early-stop) */
+    int      consec_dead_hops;    /* consecutive silent hops after any_reply_seen (early-stop at MAX_DEAD_GAP) */
     uint16_t paris_id;            /* Per-destination flow ID for Paris mode */
     uint16_t probe_id;            /* Per-trace unique ICMP id for classic mode */
 };
@@ -331,6 +349,9 @@ struct icmp_parse_result {
     uint16_t id;
     uint16_t seq;
     char     src_addr[64];       /* source address of the ICMP response */
+    char     inner_dst[64];      /* time-exceeded: the ORIGINAL probe's destination (from the embedded
+                                  * inner IP header). Used to demux replies to the right job even when the
+                                  * 16-bit paris_id/probe_id collides across concurrent targets. "" if N/A. */
 };
 
 /*
@@ -390,6 +411,11 @@ static struct icmp_parse_result parse_icmpv4_response(const uint8_t *pkt,
         /* inner ICMP must be an echo request */
         if (inner_icmp[0] != ICMP_TYPE_ECHO_REQUEST) return res;
 
+        /* Original probe's destination (inner IP dst, bytes 16-19) — for reply demux. */
+        struct in_addr inner_dst_ip;
+        memcpy(&inner_dst_ip, inner_ip + 16, 4);
+        inet_ntop(AF_INET, &inner_dst_ip, res.inner_dst, sizeof(res.inner_dst));
+
         uint16_t id, seq;
         memcpy(&id,  inner_icmp + 4, 2);
         memcpy(&seq, inner_icmp + 6, 2);
@@ -445,6 +471,11 @@ static struct icmp_parse_result parse_icmpv6_response(const uint8_t *pkt,
         const uint8_t *inner_icmp = inner_ip6 + 40;          /* skip 40-byte IPv6 header */
 
         if (inner_icmp[0] != ICMPV6_TYPE_ECHO_REQUEST) return res;
+
+        /* Original probe's destination (inner IPv6 dst, bytes 24-39) — for reply demux. */
+        struct in6_addr inner_dst6;
+        memcpy(&inner_dst6, inner_ip6 + 24, 16);
+        inet_ntop(AF_INET6, &inner_dst6, res.inner_dst, sizeof(res.inner_dst));
 
         uint16_t id, seq;
         memcpy(&id,  inner_icmp + 4, 2);
@@ -567,92 +598,91 @@ static struct trace_job *find_free_job(struct icmp_tr_state *st)
     return NULL;
 }
 
+/* Fire the current window: one probe for each TTL in [cur_hop, cur_hop+WINDOW), all at once, so their
+ * timeouts overlap (a dead run costs one wait per window, not per hop). seq = TTL disambiguates hops. */
 static void send_probes(ps_module_ctx_t *ctx, struct icmp_tr_state *st,
                         struct trace_job *job)
 {
-    uint64_t now = ps_platform_now_usec();
     uint8_t  buf[64];
     uint32_t pkt_len;
 
-    for (int i = 0; i < ICMP_TR_PROBES; i++) {
-        job->probes[i].sent_usec = now;
-        job->probes[i].replied   = 0;
-        job->probes[i].rtt_ms    = 0.0;
+    memset(job->win, 0, sizeof(job->win));
+    job->win_sent_usec = ps_platform_now_usec();
+
+    for (int i = 0; i < ICMP_TR_WINDOW; i++) {
+        const int ttl = job->cur_hop + i;
+        if (ttl > job->max_hops) break;   /* don't probe past the hop budget */
+        job->win[i].sent = 1;
 
         if (job->af == AF_INET) {
             if (job->paris) {
-                pkt_len = build_icmpv4_probe_paris(buf, sizeof(buf),
-                                                    job->paris_id,
-                                                    (uint16_t)job->cur_hop);
+                pkt_len = build_icmpv4_probe_paris(buf, sizeof(buf), job->paris_id, (uint16_t)ttl);
             } else {
-                pkt_len = build_icmpv4_probe(buf, sizeof(buf),
-                                             (uint8_t)job->cur_hop,
+                pkt_len = build_icmpv4_probe(buf, sizeof(buf), (uint8_t)ttl,
                                              (const struct sockaddr_in *)&job->dest_sa,
-                                             job->probe_id,
-                                             (uint16_t)job->cur_hop);
+                                             job->probe_id, (uint16_t)ttl);
             }
-            if (pkt_len == 0) {
-                ps_warn("icmp_traceroute: failed to build ICMPv4 probe");
-                continue;
-            }
-            int rc = ctx->send_raw(ctx, st->sock4, (uint8_t)job->cur_hop,
-                          (const struct sockaddr *)&job->dest_sa,
-                          buf, pkt_len);
-            ps_debug("icmp_traceroute: sent hop %d probe %d to %s (pkt_len=%u, rc=%d, paris=%d)",
-                     job->cur_hop, i, job->dest_addr_str, pkt_len, rc, job->paris);
+            if (pkt_len == 0) { ps_warn("icmp_traceroute: failed to build ICMPv4 probe"); continue; }
+            ctx->send_raw(ctx, st->sock4, (uint8_t)ttl,
+                          (const struct sockaddr *)&job->dest_sa, buf, pkt_len);
         } else {
             if (job->paris) {
                 pkt_len = build_icmpv6_probe_paris(buf, sizeof(buf),
                                                     (const struct sockaddr_in6 *)&job->dest_sa,
-                                                    job->paris_id,
-                                                    (uint16_t)job->cur_hop);
+                                                    job->paris_id, (uint16_t)ttl);
             } else {
                 pkt_len = build_icmpv6_probe(buf, sizeof(buf),
                                               (const struct sockaddr_in6 *)&job->dest_sa,
-                                              job->probe_id,
-                                              (uint16_t)job->cur_hop);
+                                              job->probe_id, (uint16_t)ttl);
             }
-            if (pkt_len == 0) {
-                ps_warn("icmp_traceroute: failed to build ICMPv6 probe");
-                continue;
-            }
-            ctx->send_raw(ctx, st->sock6, (uint8_t)job->cur_hop,
-                          (const struct sockaddr *)&job->dest_sa,
-                          buf, pkt_len);
+            if (pkt_len == 0) { ps_warn("icmp_traceroute: failed to build ICMPv6 probe"); continue; }
+            ctx->send_raw(ctx, st->sock6, (uint8_t)ttl,
+                          (const struct sockaddr *)&job->dest_sa, buf, pkt_len);
         }
     }
 
-    ps_debug("icmp_traceroute: sent %d probes for job '%s' hop %d",
-             ICMP_TR_PROBES, job->job_id, job->cur_hop);
+    ps_debug("icmp_traceroute: sent window [%d..%d] for job '%s'",
+             job->cur_hop, job->cur_hop + ICMP_TR_WINDOW - 1, job->job_id);
 }
 
-static void advance_hop(ps_module_ctx_t *ctx, struct icmp_tr_state *st,
-                        struct trace_job *job, const char *hop_addr,
-                        int is_filtered)
+/* Process the resolved window IN ORDER: publish each hop, advance the dead-gap counter, and stop on
+ * reached / max-hops / dead-gap. If the whole window passes without stopping, fire the next window. */
+static void process_window(ps_module_ctx_t *ctx, struct icmp_tr_state *st, struct trace_job *job)
 {
-    char hostname[NI_MAXHOST];
-    if (is_filtered || hop_addr == NULL || hop_addr[0] == '\0') {
-        hostname[0] = '\0';
-    } else {
-        resolve_hostname(job->af, hop_addr, hostname, sizeof(hostname));
+    for (int i = 0; i < ICMP_TR_WINDOW; i++) {
+        const int ttl = job->cur_hop + i;
+        if (!job->win[i].sent) { break; }   /* past max_hops -> no more hops in this window */
+
+        const int   had_reply = job->win[i].replied;
+        const char *hop_addr  = had_reply ? job->win[i].addr : "";
+
+        char hostname[NI_MAXHOST];
+        if (had_reply && hop_addr[0] != '\0') { resolve_hostname(job->af, hop_addr, hostname, sizeof(hostname)); }
+        else                                  { hostname[0] = '\0'; }
+
+        /* Adapt the single window slot to publish_hop's probe-array shape. */
+        struct probe_slot ps1 = { .sent_usec = job->win_sent_usec, .replied = had_reply, .rtt_ms = job->win[i].rtt_ms };
+        publish_hop(ctx, job, ttl, hop_addr, hostname, &ps1, 1, /*is_filtered=*/!had_reply);
+
+        /* Dead-gap: a responding hop resets the counter; once the path has replied, each silent hop bumps it. */
+        if (had_reply) { job->any_reply_seen = 1; job->consec_dead_hops = 0; }
+        else if (job->any_reply_seen) { job->consec_dead_hops++; }
+
+        if (job->win[i].is_dest) { job->reached = 1; }
+
+        const int early_stop = (job->any_reply_seen && job->consec_dead_hops >= ICMP_TR_MAX_DEAD_GAP);
+        if (job->reached || ttl >= job->max_hops || early_stop) {
+            ps_info("icmp_traceroute: complete '%s' -> %s  reached=%d final_hop=%d dead_gap=%d%s",
+                    job->job_id, job->dest_addr_str, job->reached, ttl, job->consec_dead_hops,
+                    (early_stop && !job->reached) ? "  [EARLY-STOP]" : (ttl >= job->max_hops && !job->reached ? "  [MAX-HOPS]" : ""));
+            publish_complete(ctx, job, job->reached, ttl);
+            memset(job, 0, sizeof(*job));  /* free the slot */
+            return;
+        }
     }
 
-    publish_hop(ctx, job, job->cur_hop,
-                hop_addr ? hop_addr : "",
-                hostname,
-                job->probes, ICMP_TR_PROBES,
-                is_filtered);
-
-    /* Check if we've reached the destination */
-    if (job->reached || job->cur_hop >= job->max_hops) {
-        publish_complete(ctx, job, job->reached, job->cur_hop);
-        memset(job, 0, sizeof(*job));  /* free the slot */
-        return;
-    }
-
-    job->cur_hop++;
-    job->probes_replied = 0;
-    memset(job->probes, 0, sizeof(job->probes));
+    /* Whole window passed without stopping -> advance the frontier and fire the next window. */
+    job->cur_hop += ICMP_TR_WINDOW;
     send_probes(ctx, st, job);
 }
 
@@ -885,41 +915,39 @@ static void tr_on_response(ps_module_ctx_t *ctx, const uint8_t *pkt,
         uint16_t expected_id = tj->paris ? tj->paris_id : tj->probe_id;
         if (pr.id != expected_id) continue;
 
-        /* Sequence (hop number) must match current hop */
-        if (hop_num != (uint16_t)tj->cur_hop) continue;
+        /* Sequence (hop number) must fall inside the current in-flight window. */
+        const int widx = (int)hop_num - tj->cur_hop;
+        if (widx < 0 || widx >= ICMP_TR_WINDOW || !tj->win[widx].sent) continue;
 
-        uint64_t now = ps_platform_now_usec();
-
-        /* Record reply on first unacknowledged probe */
-        int recorded = 0;
-        for (int k = 0; k < ICMP_TR_PROBES; k++) {
-            if (!tj->probes[k].replied && tj->probes[k].sent_usec > 0) {
-                tj->probes[k].replied = 1;
-                tj->probes[k].rtt_ms  = (double)(now - tj->probes[k].sent_usec) / 1000.0;
-                tj->probes_replied++;
-                recorded = 1;
-                break;
-            }
-        }
-        if (!recorded) continue;
-
-        /* Update src address from this response (for IPv4) */
-        /* For IPv6 we already set it above */
-        if (resp_af == AF_INET && pr.src_addr[0] != '\0') {
-            /* Store for hop publish — handled in advance_hop */
+        /* DESTINATION must match. The 16-bit id can collide across concurrent jobs (paris_id is a hash of
+         * the target; probe_id is 16-bit) — that collision, amplified by high concurrency, was mixing
+         * results at receive time. So also require the reply to belong to THIS target: a time-exceeded
+         * carries the original probe's inner dst; an echo reply comes FROM the target (outer src). Fall
+         * back to id+hop only when the address is unavailable (never worse than before). */
+        if (pr.is_time_exceeded) {
+            if (pr.inner_dst[0] != '\0' && strcmp(pr.inner_dst, tj->dest_addr_str) != 0) continue;
+        } else {
+            if (pr.src_addr[0] != '\0' && strcmp(pr.src_addr, "unknown") != 0 &&
+                strcmp(pr.src_addr, tj->dest_addr_str) != 0) continue;
         }
 
-        /* Mark destination reached if echo reply */
-        if (!pr.is_time_exceeded) {
-            tj->reached = 1;
+        /* Record into the window slot (first reply for this TTL wins). */
+        if (!tj->win[widx].replied) {
+            const uint64_t now = ps_platform_now_usec();
+            tj->win[widx].replied = 1;
+            tj->win[widx].rtt_ms  = (double)(now - tj->win_sent_usec) / 1000.0;
+            tj->win[widx].is_dest = !pr.is_time_exceeded;   /* echo reply => destination reached */
+            strncpy(tj->win[widx].addr, pr.src_addr, sizeof(tj->win[widx].addr) - 1);
+            tj->win[widx].addr[sizeof(tj->win[widx].addr) - 1] = '\0';
         }
 
-        /*
-         * We advance as soon as we get the first reply — don't wait for all 3
-         * probes. This matches common traceroute behavior (advance on first reply,
-         * remaining probes for that hop may still arrive but we ignore them).
-         */
-        advance_hop(ctx, st, tj, pr.src_addr, 0 /* not filtered */);
+        /* If every sent hop in the window has replied, process it now; otherwise tr_tick processes it when
+         * the window's single timeout elapses (silent hops become '*'). */
+        int all_in = 1;
+        for (int w = 0; w < ICMP_TR_WINDOW; w++) {
+            if (tj->win[w].sent && !tj->win[w].replied) { all_in = 0; break; }
+        }
+        if (all_in) { process_window(ctx, st, tj); }
         break;
     }
 }
@@ -932,22 +960,12 @@ static void tr_tick(ps_module_ctx_t *ctx, uint64_t now_usec)
     for (int i = 0; i < ICMP_TR_MAX_JOBS; i++) {
         struct trace_job *tj = &st->jobs[i];
         if (!tj->active) continue;
-        if (tj->probes_replied > 0) continue;  /* already got a reply, waiting for advance */
 
-        /* Check if any probe has timed out */
-        int all_timed_out = 1;
-        for (int k = 0; k < ICMP_TR_PROBES; k++) {
-            if (tj->probes[k].sent_usec == 0) continue;
-            if ((now_usec - tj->probes[k].sent_usec) < ICMP_TR_TIMEOUT_USEC) {
-                all_timed_out = 0;
-                break;
-            }
-        }
-
-        if (all_timed_out) {
-            ps_debug("icmp_traceroute: hop %d timed out for job '%s'",
-                     tj->cur_hop, tj->job_id);
-            advance_hop(ctx, st, tj, NULL, 1 /* filtered */);
+        /* One timeout covers the whole window. When it elapses, process whatever came back (any still-
+         * silent hops become '*') and advance to the next window. */
+        if (tj->win_sent_usec != 0 && (now_usec - tj->win_sent_usec) >= ICMP_TR_TIMEOUT_USEC) {
+            ps_debug("icmp_traceroute: window [%d..] timed out for job '%s'", tj->cur_hop, tj->job_id);
+            process_window(ctx, st, tj);
         }
     }
 }

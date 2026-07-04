@@ -263,6 +263,18 @@ static void handle_create_raw_socket(const uint8_t *payload, uint32_t payload_le
         return;
     }
 
+    /* Enlarge the receive buffer. Under high trace concurrency (many jobs x windowed sends) a burst of
+     * time-exceeded/echo replies can overflow the small default rcvbuf, dropping replies -> false-silent
+     * hops -> failures that ONLY appear under concurrency (single-thread trickles in fine). The priv worker
+     * runs as root, so SO_RCVBUFFORCE bypasses net.core.rmem_max; fall back to SO_RCVBUF. Best-effort. */
+    {
+        int rcvbuf = 16 * 1024 * 1024; /* 16 MB */
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, &rcvbuf, sizeof(rcvbuf)) < 0 &&
+            setsockopt(fd, SOL_SOCKET, SO_RCVBUF,      &rcvbuf, sizeof(rcvbuf)) < 0) {
+            ps_warn("priv_worker: SO_RCVBUF(FORCE) failed: %s", strerror(errno));
+        }
+    }
+
     if (domain == AF_INET && proto != IPPROTO_ICMP) {
         /* Set IP_HDRINCL for TCP/UDP raw sockets so caller constructs
          * the full IP header.  Do NOT set for ICMP — on macOS the kernel

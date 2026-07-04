@@ -47,7 +47,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define TCP_PROBE_MAX_JOBS         16
+#define TCP_PROBE_MAX_JOBS         64
 #define TCP_PROBE_TIMEOUT_USEC     (3 * 1000000ULL)   /* 3 seconds */
 #define TCP_PROBE_BANNER_TIMEOUT_MS 200                /* 200 ms */
 #define TCP_PROBE_BASE_SRC_PORT    0x5070              /* "Pp" — probe */
