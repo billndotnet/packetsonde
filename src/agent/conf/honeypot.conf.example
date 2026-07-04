@@ -5,7 +5,16 @@
 # sent to any probe that connects. Use \r\n in banner values where a CRLF
 # line ending is required (e.g. SSH, SMTP, FTP greeting lines).
 #
-# Copy this file to honeypot.conf and uncomment + adjust the entries you want.
+# Copy this file to one of the locations honeypot_init searches (first wins):
+#   $PS_HONEYPOT_CONF  (or [honeypot] config_file = "..." in packetsonded.toml)
+#   /etc/packetsonded/honeypot.conf     <-- current install layout
+#   /etc/packetsonde/honeypot.conf      (legacy)
+#   ./honeypot.conf                     (dev / self-test)
+# then uncomment + adjust the entries you want.
+#
+# TWO switches are required to run traps:
+#   1. [modules] honeypot_listener = "1"   in packetsonded.toml  (registers module)
+#   2. enabled = true                       below                (activates traps)
 #
 # ── Deployment Notes ────────────────────────────────────────────────────────
 #

@@ -1,2 +1,1 @@
-/etc/packetsonde/packetsonde.conf
-/etc/packetsonde/honeypot.conf
+/etc/packetsonded/packetsonded.toml

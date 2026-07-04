@@ -755,13 +755,20 @@ static int honeypot_init(ps_module_ctx_t *ctx)
     ctx->userdata = st;
 
     /* Load config from file if no traps have been configured yet.
-     * Try the local path first, then the system-wide location. */
+     * Search order (first readable file wins):
+     *   1. $PS_HONEYPOT_CONF            explicit operator override
+     *   2. /etc/packetsonded/honeypot.conf   current install layout
+     *   3. /etc/packetsonde/honeypot.conf    legacy layout (pre-rename)
+     *   4. honeypot.conf               relative to CWD (dev/self-test) */
     if (st->cfg.trap_count == 0) {
-        static const char *cfg_paths[] = {
-            "honeypot.conf",
+        const char *cfg_paths[] = {
+            getenv("PS_HONEYPOT_CONF"),        /* NULL if unset -> skipped */
+            "/etc/packetsonded/honeypot.conf",
             "/etc/packetsonde/honeypot.conf",
+            "honeypot.conf",
         };
         for (int ci = 0; ci < (int)(sizeof(cfg_paths)/sizeof(cfg_paths[0])); ci++) {
+            if (!cfg_paths[ci] || !cfg_paths[ci][0]) continue;
             FILE *f = fopen(cfg_paths[ci], "r");
             if (!f) continue;
 
@@ -788,6 +795,18 @@ static int honeypot_init(ps_module_ctx_t *ctx)
             fclose(f);
             break;   /* use first file found */
         }
+    }
+
+    /* Honor the config's own 'enabled' gate. The module being registered
+     * ([modules] honeypot_listener) gets us here; 'enabled = false' (the
+     * default) then keeps it inert -- no sockets bound, no pcap opened.
+     * This lets an operator stage a full trap config and flip it on/off
+     * with a single line. */
+    if (!st->cfg.enabled) {
+        ps_info("honeypot_listener: disabled (set 'enabled = true' in "
+                "honeypot.conf); %d trap(s) parsed, none bound",
+                st->cfg.trap_count);
+        return 0;   /* stays registered but does nothing until enabled */
     }
 
     /* Bind trap sockets for each configured port */

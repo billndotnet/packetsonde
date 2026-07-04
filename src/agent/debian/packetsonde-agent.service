@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/packetsonde-agent -c /etc/packetsonde/packetsonde.conf
+ExecStart=/usr/sbin/packetsonded -c /etc/packetsonded/packetsonded.toml
 User=packetsonde
 Group=packetsonde
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
