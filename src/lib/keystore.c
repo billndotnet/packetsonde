@@ -61,10 +61,17 @@ static int write_file(const char *path, const void *buf, size_t n,
 
 static int read_file(const char *path, void *buf, size_t want) {
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
+    if (fd < 0) return -1;                 /* errno set by open() */
     ssize_t r = read(fd, buf, want);
+    int saved = errno;                     /* close() may clobber errno */
     close(fd);
-    return (r == (ssize_t)want) ? 0 : -1;
+    if (r == (ssize_t)want) return 0;
+    /* Short/failed read: a truncated or corrupt key file. Preserve read()'s
+     * errno if it failed outright; otherwise report the wrong-size case as
+     * EINVAL so callers can distinguish it from "file missing" (ENOENT) and
+     * "permission denied" (EACCES). */
+    errno = (r < 0) ? saved : EINVAL;
+    return -1;
 }
 
 int ps_keystore_save(const char *dir, const char *name,

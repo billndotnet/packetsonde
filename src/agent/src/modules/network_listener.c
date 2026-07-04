@@ -634,7 +634,10 @@ static int nl_init(ps_module_ctx_t *ctx) {
     const char *kname = getenv("PS_AGENT_LISTEN_KEY");
     if (!kname || !*kname) kname = "agent";
     if (ps_keystore_load(kdir, kname, &st->agent_kp) != 0) {
-        ps_warn("network_listener: cannot load '%s' from %s", kname, kdir);
+        ps_warn("network_listener: cannot load '%s' from %s: %s "
+                "(check the key exists and that %s is searchable by the "
+                "agent's run-as user -- it drops privileges after startup)",
+                kname, kdir, strerror(errno), kdir);
         free(st); return -1;
     }
     int has_sec = 0;

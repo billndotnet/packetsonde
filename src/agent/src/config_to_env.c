@@ -47,6 +47,11 @@ static const struct mapping MAPPINGS[] = {
     /* keystore */
     { "keys", "dir", "PS_KEY_DIR" },
 
+    /* honeypot -- optional explicit path to the trap-definition file.
+     * Absent this, honeypot_init searches /etc/packetsonded/honeypot.conf
+     * then legacy/dev locations. */
+    { "honeypot", "config_file", "PS_HONEYPOT_CONF" },
+
     /* central management (rna-packetsonde) */
     { "central", "url",             "PS_CENTRAL_URL" },
     { "central", "agent_id",        "PS_CENTRAL_AGENT_ID" },
