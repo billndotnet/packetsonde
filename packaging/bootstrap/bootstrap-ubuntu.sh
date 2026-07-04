@@ -41,6 +41,12 @@ PACKAGES=(
 
     # Operational nice-to-haves
     jq                     # the README's quickstart pipe target
+
+    # Debian packaging (.deb build via packaging/build-deb.sh)
+    debhelper              # dh -- the debhelper sequencer used by debian/rules
+    devscripts             # dch -- changelog version bumps
+    dpkg-dev               # dpkg-buildpackage / dpkg-source
+    fakeroot               # unprivileged file ownership during dh_*
 )
 
 echo "Updating apt index ..."
