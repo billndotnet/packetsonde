@@ -36,7 +36,7 @@
 /* Constants                                                            */
 /* ------------------------------------------------------------------ */
 
-#define UDP_PROBE_MAX_JOBS      16
+#define UDP_PROBE_MAX_JOBS      64
 #define UDP_PROBE_TIMEOUT_SEC   3
 #define UDP_PROBE_RECV_BUF      512
 
