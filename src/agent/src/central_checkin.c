@@ -84,6 +84,11 @@ static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
              * wait for the next one instead of being dropped too. */
             break;
         }
+        if (rr.http_status >= 500 || rr.http_status == 429) {
+            /* Central (or the proxy in front of it) answered "unavailable"/"slow down": the batch in flight is
+             * lost, but do not drain the rest of the queue into the same wall. */
+            break;
+        }
     }
     if (skipped > 0 || failed > 0)
         ps_warn("central: observations shipped %d (accepted %d), skipped %d (could not be "
