@@ -33,6 +33,10 @@
 #define PS_MAX_PCAP_HANDLES       16
 #define PS_MAX_RAW_HANDLES        32
 #define PS_MAX_MSG_PAYLOAD        65536
+/* Largest payload of any priv -> brain frame. PACKET_DATA carries an 8-byte
+ * timestamp ahead of up to PS_MAX_MSG_PAYLOAD captured bytes, so a receive
+ * buffer of PS_MAX_MSG_PAYLOAD rejects legal frames. Size readers from this. */
+#define PS_MAX_FRAME_PAYLOAD      (PS_MAX_MSG_PAYLOAD + 8)
 
 #pragma pack(push, 1)
 struct ps_priv_msg {
