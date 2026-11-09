@@ -27,6 +27,7 @@
 #include "log.h"
 #include "build_config.h"
 #include <pthread.h>
+#include <time.h>
 
 /* ------------------------------------------------------------------ */
 /* Slot arrays                                                          */
@@ -113,6 +114,50 @@ static void send_response(uint8_t opcode, uint8_t status, uint16_t handle_id,
     if (wr < 0) {
         ps_error("priv_worker: write response failed: %s", strerror(errno));
     }
+}
+
+/* Async data frames (PACKET_DATA, RAW_RESPONSE) are lossy: when the brain
+ * is backed up a frame is dropped whole. A frame that has started is always
+ * finished (see priv_frame_io.h); if that cannot happen the stream has lost
+ * framing and the worker exits non-zero so the brain sees EOF instead of
+ * reading packet bytes as headers. */
+static struct ps_frame_stats g_data_stats;
+static unsigned long g_drops_logged;
+static time_t g_drop_log_at;
+
+#define PS_DROP_LOG_INTERVAL_S 10
+
+static void log_drops_rate_limited(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (g_drop_log_at != 0 && ts.tv_sec - g_drop_log_at < PS_DROP_LOG_INTERVAL_S) return;
+    unsigned long fresh = g_data_stats.dropped - g_drops_logged;
+    if (fresh == 0) return;
+    ps_warn("priv_worker: brain pipe backed up, dropped %lu data frame(s) "
+            "(%lu dropped, %lu sent, %lu finished after a short write in total)",
+            fresh, g_data_stats.dropped, g_data_stats.sent, g_data_stats.partial);
+    g_drops_logged = g_data_stats.dropped;
+    g_drop_log_at  = ts.tv_sec;
+}
+
+/* Returns 0 if the frame was sent or dropped whole, -1 if the stream broke. */
+static int send_data_frame(const uint8_t *buf, size_t n)
+{
+    pthread_mutex_lock(&g_write_mu);
+    int rc = ps_priv_write_frame_lossy(g_brain_fd, buf, n,
+                                       PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
+                                       &g_data_stats);
+    int saved_errno = errno;
+    pthread_mutex_unlock(&g_write_mu);
+    if (rc == PS_FRAME_BROKEN) {
+        ps_error("priv_worker: brain stream broken mid-frame (%zu-byte frame: %s); "
+                 "exiting so the brain sees the disconnect",
+                 n, strerror(saved_errno));
+        return -1;
+    }
+    if (rc == PS_FRAME_DROPPED) log_drops_rate_limited();
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -379,7 +424,8 @@ static void handle_send_raw(uint16_t handle_id,
 /* Main event loop                                                      */
 /* ------------------------------------------------------------------ */
 
-static void run_loop(void)
+/* Returns 0 when the brain disconnects, -1 on a fatal error. */
+static int run_loop(void)
 {
     /*
      * We poll:
@@ -390,7 +436,7 @@ static void run_loop(void)
      */
 
     uint8_t cmd_buf[PS_MAX_MSG_PAYLOAD + sizeof(struct ps_priv_msg)];
-    uint8_t pkt_buf[65536 + sizeof(struct ps_priv_msg) + 8];
+    uint8_t pkt_buf[sizeof(struct ps_priv_msg) + PS_MAX_FRAME_PAYLOAD];
 
     for (;;) {
         struct pollfd fds[1 + PS_MAX_PCAP_HANDLES + PS_MAX_RAW_HANDLES];
@@ -432,7 +478,7 @@ static void run_loop(void)
         if (r < 0) {
             if (errno == EINTR) continue;
             ps_error("priv_worker: poll failed: %s", strerror(errno));
-            break;
+            return -1;
         }
 
         /* Check brain fd */
@@ -451,13 +497,13 @@ static void run_loop(void)
             uint32_t plen = hdr.payload_len;
             if (plen > PS_MAX_MSG_PAYLOAD) {
                 ps_error("priv_worker: payload too large (%u)", plen);
-                break;
+                return -1;
             }
 
             if (plen > 0) {
                 if (read_all(g_brain_fd, cmd_buf, plen) < 0) {
                     ps_error("priv_worker: read payload failed");
-                    break;
+                    return -1;
                 }
             }
 
@@ -504,12 +550,8 @@ static void run_loop(void)
                                                            (uint16_t)i, ts_usec,
                                                            pktdata, pkthdr->caplen);
                     if (n > 0) {
-                        /* Non-blocking write — drop packet if brain buffer full */
-                        pthread_mutex_lock(&g_write_mu);
-                        (void)ps_priv_write_frame_lossy(g_brain_fd, pkt_buf, n,
-                                                        PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
-                                                        NULL);
-                        pthread_mutex_unlock(&g_write_mu);
+                        /* Lossy: dropped whole if the brain is backed up */
+                        if (send_data_frame(pkt_buf, n) < 0) return -1;
                     }
                 }
             }
@@ -540,18 +582,15 @@ static void run_loop(void)
                         recv_buf, (uint32_t)n);
                     if (out_n > 0) {
                         (void)ts_usec;
-                        /* Non-blocking write — drop if brain buffer full */
-                        pthread_mutex_lock(&g_write_mu);
-                        (void)ps_priv_write_frame_lossy(g_brain_fd, pkt_buf, out_n,
-                                                        PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
-                                                        NULL);
-                        pthread_mutex_unlock(&g_write_mu);
+                        /* Lossy: dropped whole if the brain is backed up */
+                        if (send_data_frame(pkt_buf, out_n) < 0) return -1;
                     }
                 }
             }
             raw_idx++;
         }
     }
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -595,9 +634,9 @@ int main(int argc, char **argv)
 
     ps_info("priv_worker: started (fd=%d)", fd);
 
-    run_loop();
+    int rc = run_loop();
 
-    ps_info("priv_worker: exiting");
+    ps_info("priv_worker: exiting%s", rc < 0 ? " on error" : "");
     close(fd);
-    return EXIT_SUCCESS;
+    return rc < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
 }

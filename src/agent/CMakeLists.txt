@@ -191,6 +191,17 @@ target_include_directories(test_priv_protocol PRIVATE
 )
 add_test(NAME test_priv_protocol COMMAND test_priv_protocol)
 
+# Test: priv worker -> brain stream keeps frame alignment under backpressure
+add_executable(test_priv_stream_integrity tests/test_priv_stream_integrity.c
+    src/priv_frame_io.c src/priv_client.c)
+target_include_directories(test_priv_stream_integrity PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_BINARY_DIR}
+)
+target_link_libraries(test_priv_stream_integrity PRIVATE packetsonde_lib pthread)
+add_test(NAME test_priv_stream_integrity COMMAND test_priv_stream_integrity)
+
 # Test: config parser
 add_executable(test_config tests/test_config.c src/config.c)
 target_include_directories(test_config PRIVATE

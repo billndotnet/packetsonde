@@ -32,11 +32,18 @@ struct ps_frame_stats {
 };
 
 /*
- * Write one frame (header + payload, n bytes) to a non-blocking fd with a
- * single write(). The frame counts as sent only if write() took all of it;
- * anything else is reported as dropped. stats may be NULL.
+ * Write one complete frame (header + payload, n bytes) to fd without
+ * blocking on a full buffer, unless the frame has already started.
  *
- * finish_timeout_ms is reserved and currently unused.
+ *   - Nothing accepted (EAGAIN) -> PS_FRAME_DROPPED.
+ *   - Whole frame accepted       -> PS_FRAME_SENT.
+ *   - Short write                -> the rest is written with a poll(POLLOUT)
+ *     loop bounded by finish_timeout_ms; PS_FRAME_SENT on success, otherwise
+ *     PS_FRAME_BROKEN with errno ETIMEDOUT (a truncated frame is in the
+ *     stream and the caller must stop using it).
+ *   - Any other error            -> PS_FRAME_BROKEN.
+ *
+ * stats may be NULL.
  */
 int ps_priv_write_frame_lossy(int fd, const uint8_t *buf, size_t n,
                               int finish_timeout_ms,
