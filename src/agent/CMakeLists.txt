@@ -165,6 +165,7 @@ endif()
 # the fanotify/detect path moved to kernelsonde-priv.
 add_executable(packetsonde-priv
     src/priv_worker.c
+    src/priv_frame_io.c
 )
 target_include_directories(packetsonde-priv PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

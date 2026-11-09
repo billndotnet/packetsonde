@@ -23,6 +23,7 @@
 #endif
 
 #include "priv_protocol.h"
+#include "priv_frame_io.h"
 #include "log.h"
 #include "build_config.h"
 #include <pthread.h>
@@ -505,9 +506,10 @@ static void run_loop(void)
                     if (n > 0) {
                         /* Non-blocking write — drop packet if brain buffer full */
                         pthread_mutex_lock(&g_write_mu);
-                        ssize_t wr = write(g_brain_fd, pkt_buf, n);
+                        (void)ps_priv_write_frame_lossy(g_brain_fd, pkt_buf, n,
+                                                        PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
+                                                        NULL);
                         pthread_mutex_unlock(&g_write_mu);
-                        (void)wr; /* EAGAIN is acceptable — packet dropped */
                     }
                 }
             }
@@ -540,9 +542,10 @@ static void run_loop(void)
                         (void)ts_usec;
                         /* Non-blocking write — drop if brain buffer full */
                         pthread_mutex_lock(&g_write_mu);
-                        ssize_t wr = write(g_brain_fd, pkt_buf, out_n);
+                        (void)ps_priv_write_frame_lossy(g_brain_fd, pkt_buf, out_n,
+                                                        PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
+                                                        NULL);
                         pthread_mutex_unlock(&g_write_mu);
-                        (void)wr;
                     }
                 }
             }
