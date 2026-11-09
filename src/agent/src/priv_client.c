@@ -50,6 +50,7 @@ static int send_and_recv(struct ps_priv_client *pc,
 {
     if (write_all(pc->fd, msg, msg_len) < 0) {
         ps_error("priv_client: write failed: %s", strerror(errno));
+        pc->broken = 1;
         return -1;
     }
 
@@ -59,44 +60,40 @@ static int send_and_recv(struct ps_priv_client *pc,
         struct ps_priv_msg hdr;
         if (read_all(pc->fd, (uint8_t *)&hdr, sizeof(hdr)) < 0) {
             ps_error("priv_client: read response failed: %s", strerror(errno));
+            pc->broken = 1;
+            return -1;
+        }
+        if (hdr.payload_len > PS_MAX_FRAME_PAYLOAD) {
+            ps_error("priv_client: framing lost: opcode 0x%02x payload %u exceeds max %u",
+                     hdr.opcode, hdr.payload_len, (unsigned)PS_MAX_FRAME_PAYLOAD);
+            pc->broken = 1;
             return -1;
         }
 
         if (hdr.opcode == PS_OP_PACKET_DATA || hdr.opcode == PS_OP_RAW_RESPONSE ||
             hdr.opcode == PS_OP_ACTIVITY_DATA) {
-            /* Async message — buffer it for later event loop processing */
-            if (hdr.payload_len > 0) {
-                if (pc->async_count < PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE) {
-                    struct ps_async_msg *am = &pc->async_queue[pc->async_count];
-                    am->hdr = hdr;
-                    uint32_t to_read = hdr.payload_len;
-                    if (to_read > PS_PRIV_CLIENT_ASYNC_MSG_MAX) to_read = PS_PRIV_CLIENT_ASYNC_MSG_MAX;
-                    if (read_all(pc->fd, am->payload, to_read) < 0) return -1;
-                    /* Skip any excess beyond our buffer */
-                    if (hdr.payload_len > PS_PRIV_CLIENT_ASYNC_MSG_MAX) {
-                        uint8_t discard[4096];
-                        uint32_t remaining = hdr.payload_len - PS_PRIV_CLIENT_ASYNC_MSG_MAX;
-                        while (remaining > 0) {
-                            uint32_t chunk = remaining > sizeof(discard) ? sizeof(discard) : remaining;
-                            if (read_all(pc->fd, discard, chunk) < 0) return -1;
-                            remaining -= chunk;
-                        }
-                    }
-                    pc->async_count++;
-                } else {
-                    /* Queue full — discard payload */
-                    uint8_t discard[4096];
-                    uint32_t remaining = hdr.payload_len;
-                    while (remaining > 0) {
-                        uint32_t chunk = remaining > sizeof(discard) ? sizeof(discard) : remaining;
-                        if (read_all(pc->fd, discard, chunk) < 0) return -1;
-                        remaining -= chunk;
-                    }
-                }
-            } else if (pc->async_count < PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE) {
+            /* Async message — buffer it for later event loop processing.
+             * A frame is queued whole or discarded whole: one larger than a
+             * queue slot (or arriving with the queue full) is read off the
+             * stream and dropped, never handed out truncated. */
+            if (hdr.payload_len <= PS_PRIV_CLIENT_ASYNC_MSG_MAX &&
+                pc->async_count < PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE) {
                 struct ps_async_msg *am = &pc->async_queue[pc->async_count];
                 am->hdr = hdr;
+                if (hdr.payload_len > 0 &&
+                    read_all(pc->fd, am->payload, hdr.payload_len) < 0) {
+                    pc->broken = 1;
+                    return -1;
+                }
                 pc->async_count++;
+            } else {
+                uint8_t discard[4096];
+                uint32_t remaining = hdr.payload_len;
+                while (remaining > 0) {
+                    uint32_t chunk = remaining > sizeof(discard) ? sizeof(discard) : remaining;
+                    if (read_all(pc->fd, discard, chunk) < 0) { pc->broken = 1; return -1; }
+                    remaining -= chunk;
+                }
             }
             continue; /* Keep reading until we get the command response */
         }
@@ -108,7 +105,7 @@ static int send_and_recv(struct ps_priv_client *pc,
             uint32_t remaining = hdr.payload_len;
             while (remaining > 0) {
                 uint32_t chunk = remaining > sizeof(discard) ? sizeof(discard) : remaining;
-                if (read_all(pc->fd, discard, chunk) < 0) return -1;
+                if (read_all(pc->fd, discard, chunk) < 0) { pc->broken = 1; return -1; }
                 remaining -= chunk;
             }
         }
@@ -245,11 +242,15 @@ int ps_priv_client_recv(struct ps_priv_client *pc,
                          struct ps_priv_msg *hdr,
                          uint8_t *payload_buf, size_t bufsz)
 {
-    /* First drain any messages buffered during synchronous command waits */
+    if (pc->broken) return -1;
+
+    /* First drain any messages buffered during synchronous command waits.
+     * Queued payloads never exceed PS_PRIV_CLIENT_ASYNC_MSG_MAX. */
     if (pc->async_count > 0) {
         struct ps_async_msg *am = &pc->async_queue[0];
         *hdr = am->hdr;
         uint32_t copy = hdr->payload_len;
+        if (copy > PS_PRIV_CLIENT_ASYNC_MSG_MAX) copy = PS_PRIV_CLIENT_ASYNC_MSG_MAX;
         if (copy > bufsz) copy = (uint32_t)bufsz;
         if (copy > 0) memcpy(payload_buf, am->payload, copy);
         /* Shift queue down */
@@ -286,6 +287,7 @@ int ps_priv_client_recv(struct ps_priv_client *pc,
     if (n < (ssize_t)sizeof(*hdr)) {
         /* Partial header: read the rest */
         if (read_all(pc->fd, (uint8_t *)hdr + n, sizeof(*hdr) - (size_t)n) < 0) {
+            pc->broken = 1;
             return -1;
         }
     }
@@ -294,10 +296,14 @@ int ps_priv_client_recv(struct ps_priv_client *pc,
     uint32_t payload_len = hdr->payload_len;
     if (payload_len > 0) {
         if (payload_len > bufsz) {
-            ps_error("priv_client: recv payload %u exceeds buffer %zu", payload_len, bufsz);
+            ps_error("priv_client: recv payload %u exceeds buffer %zu "
+                     "(opcode 0x%02x): stream framing lost",
+                     payload_len, bufsz, hdr->opcode);
+            pc->broken = 1;
             return -1;
         }
         if (read_all(pc->fd, payload_buf, payload_len) < 0) {
+            pc->broken = 1;
             return -1;
         }
     }

@@ -19,6 +19,9 @@ struct ps_priv_client {
      * command waits are buffered here for later processing by the event loop. */
     struct ps_async_msg async_queue[PS_PRIV_CLIENT_ASYNC_QUEUE_SIZE];
     int async_count;
+    /* Set when the stream has lost framing or failed mid-frame; every later
+     * ps_priv_client_recv() reports an error instead of parsing garbage. */
+    int broken;
 };
 
 void ps_priv_client_init(struct ps_priv_client *pc, int fd);

@@ -463,7 +463,8 @@ int main(int argc, char **argv)
     ps_info("main: entering event loop");
 
     /* --- Event loop --- */
-    uint8_t priv_payload[PS_MAX_MSG_PAYLOAD];
+    uint8_t priv_payload[PS_MAX_FRAME_PAYLOAD];
+    int exit_status = EXIT_SUCCESS;
 
     while (g_running) {
         /* Poll IPC clients (non-blocking) */
@@ -473,7 +474,10 @@ int main(int argc, char **argv)
         struct ps_priv_msg hdr;
         int n = ps_priv_client_recv(&g_priv, &hdr, priv_payload, sizeof(priv_payload));
         if (n < 0) {
+            /* Not a clean shutdown: exit non-zero so the service manager
+             * restarts us (Restart=on-failure). */
             ps_error("main: priv worker disconnected");
+            exit_status = EXIT_FAILURE;
             g_running = 0;
             break;
         }
@@ -495,5 +499,5 @@ int main(int argc, char **argv)
     ps_config_free(&cfg);
 
     ps_info("main: done");
-    return EXIT_SUCCESS;
+    return exit_status;
 }
