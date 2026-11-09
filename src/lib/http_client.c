@@ -33,10 +33,12 @@ int ps_url_parse(const char *url, struct ps_url *o) {
     return 0;
 }
 
-int ps_http_build_request(char *buf, size_t cap, const char *method,
-                          const struct ps_url *u, const char *body,
-                          const char *extra_headers) {
-    size_t blen = body ? strlen(body) : 0;
+/* Request line + headers (ending in the blank line), no body. The body is
+ * written separately so its size is bounded only by the caller's buffer, not by
+ * a fixed request buffer here. */
+static int build_head(char *buf, size_t cap, const char *method,
+                      const struct ps_url *u, size_t blen,
+                      const char *extra_headers) {
     int n = snprintf(buf, cap,
         "%s %s HTTP/1.1\r\n"
         "Host: %s:%d\r\n"
@@ -44,13 +46,22 @@ int ps_http_build_request(char *buf, size_t cap, const char *method,
         "Content-Length: %zu\r\n"
         "Connection: close\r\n"
         "%s"
-        "\r\n"
-        "%s",
+        "\r\n",
         method, u->path, u->host, u->port, blen,
-        extra_headers ? extra_headers : "",
-        body ? body : "");
+        extra_headers ? extra_headers : "");
     if (n < 0 || (size_t)n >= cap) return -1;
     return n;
+}
+
+int ps_http_build_request(char *buf, size_t cap, const char *method,
+                          const struct ps_url *u, const char *body,
+                          const char *extra_headers) {
+    size_t blen = body ? strlen(body) : 0;
+    int h = build_head(buf, cap, method, u, blen, extra_headers);
+    if (h < 0 || (size_t)h + blen >= cap) return -1;
+    memcpy(buf + h, body ? body : "", blen);
+    buf[(size_t)h + blen] = 0;
+    return h + (int)blen;
 }
 
 int ps_http_parse_response(const char *raw, size_t len, int *status_out,
@@ -69,6 +80,10 @@ int ps_http_parse_response(const char *raw, size_t len, int *status_out,
 #include <netdb.h>
 #include <unistd.h>
 #include <sys/time.h>
+
+/* Stage of the last failure on this thread, for callers' diagnostics. */
+static __thread const char *g_http_err = "none";
+const char *ps_http_last_error(void) { return g_http_err; }
 
 static int dial(const char *host, int port, int timeout_s) {
     char portstr[16]; snprintf(portstr, sizeof portstr, "%d", port);
@@ -89,16 +104,25 @@ static int dial(const char *host, int port, int timeout_s) {
     return fd;
 }
 
-/* Send req (len bytes) over fd or ssl; read response into buf (cap). */
-static int io_exchange(int fd, SSL *ssl, const char *req, size_t reqlen,
-                       char *buf, size_t cap) {
+static int write_all(int fd, SSL *ssl, const char *p, size_t len) {
     size_t off = 0;
-    while (off < reqlen) {
-        int w = ssl ? SSL_write(ssl, req + off, (int)(reqlen - off))
-                    : (int)write(fd, req + off, reqlen - off);
+    while (off < len) {
+        size_t chunk = len - off;
+        if (chunk > (size_t)1 << 30) chunk = (size_t)1 << 30;
+        int w = ssl ? SSL_write(ssl, p + off, (int)chunk)
+                    : (int)write(fd, p + off, chunk);
         if (w <= 0) return -1;
         off += (size_t)w;
     }
+    return 0;
+}
+
+/* Send head then body over fd or ssl; read response into buf (cap). */
+static int io_exchange(int fd, SSL *ssl, const char *head, size_t headlen,
+                       const char *body, size_t bodylen,
+                       char *buf, size_t cap) {
+    if (write_all(fd, ssl, head, headlen) != 0) { g_http_err = "write"; return -1; }
+    if (bodylen && write_all(fd, ssl, body, bodylen) != 0) { g_http_err = "write"; return -1; }
     size_t got = 0;
     for (;;) {
         if (got + 1 >= cap) break;  /* cap reached; truncate */
@@ -115,16 +139,18 @@ int ps_http_request_h(const char *method, const char *url, const char *body,
                       const char *extra_headers,
                       const struct ps_http_opts *opts, int *status_out,
                       char *resp_buf, size_t resp_cap) {
+    g_http_err = "none";
     struct ps_url u;
-    if (ps_url_parse(url, &u) != 0) return -1;
+    if (ps_url_parse(url, &u) != 0) { g_http_err = "url"; return -1; }
 
-    char req[8192];
-    int reqlen = ps_http_build_request(req, sizeof req, method, &u, body, extra_headers);
-    if (reqlen < 0) return -1;
+    size_t blen = body ? strlen(body) : 0;
+    char head[4096];
+    int headlen = build_head(head, sizeof head, method, &u, blen, extra_headers);
+    if (headlen < 0) { g_http_err = "headers"; return -1; }
 
     int timeout_s = opts ? opts->timeout_s : 10;
     int fd = dial(u.host, u.port, timeout_s);
-    if (fd < 0) return -1;
+    if (fd < 0) { g_http_err = "connect"; return -1; }
 
     int rc = -1;
     SSL_CTX *ctx = NULL; SSL *ssl = NULL;
@@ -132,7 +158,7 @@ int ps_http_request_h(const char *method, const char *url, const char *body,
 
     if (is_https) {
         ctx = SSL_CTX_new(TLS_client_method());
-        if (!ctx) { close(fd); return -1; }
+        if (!ctx) { g_http_err = "tls"; close(fd); return -1; }
         int verify = opts ? opts->verify : 1;
         if (verify) {
             SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
@@ -147,14 +173,16 @@ int ps_http_request_h(const char *method, const char *url, const char *body,
         SSL_set_fd(ssl, fd);
         SSL_set_tlsext_host_name(ssl, u.host);
         X509_VERIFY_PARAM_set1_host(SSL_get0_param(ssl), u.host, 0);
-        if (SSL_connect(ssl) != 1) goto done;
+        if (SSL_connect(ssl) != 1) { g_http_err = "tls"; goto done; }
     }
 
-    if (io_exchange(fd, ssl, req, (size_t)reqlen, resp_buf, resp_cap) < 0) goto done;
+    if (io_exchange(fd, ssl, head, (size_t)headlen, body, blen, resp_buf, resp_cap) < 0) goto done;
     {
         const char *bodyp = NULL;
-        if (ps_http_parse_response(resp_buf, strlen(resp_buf), status_out, &bodyp) != 0)
+        if (ps_http_parse_response(resp_buf, strlen(resp_buf), status_out, &bodyp) != 0) {
+            g_http_err = "response";
             goto done;
+        }
         /* shift body to front of resp_buf for the caller's convenience */
         if (bodyp && bodyp != resp_buf) memmove(resp_buf, bodyp, strlen(bodyp) + 1);
         rc = 0;

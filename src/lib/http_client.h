@@ -20,4 +20,8 @@ int ps_http_request_h(const char *method, const char *url, const char *body,
                       const char *extra_headers,
                       const struct ps_http_opts *opts, int *status_out,
                       char *resp_buf, size_t resp_cap);
+
+/* Short name of the stage at which the calling thread's last ps_http_request*
+ * failed: "url", "headers", "connect", "tls", "write", "response", or "none". */
+const char *ps_http_last_error(void);
 #endif
