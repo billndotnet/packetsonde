@@ -476,8 +476,12 @@ int main(int argc, char **argv)
         if (n < 0) {
             /* Not a clean shutdown: exit non-zero so the service manager
              * restarts us (Restart=on-failure). */
-            ps_error("main: priv worker disconnected");
-            exit_status = EXIT_FAILURE;
+            /* A stop signal (SIGTERM reaches the worker and us together)
+             * is a clean shutdown even if the worker's EOF is read first. */
+            if (g_running) {
+                ps_error("main: priv worker disconnected");
+                exit_status = EXIT_FAILURE;
+            }
             g_running = 0;
             break;
         }
