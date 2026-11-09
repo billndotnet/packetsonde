@@ -106,6 +106,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_reporter PRIVATE packetsonde_lib)
     add_test(NAME test_reporter COMMAND test_reporter)
 
+    add_executable(test_reporter_ship tests/test_reporter_ship.c)
+    target_link_libraries(test_reporter_ship PRIVATE packetsonde_lib pthread)
+    add_test(NAME test_reporter_ship COMMAND test_reporter_ship)
+
     add_executable(test_relay_attest tests/test_relay_attest.c)
     target_link_libraries(test_relay_attest PRIVATE packetsonde_lib)
     add_test(NAME test_relay_attest COMMAND test_relay_attest)

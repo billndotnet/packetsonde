@@ -50,19 +50,21 @@ int ps_central_checkin_once(long uptime_seconds) {
 }
 
 /* Drain queued observations and ship them to central in bounded batches.
- * Batching by PS_OBS_SHIP_BATCH keeps each signed POST well under the reporter's
- * envelope buffer even when the queue is full of large findings; the per-cycle
- * batch cap bounds work. Best-effort: a failed batch's items are already
- * dequeued (dropped) — Phase-1 reconciliation backstops gaps; we never block
- * the daemon on central availability. */
-#define PS_OBS_SHIP_BATCH        50   /* envelopes per POST (fits the 256 KiB buffer) */
+ * PS_OBS_SHIP_BATCH bounds the items drained per call; the reporter splits a
+ * batch across several POSTs when its envelopes outgrow one request, and skips
+ * (and logs) any single item it cannot envelope instead of failing the batch.
+ * The per-cycle batch cap bounds work. Best-effort: items that cannot be
+ * delivered (central unreachable, non-2xx) are already dequeued and dropped;
+ * Phase-1 reconciliation backstops gaps; we never block the daemon on central
+ * availability. */
+#define PS_OBS_SHIP_BATCH        50   /* items drained per reporter call */
 #define PS_OBS_SHIP_MAX_BATCHES  16   /* up to 800 observations drained per cycle */
 static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
     if (!cc->url || !cc->url[0]) return;
 
     static char items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];
     const char *jsons[PS_OBS_SHIP_BATCH];
-    int shipped = 0, dropped = 0;
+    int shipped = 0, skipped = 0, failed = 0, accepted = 0, last_status = 0;
 
     for (int batch = 0; batch < PS_OBS_SHIP_MAX_BATCHES; batch++) {
         int n = ps_obs_queue_drain(items, PS_OBS_SHIP_BATCH);
@@ -71,13 +73,29 @@ static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
 
         struct ps_report_result rr;
         memset(&rr, 0, sizeof(rr));
-        if (ps_report_observations(cc, NULL, jsons, (size_t)n, &rr) != 0)
-            dropped += n;
-        else
-            shipped += n;
+        int rc = ps_report_observations(cc, NULL, jsons, (size_t)n, &rr);
+        skipped  += rr.skipped;
+        failed   += rr.unsent;
+        shipped  += n - rr.skipped - rr.unsent;
+        accepted += rr.accepted;
+        if (rr.http_status) last_status = rr.http_status;
+        if (rc != 0) {
+            /* Central is unreachable: stop draining this cycle so queued items
+             * wait for the next one instead of being dropped too. */
+            break;
+        }
+        if (rr.http_status >= 500 || rr.http_status == 429) {
+            /* Central (or the proxy in front of it) answered "unavailable"/"slow down": the batch in flight is
+             * lost, but do not drain the rest of the queue into the same wall. */
+            break;
+        }
     }
-    if (shipped > 0) ps_info("central: shipped %d observations", shipped);
-    if (dropped > 0) ps_warn("central: observation ship failed (dropped %d)", dropped);
+    if (skipped > 0 || failed > 0)
+        ps_warn("central: observations shipped %d (accepted %d), skipped %d (could not be "
+                "enveloped), failed %d (not delivered, last HTTP %d)",
+                shipped, accepted, skipped, failed, last_status);
+    else if (shipped > 0)
+        ps_info("central: shipped %d observations (accepted %d)", shipped, accepted);
 }
 
 static volatile int g_stop = 0;
