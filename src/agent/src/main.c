@@ -23,6 +23,7 @@
 #include "module.h"
 #include "host_table.h"
 #include "obs_queue.h"
+#include "obs_dedupe.h"
 #include "iso8601.h"
 #include "priv_client.h"
 #include "platform/platform.h"
@@ -180,11 +181,16 @@ static int ctx_publish(ps_module_ctx_t *ctx,
     if (strncmp(channel, "discovery.", 10) == 0 ||
         strncmp(channel, "net.iface.", 10) == 0) {
         char ts_iso[24];
-        if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof(ts_iso)) > 0) {
+        uint64_t wall = ps_platform_wall_usec();
+        if (ps_iso8601_utc(wall, ts_iso, sizeof(ts_iso)) > 0) {
             char event_json[PS_OBS_ITEM_MAX];
             size_t evlen = ps_obs_build_event(event_json, sizeof(event_json),
                                               channel, ts_iso, json, json_len);
-            if (evlen > 0)
+            /* Repeat sightings are collapsed into a later summary event
+             * (obs_dedupe.h); only a first sighting is queued now. */
+            if (evlen > 0 &&
+                ps_obs_dedupe_offer_n(channel, json, json_len,
+                                      (int64_t)(wall / 1000)) == PS_DEDUPE_SEND)
                 ps_obs_queue_push(event_json, evlen);
         }
     }
@@ -983,6 +989,20 @@ int main(int argc, char **argv)
         ps_info("main: applied %d config keys to environment", env_set);
     }
 
+    /* --- Observation dedupe: collapse repeat sightings ([central] dedupe_*).
+     * Before the checkin loop starts, since that loop flushes it. --- */
+    {
+        struct ps_obs_dedupe_cfg dc;
+        ps_obs_dedupe_cfg_from_env(&dc);
+        if (ps_obs_dedupe_init(&dc) != 0)
+            ps_warn("main: observation dedupe disabled (out of memory)");
+        else if (dc.window_s == 0)
+            ps_info("main: observation dedupe disabled (dedupe_window_s = 0)");
+        else
+            ps_info("main: observation dedupe on (table %d, %d per-kind windows)",
+                    dc.table_max, dc.n_kinds);
+    }
+
     /* --- Central management: self-enroll on first boot + start checkin --- */
     {
         struct ps_central_config cc = ps_central_config_from_env();
@@ -1322,6 +1342,8 @@ int main(int argc, char **argv)
 
     /* Clean shutdown */
     ps_module_registry_shutdown_all(&g_registry);
+    /* Pending repeat summaries go out with a last shipment. */
+    ps_central_checkin_stop();
     ps_ipc_server_shutdown(&g_ipc);
 #ifdef HAVE_HIREDIS
     if (g_redis_br) {

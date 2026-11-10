@@ -4,6 +4,12 @@ All notable changes to packetsonde. Format roughly follows [Keep a Changelog](ht
 
 ## [Unreleased]
 
+### Added — observation dedupe with preserved temporal data
+- **Repeat sightings are collapsed before they are shipped to central.** The first sighting of a content key is sent at once; repeats inside the key's window (default 900 s, `discovery.dns` 300 s) are counted and sent as ONE summary event when the window ends, carrying `dedupe` = `since` / `first` / `last`, the repeat count `n`, inter-arrival `gap_min` / `gap_max` / `gap_mean` and a run-length timeline `seen` (at most 32 `[offset_s, n]` pairs), all inside the signed envelope. Central count = 1 + `n`.
+- **A change is never suppressed:** any differing field (a new MAC for an IP, an extra DNS answer) is a new sighting at once, and a neighbor whose content changes closes its old window's summary first. Volatile fields (`ts`, `seen_at`, `first_seen`, `last_seen`, `count`, `seq`, `id`, `timestamp`, `observed_at`, `ttl`) are ignored at any depth; DNS answers are compared as a sorted set. The canonical key format is specified in `src/agent/src/obs_dedupe.h` with shared test vectors in `src/agent/tests/fixtures/dedupe_vectors.json`.
+- **Bounded:** the table holds `dedupe_table_max` keys (default 2048; the least recently seen is evicted with its summary emitted first) and a summary never exceeds the 4 KiB event limit (timeline coarsened, or the observation replaced by its key digest with `"truncated":true`). Pending summaries ship on the checkin cycle and on shutdown.
+- Config (`[central]`): `dedupe_window_s` (0 disables), `dedupe_window_<kind>` (e.g. `dedupe_window_dns = 300`), `dedupe_table_max`. The `dedupe` object is additive: older centrals ignore it.
+
 ### Added — TLS fingerprints
 - **JA4 (client) + JA4S (server)** (FoxIO 2023) emitted alongside the existing JA3 / JA3S / JA4X in `tls.metadata` evidence. JA4 surfaces real TLS version via `supported_versions`, drops GREASE, sorts ciphers and extensions for stability under Chrome-style extension shuffling, and includes signature_algorithms in original order. Pure parser on the already-captured `client_hello` / `server_hello` — no new deps, no probe behavior changes.
 

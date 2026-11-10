@@ -31,6 +31,7 @@
 #include "ipc_server.h"
 #include "module.h"
 #include "obs_queue.h"
+#include "obs_dedupe.h"
 #include "activity_ring.h"
 #include "iso8601.h"
 #include "priv_client.h"
@@ -98,11 +99,15 @@ static int ctx_publish(ps_module_ctx_t *ctx,
      * policy.sandbox.violation findings before they ship. */
     if (strcmp(channel, "baseline.candidate") != 0) {
         char ts_iso[24];
-        if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof(ts_iso)) > 0) {
+        uint64_t wall = ps_platform_wall_usec();
+        if (ps_iso8601_utc(wall, ts_iso, sizeof(ts_iso)) > 0) {
             char event_json[PS_OBS_ITEM_MAX];
             size_t evlen = ps_obs_build_event(event_json, sizeof(event_json),
                                               channel, ts_iso, json, json_len);
-            if (evlen > 0)
+            /* repeats are collapsed into a later summary (obs_dedupe.h) */
+            if (evlen > 0 &&
+                ps_obs_dedupe_offer_n(channel, json, json_len,
+                                      (int64_t)(wall / 1000)) == PS_DEDUPE_SEND)
                 ps_obs_queue_push(event_json, evlen);
         }
     }
@@ -247,13 +252,17 @@ static void maybe_ship_provenance(const char *json)
     if (bn <= 0) return;
 
     char ts_iso[24];
-    if (ps_iso8601_utc(ps_platform_wall_usec(), ts_iso, sizeof ts_iso) <= 0) return;
+    uint64_t wall = ps_platform_wall_usec();
+    if (ps_iso8601_utc(wall, ts_iso, sizeof ts_iso) <= 0) return;
 
     char event_json[PS_OBS_ITEM_MAX];
     size_t evlen = ps_obs_build_event(event_json, sizeof event_json,
                                       "detect.file_provenance", ts_iso,
                                       bundle, (size_t)bn);
-    if (evlen > 0) ps_obs_queue_push(event_json, evlen);
+    if (evlen > 0 &&
+        ps_obs_dedupe_offer_n("detect.file_provenance", bundle, (size_t)bn,
+                              (int64_t)(wall / 1000)) == PS_DEDUPE_SEND)
+        ps_obs_queue_push(event_json, evlen);
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,6 +362,20 @@ int main(int argc, char **argv)
      * config_to_env). Both enroll (ps_register, reads cc.key_dir) and the
      * checkin loop (ps_central_checkin_start, reads env) pick this up. */
     setenv("PS_KEY_DIR", "/etc/kernelsonded/keys", 0);
+    /* --- Observation dedupe: collapse repeat sightings ([central] dedupe_*).
+     * Before the checkin loop starts, since that loop flushes it. --- */
+    {
+        struct ps_obs_dedupe_cfg dc;
+        ps_obs_dedupe_cfg_from_env(&dc);
+        if (ps_obs_dedupe_init(&dc) != 0)
+            ps_warn("main: observation dedupe disabled (out of memory)");
+        else if (dc.window_s == 0)
+            ps_info("main: observation dedupe disabled (dedupe_window_s = 0)");
+        else
+            ps_info("main: observation dedupe on (table %d, %d per-kind windows)",
+                    dc.table_max, dc.n_kinds);
+    }
+
     {
         struct ps_central_config cc = ps_central_config_from_env();
         if (cc.url && cc.url[0]) {
@@ -498,6 +521,8 @@ int main(int argc, char **argv)
     ps_info("main: shutting down");
 
     ps_module_registry_shutdown_all(&g_registry);
+    /* Pending repeat summaries go out with a last shipment. */
+    ps_central_checkin_stop();
     ps_ipc_server_shutdown(&g_ipc);
     close(priv_fd);
     ps_config_free(&cfg);

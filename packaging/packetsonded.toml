@@ -59,6 +59,11 @@ ca_cert         = ""            # optional internal CA pin
 checkin_seconds = "60"
 report_mode     = "direct"      # "relay" -> forward events through relay_via instead of POSTing central
 relay_via       = ""            # edge: relay agent name when report_mode = "relay"
+# Repeat sightings: the first is sent at once, repeats inside the window are
+# sent as one summary (count, first/last, gaps, timeline) when it ends.
+#dedupe_window_s  = "900"       # every kind; "0" disables suppression
+#dedupe_window_dns = "300"      # per kind: dedupe_window_<kind> (last segment or full kind with '_')
+#dedupe_table_max = "2048"      # keys tracked; the least recently seen is summarised and evicted
 
 # ---- relay role ------------------------------------------------------
 # A relay accepts ingest frames from edge agents over the mTLS channel,

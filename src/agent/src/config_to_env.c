@@ -1,5 +1,6 @@
 #include "config_to_env.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,6 +62,10 @@ static const struct mapping MAPPINGS[] = {
     { "central", "checkin_seconds", "PS_CENTRAL_CHECKIN_SECONDS" },
     { "central", "report_mode",     "PS_CENTRAL_REPORT_MODE" },
     { "central", "relay_via",       "PS_CENTRAL_RELAY_VIA" },
+    /* observation dedupe (obs_dedupe.h); dedupe_window_<kind> is mapped
+     * by prefix below */
+    { "central", "dedupe_window_s",  "PS_CENTRAL_DEDUPE_WINDOW_S" },
+    { "central", "dedupe_table_max", "PS_CENTRAL_DEDUPE_TABLE_MAX" },
 
     /* relay role (this agent forwards others' envelopes to central) */
     { "relay", "role",          "PS_RELAY_ROLE" },
@@ -87,28 +92,54 @@ static const struct mapping MAPPINGS[] = {
     { NULL, NULL, NULL }
 };
 
+/* Set env_name from a config value unless the env already has it (env
+ * wins). The TOML parser preserves wrapping double-quotes; strip them so
+ * modules see "1", "knock", etc. as raw values. */
+static int set_from_value(const char *env_name, const char *value) {
+    if (getenv(env_name) != NULL) return 0;
+    const char *val = value;
+    char buf[sizeof(((struct ps_config_entry *)0)->value)];
+    size_t L = strlen(val);
+    if (L >= 2 && L - 2 < sizeof buf && val[0] == '"' && val[L - 1] == '"') {
+        memcpy(buf, val + 1, L - 2);
+        buf[L - 2] = '\0';
+        val = buf;
+    }
+    return setenv(env_name, val, 0) == 0;
+}
+
+/* [central] dedupe_window_<kind> -> PS_CENTRAL_DEDUPE_WINDOW_<KIND>, with
+ * <kind> upper-cased and every non-alphanumeric character turned into '_'. */
+static int map_dedupe_window(const struct ps_config_entry *e) {
+    static const char kpre[] = "dedupe_window_";
+    static const char epre[] = "PS_CENTRAL_DEDUPE_WINDOW_";
+    if (strcmp(e->section, "central") != 0) return 0;
+    if (strncmp(e->key, kpre, sizeof kpre - 1) != 0) return 0;
+    const char *kind = e->key + sizeof kpre - 1;
+    if (!kind[0]) return 0;
+    char name[sizeof epre + sizeof e->key];
+    size_t n = sizeof epre - 1;
+    memcpy(name, epre, n);
+    for (; *kind && n + 1 < sizeof name; kind++) {
+        unsigned char c = (unsigned char)*kind;
+        name[n++] = isalnum(c) ? (char)toupper(c) : '_';
+    }
+    name[n] = '\0';
+    return set_from_value(name, e->value);
+}
+
 int ps_config_to_env(const struct ps_config *cfg) {
     int set_count = 0;
     for (int i = 0; i < cfg->count; i++) {
         const struct ps_config_entry *e = &cfg->entries[i];
-        for (const struct mapping *m = MAPPINGS; m->section; m++) {
+        const struct mapping *m;
+        for (m = MAPPINGS; m->section; m++) {
             if (strcmp(e->section, m->section) != 0) continue;
             if (strcmp(e->key,     m->key)     != 0) continue;
-            /* Env wins. Pre-existing PS_* override the file. */
-            if (getenv(m->env_name) != NULL) break;
-            /* The TOML parser preserves wrapping double-quotes; strip
-             * them so modules see "1", "knock", etc. as raw values. */
-            const char *val = e->value;
-            char buf[sizeof(e->value)];
-            size_t L = strlen(val);
-            if (L >= 2 && val[0] == '"' && val[L - 1] == '"') {
-                memcpy(buf, val + 1, L - 2);
-                buf[L - 2] = '\0';
-                val = buf;
-            }
-            if (setenv(m->env_name, val, 0) == 0) set_count++;
+            set_count += set_from_value(m->env_name, e->value);
             break;
         }
+        if (!m->section) set_count += map_dedupe_window(e);
     }
     return set_count;
 }

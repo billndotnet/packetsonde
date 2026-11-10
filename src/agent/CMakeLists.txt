@@ -119,6 +119,7 @@ add_library(packetsonde_daemon STATIC
     src/ipc_server.c
     src/module.c
     src/obs_queue.c
+    src/obs_dedupe.c
     src/priv_client.c
     src/iso8601.c
     src/platform/unix.c
@@ -369,6 +370,15 @@ target_include_directories(test_obs_queue PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_obs_queue PRIVATE pthread)
 add_test(NAME test_obs_queue COMMAND test_obs_queue)
+
+# Test: observation dedupe (key canonicalisation, windows, temporal summary)
+add_executable(test_obs_dedupe tests/test_obs_dedupe.c src/obs_dedupe.c src/obs_queue.c
+    src/iso8601.c src/config.c src/config_to_env.c)
+target_include_directories(test_obs_dedupe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_obs_dedupe PRIVATE packetsonde_lib pthread)
+add_test(NAME test_obs_dedupe COMMAND test_obs_dedupe
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dedupe_vectors.json)
 
 # Test: bounded activity ring
 add_executable(test_activity_ring tests/test_activity_ring.c

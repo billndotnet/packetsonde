@@ -5,6 +5,8 @@
 #include "log.h"
 #include "build_config.h"     /* PS_VERSION */
 #include "obs_queue.h"
+#include "obs_dedupe.h"
+#include "platform/platform.h"
 #include "reporter.h"         /* ps_report_events, ps_report_result */
 #include <pthread.h>
 #include <unistd.h>
@@ -59,6 +61,34 @@ int ps_central_checkin_once(long uptime_seconds) {
  * availability. */
 #define PS_OBS_SHIP_BATCH        50   /* items drained per reporter call */
 #define PS_OBS_SHIP_MAX_BATCHES  16   /* up to 800 observations drained per cycle */
+static pthread_mutex_t g_ship_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Move dedupe summaries into the queue: those whose window ended, or all of
+ * them with `force`. A summary is never dropped here: the dedupe table keeps
+ * any that do not fit one round for the next. */
+static void ps_checkin_flush_dedupe(int force) {
+    static char items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];
+    int64_t now_ms = (int64_t)(ps_platform_wall_usec() / 1000);
+    int n;
+    do {
+        n = ps_obs_dedupe_flush(now_ms, force, items, PS_OBS_SHIP_BATCH);
+        for (int i = 0; i < n; i++) ps_obs_queue_push(items[i], strlen(items[i]));
+    } while (n == PS_OBS_SHIP_BATCH);
+
+    static struct ps_obs_dedupe_counters last;
+    struct ps_obs_dedupe_counters c;
+    ps_obs_dedupe_get_counters(&c);
+    if (c.summaries != last.summaries || c.sent != last.sent)
+        ps_info("dedupe: offered %llu, sent %llu, suppressed %llu, summaries %llu "
+                "(%llu repeats), evicted %llu, closed %llu, truncated %llu, open %d",
+                (unsigned long long)c.offered, (unsigned long long)c.sent,
+                (unsigned long long)c.suppressed, (unsigned long long)c.summaries,
+                (unsigned long long)c.summary_repeats, (unsigned long long)c.evicted,
+                (unsigned long long)c.closed, (unsigned long long)c.truncated,
+                ps_obs_dedupe_count());
+    last = c;
+}
+
 static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
     if (!cc->url || !cc->url[0]) return;
 
@@ -109,10 +139,24 @@ static void *checkin_loop(void *arg) {
         struct ps_central_config cc = ps_central_config_from_env();
         if (ps_checkin_post_heartbeat(&cc, time(NULL) - g_start) != 0)
             ps_warn("central: checkin failed");
-        ps_checkin_ship_observations(&cc);
+        pthread_mutex_lock(&g_ship_lock);
+        if (!g_stop) {
+            ps_checkin_flush_dedupe(0);
+            ps_checkin_ship_observations(&cc);
+        }
+        pthread_mutex_unlock(&g_ship_lock);
         for (int i = 0; i < g_interval && !g_stop; i++) sleep(1);
     }
     return NULL;
+}
+
+void ps_central_checkin_stop(void) {
+    pthread_mutex_lock(&g_ship_lock);   /* waits for a shipment in flight */
+    g_stop = 1;
+    ps_checkin_flush_dedupe(1);
+    struct ps_central_config cc = ps_central_config_from_env();
+    ps_checkin_ship_observations(&cc);
+    pthread_mutex_unlock(&g_ship_lock);
 }
 
 int ps_central_checkin_start(void) {

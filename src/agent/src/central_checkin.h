@@ -9,4 +9,9 @@ int ps_central_checkin_once(long uptime_seconds);
  * Returns 0 if started, -1 if central is not configured. */
 int ps_central_checkin_start(void);
 
+/* Stop the checkin loop (if running), flush every pending dedupe summary
+ * into the observation queue and ship the queue once more. Bounded by the
+ * reporter's HTTP timeout; safe to call when central is not configured. */
+void ps_central_checkin_stop(void);
+
 #endif
