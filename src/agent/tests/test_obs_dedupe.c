@@ -5,6 +5,9 @@
 #include "config.h"
 #include "config_to_env.h"
 #include "json_extract.h"
+#include "obs_ship.h"
+#include "central_checkin.h"
+#include "platform/platform.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -462,18 +465,242 @@ static void test_mixed_stream_accounting(void) {
             (unsigned long long)c.evicted, (unsigned long long)c.closed);
 }
 
-/* the default emit target is the observation queue */
-static void test_default_emit_queue(void) {
+/* ---------------------------------------------------------------- */
+/* Production path: no emit hook, the REAL observation queue and the   */
+/* real shipping cycle (obs_ship.c) with a counting fake transport.    */
+
+struct fake_central {
+    long raw, summaries, repeats;
+    int  fail_calls;   /* ship answers fail_rc this many times first */
+    int  fail_rc;      /* -1: delivery unknown/partial, -2: nothing delivered */
+};
+static int fake_ship(const char **items, int n, void *user) {
+    struct fake_central *f = user;
+    CHECK(n > 0 && n <= PS_OBS_SHIP_BATCH);
+    if (f->fail_calls > 0) { f->fail_calls--; return f->fail_rc ? f->fail_rc : -1; }
+    for (int i = 0; i < n; i++) {
+        CHECK(strlen(items[i]) < PS_OBS_ITEM_MAX);
+        if (strstr(items[i], "\"dedupe\":")) {
+            f->summaries++;
+            f->repeats += field_long(items[i], "n");
+        } else {
+            f->raw++;
+        }
+    }
+    return 0;
+}
+
+static void init_prod(int table_max) {
     struct ps_obs_dedupe_cfg c;
-    ps_obs_dedupe_cfg_defaults(&c);
-    c.table_max = 1;
+    ps_obs_dedupe_cfg_defaults(&c);   /* emit hook NULL: staging */
+    c.table_max = table_max;
     assert(ps_obs_dedupe_init(&c) == 0);
     ps_obs_queue_init();
+}
+
+/* What the daemons do with a sighting (main.c publish path). */
+static int offer_like_daemon(const char *kind, const char *obs, int64_t now) {
+    char ev[PS_OBS_ITEM_MAX];
+    size_t n = ps_obs_build_event(ev, sizeof ev, kind, "2026-01-01T00:00:00Z", obs, strlen(obs));
+    if (n > 0 && ps_obs_dedupe_offer(kind, obs, now) == PS_DEDUPE_SEND) {
+        ps_obs_queue_push(ev, n);
+        return 1;
+    }
+    return 0;
+}
+
+static void fill_queue(void) {
+    for (int i = 0; i < PS_OBS_QUEUE_CAP; i++) ps_obs_queue_push("{\"raw\":1}", 9);
+    CHECK(ps_obs_queue_count() == PS_OBS_QUEUE_CAP);
+}
+
+/* 1000 summaries at one checkin boundary, queue already full: none lost. */
+static void test_ship_many_summaries(void) {
+    init_prod(0);
+    fill_queue();
+    char obs[64];
+    for (int k = 0; k < 1000; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"g%d\"}", k);
+        offer_like_daemon("discovery.mld", obs, T0);
+    }
+    for (int k = 0; k < 1000; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"g%d\"}", k);
+        CHECK(offer_like_daemon("discovery.mld", obs, T0 + 1000) == 0);
+    }
+    struct fake_central f = { 0, 0, 0, 0, 0 };
+    struct ps_obs_ship_counts sc;
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
+    CHECK(f.summaries == 1000);
+    CHECK(f.repeats == 1000);
+    CHECK(sc.summaries == 1000 && !sc.stopped);
+    CHECK(ps_obs_dedupe_count() == 0);
+}
+
+/* An eviction burst while the queue is full: every repeat is still shipped
+ * (staged up to PS_DEDUPE_STAGE_MAX, then new keys go untracked). */
+static void test_eviction_burst_full_queue(void) {
+    init_prod(8);
+    fill_queue();
+    long N = 0, sends = 0;
+    char obs[64];
+    for (int k = 0; k < 400; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"e%d\"}", k);
+        sends += offer_like_daemon("discovery.mld", obs, T0 + 2 * k);
+        sends += offer_like_daemon("discovery.mld", obs, T0 + 2 * k + 1);
+        N += 2;
+        /* the queue stays full the whole time (raw drop-oldest, as before) */
+    }
+    CHECK(ps_obs_queue_count() == PS_OBS_QUEUE_CAP);
+    struct ps_obs_dedupe_counters c;
+    ps_obs_dedupe_get_counters(&c);
+    CHECK(c.stage_full > 0);                     /* the cap was exercised */
+    CHECK(ps_obs_dedupe_staged() == PS_DEDUPE_STAGE_MAX);
+    struct fake_central f = { 0, 0, 0, 0, 0 };
+    CHECK(ps_obs_ship_cycle(T0 + 1000, 1, fake_ship, &f, NULL) == 0);
+    CHECK(sends + f.repeats == N);
+    CHECK(f.repeats == (long)c.suppressed);
+    CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 0);
+}
+
+/* Window ended + staging full: the old entry keeps counting instead. */
+static void test_stage_full_keeps_counting(void) {
+    init_prod(PS_DEDUPE_STAGE_MAX + 1);
+    char obs[64];
+    long sends = 0, N = 0;
+    /* PS_DEDUPE_STAGE_MAX+1 keys with one repeat each, then all past their
+     * window: the first STAGE_MAX later sightings stage their summaries,
+     * the last one cannot and keeps counting */
+    for (int k = 0; k <= PS_DEDUPE_STAGE_MAX; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"s%d\"}", k);
+        sends += offer_like_daemon("discovery.mld", obs, T0);
+        sends += offer_like_daemon("discovery.mld", obs, T0 + 1);
+        N += 2;
+    }
+    for (int k = 0; k <= PS_DEDUPE_STAGE_MAX; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"s%d\"}", k);
+        sends += offer_like_daemon("discovery.mld", obs, T0 + 900000);
+        N++;
+    }
+    CHECK(sends == (PS_DEDUPE_STAGE_MAX + 1) + PS_DEDUPE_STAGE_MAX);   /* last one suppressed */
+    CHECK(ps_obs_dedupe_staged() == PS_DEDUPE_STAGE_MAX);
+    struct fake_central f = { 0, 0, 0, 0, 0 };
+    CHECK(ps_obs_ship_cycle(T0 + 900001, 1, fake_ship, &f, NULL) == 0);
+    CHECK(sends + f.repeats == N);
+}
+
+static void make_120_pending(void) {
+    init_prod(0);
+    char obs[64];
+    for (int k = 0; k < 120; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"r%d\"}", k);
+        offer_like_daemon("discovery.mld", obs, T0);
+        offer_like_daemon("discovery.mld", obs, T0 + 1);
+        offer_like_daemon("discovery.mld", obs, T0 + 2);
+    }
+    ps_obs_queue_init();   /* the first sightings are not the point here */
+}
+
+/* Central down: summaries wait inside dedupe; the next cycle ships them. */
+static void test_ship_stops_and_resumes(void) {
+    /* nothing of the batch delivered (-2): it is re-staged, nothing lost */
+    make_120_pending();
+    struct fake_central f = { 0, 0, 0, 2, -2 };
+    struct ps_obs_ship_counts sc;
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
+    CHECK(sc.stopped && sc.summaries == PS_OBS_SHIP_BATCH);
+    CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
+    CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
+    /* a second failure: the same batch again, the staging stays bounded */
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
+    CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
+    CHECK(f.summaries == 120 && f.repeats == 240);
+    CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 0);
+
+    /* delivery unknown (-1, e.g. a later POST of the batch failed): not
+     * re-sent (no double count); the rest still waits in dedupe */
+    make_120_pending();
+    struct fake_central g = { 0, 0, 0, 1, -1 };
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &g, &sc) == -1);
+    CHECK(ps_obs_dedupe_staged() == 0);
+    CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &g, &sc) == 0);
+    CHECK(g.repeats == 2L * (120 - PS_OBS_SHIP_BATCH));
+}
+
+/* Staged summaries come out of the next flush, before any window ends. */
+static void test_staging_order(void) {
+    init_prod(1);
     CHECK(ps_obs_dedupe_offer("discovery.mld", "{\"g\":1}", T0) == PS_DEDUPE_SEND);
     CHECK(ps_obs_dedupe_offer("discovery.mld", "{\"g\":1}", T0 + 1) == PS_DEDUPE_SUPPRESS);
     CHECK(ps_obs_dedupe_offer("discovery.mld", "{\"g\":2}", T0 + 2) == PS_DEDUPE_SEND);
-    CHECK(ps_obs_queue_count() == 1);
-    CHECK(ps_obs_queue_drain(g_items, 64) == 1 && field_long(g_items[0], "n") == 1);
+    CHECK(ps_obs_queue_count() == 0);            /* not via the queue */
+    CHECK(ps_obs_dedupe_staged() == 1);
+    CHECK(ps_obs_dedupe_flush(T0 + 3, 0, g_items, 64) == 1);
+    CHECK(has(g_items[0], "{\"g\":1}") && field_long(g_items[0], "n") == 1);
+    CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 1);
+}
+
+/* ps_central_checkin_stop: one forced cycle through the shipping seam. */
+static void test_checkin_stop_forces(void) {
+    init_prod(0);
+    int64_t now = (int64_t)(ps_platform_wall_usec() / 1000);
+    CHECK(offer_like_daemon("discovery.mld", "{\"g\":\"stop\"}", now) == 1);
+    for (int i = 1; i <= 3; i++)
+        CHECK(offer_like_daemon("discovery.mld", "{\"g\":\"stop\"}", now + i) == 0);
+    struct fake_central f = { 0, 0, 0, 0, 0 };
+    ps_central_checkin_set_ship_fn(fake_ship, &f);
+    ps_central_checkin_stop();   /* window (900 s) still open: force */
+    ps_central_checkin_set_ship_fn(NULL, NULL);
+    CHECK(f.raw == 1);
+    CHECK(f.summaries == 1 && f.repeats == 3);
+    CHECK(ps_obs_dedupe_count() == 0);
+}
+
+/* gap_min / gap_max set by a LATER gap, and the .5 s rounding boundary. */
+static void test_gap_order_and_rounding(void) {
+    init_cfg(-1, 0);
+    long gaps[] = { 5000, 3000, 1000, 4000 };
+    int64_t t = T0;
+    CHECK(ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"o\"}", t) == PS_DEDUPE_SEND);
+    for (int i = 0; i < 4; i++) { t += gaps[i]; ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"o\"}", t); }
+    CHECK(ps_obs_dedupe_flush(t, 1, g_items, 64) == 1);
+    CHECK(has(g_items[0], "\"gap_min\":1,") && has(g_items[0], "\"gap_max\":5,") &&
+          has(g_items[0], "\"gap_mean\":3.25,"));
+    CHECK(has(g_items[0], "\"seen\":[[0,1],[5,1],[8,1],[9,1]]"));
+
+    init_cfg(-1, 0);   /* the max set later too */
+    long up[] = { 1000, 2000, 7000 };
+    t = T0;
+    ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"u\"}", t);
+    for (int i = 0; i < 3; i++) { t += up[i]; ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"u\"}", t); }
+    CHECK(ps_obs_dedupe_flush(t, 1, g_items, 64) == 1);
+    CHECK(has(g_items[0], "\"gap_min\":1,") && has(g_items[0], "\"gap_max\":7,"));
+
+    init_cfg(-1, 0);   /* 1.5 s, 2.0 s and 2.499 s all round to 2 s: one run */
+    long r2[] = { 1500, 2000, 2499 };
+    t = T0;
+    ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"r\"}", t);
+    for (int i = 0; i < 3; i++) { t += r2[i]; ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"r\"}", t); }
+    CHECK(ps_obs_dedupe_flush(t, 1, g_items, 64) == 1);
+    CHECK(has(g_items[0], "\"seen\":[[0,3]]"));
+    CHECK(has(g_items[0], "\"gap_min\":1.5,") && has(g_items[0], "\"gap_max\":2.499,"));
+
+    init_cfg(-1, 0);   /* 1.499 s rounds to 1, 1.5 s to 2: two runs; offset 1.499 s -> 1 */
+    long r1[] = { 1499, 1500 };
+    t = T0;
+    ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"s\"}", t);
+    for (int i = 0; i < 2; i++) { t += r1[i]; ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"s\"}", t); }
+    CHECK(ps_obs_dedupe_flush(t, 1, g_items, 64) == 1);
+    CHECK(has(g_items[0], "\"seen\":[[0,1],[1,1]]"));
+
+    init_cfg(-1, 0);   /* offset rounding: a run starting 2.5 s in -> 3 */
+    long r3[] = { 2500, 1000 };
+    t = T0;
+    ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"t\"}", t);
+    for (int i = 0; i < 2; i++) { t += r3[i]; ps_obs_dedupe_offer("discovery.mld", "{\"g\":\"t\"}", t); }
+    CHECK(ps_obs_dedupe_flush(t, 1, g_items, 64) == 1);
+    CHECK(has(g_items[0], "\"seen\":[[0,1],[3,1]]"));
 }
 
 int main(int argc, char **argv) {
@@ -490,7 +717,13 @@ int main(int argc, char **argv) {
     test_config_env();
     test_size_bound();
     test_mixed_stream_accounting();
-    test_default_emit_queue();
+    test_staging_order();
+    test_ship_many_summaries();
+    test_eviction_burst_full_queue();
+    test_stage_full_keeps_counting();
+    test_ship_stops_and_resumes();
+    test_checkin_stop_forces();
+    test_gap_order_and_rounding();
     cap_reset();
     if (g_fail) { fprintf(stderr, "%d check(s) failed\n", g_fail); return 1; }
     printf("test_obs_dedupe: all passed\n");

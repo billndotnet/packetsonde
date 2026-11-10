@@ -42,8 +42,13 @@
  * Early close: a full table evicts the least recently seen entry, and a new
  * neighbor sighting closes an open entry with the same subject (ip,
  * interface, proto, ndp_type) but different content (e.g. a MAC change).
- * Either way the closed entry's summary is emitted at once, before the new
- * sighting is sent, so nothing is lost and order is kept.
+ * Either way the closed entry's summary is staged (see the emit hook below)
+ * and returned by the next flush, so nothing is lost.
+ *
+ * Delivery: summaries do NOT go through the 256-slot drop-oldest
+ * observation queue. ps_obs_ship_cycle (obs_ship.h) ships them straight
+ * from ps_obs_dedupe_flush in batches, and stops flushing when central
+ * cannot take them, so they wait inside dedupe instead.
  *
  * Canonical key text (shared with the central side; vectors in
  * src/agent/tests/fixtures/dedupe_vectors.json):
@@ -98,6 +103,7 @@
 #define PS_DEDUPE_SEEN_MAX         32
 #define PS_DEDUPE_TABLE_DEFAULT  2048
 #define PS_DEDUPE_KIND_WINDOWS     16
+#define PS_DEDUPE_STAGE_MAX        64   /* summaries closed by offers, awaiting flush */
 
 enum ps_dedupe_action { PS_DEDUPE_SEND = 0, PS_DEDUPE_SUPPRESS = 1 };
 
@@ -109,8 +115,15 @@ struct ps_obs_dedupe_kind_window {
     int  window_s;   /* 0 disables suppression for this kind */
 };
 
-/* Called for summaries closed during an offer (eviction, subject change).
- * NULL means ps_obs_queue_push. Runs with the dedupe lock held. */
+/* Test/observer hook for summaries closed during an offer (eviction, subject
+ * change, a sighting after its window ended). NULL (production): they are
+ * STAGED inside dedupe, at most PS_DEDUPE_STAGE_MAX, and the next flush
+ * returns them before anything else; they never enter the drop-oldest
+ * observation queue. With the staging list full an offer does not close
+ * anything: an ended window keeps counting (flushed later), a subject
+ * change leaves the old entry open, and a new key that would need an
+ * eviction is sent untracked. No repeat count is ever dropped.
+ * The hook runs with the dedupe lock held. */
 typedef void (*ps_obs_dedupe_emit_fn)(const char *event_json, size_t len, void *user);
 
 struct ps_obs_dedupe_cfg {
@@ -137,7 +150,7 @@ struct ps_obs_dedupe_stats {
 
 struct ps_obs_dedupe_counters {
     uint64_t offered, sent, suppressed, summaries, summary_repeats,
-             evicted, closed, truncated, unkeyed;
+             evicted, closed, truncated, unkeyed, stage_full;
 };
 
 /* Fill cfg with defaults (window -1, table 2048, no per-kind entries). */
@@ -175,10 +188,11 @@ enum ps_dedupe_action ps_obs_dedupe_offer_n(const char *kind,
                                             const char *observation_json,
                                             size_t obs_len, int64_t now_ms);
 
-/* Write up to `max` summary events for entries whose window has ended (all
- * entries with `force`) into out_items and drop those entries; entries with
- * no repeats are dropped without a summary. Entries that do not fit in `max`
- * stay for the next call: call again while it returns `max`. */
+/* Write up to `max` summary events into out_items: first the staged ones,
+ * then those of entries whose window has ended (all entries with `force`),
+ * dropping those entries; entries with no repeats are dropped without a
+ * summary. Whatever does not fit in `max` stays for the next call: call
+ * again while it returns > 0. */
 int ps_obs_dedupe_flush(int64_t now_ms, int force,
                         char out_items[][PS_OBS_ITEM_MAX], int max);
 
@@ -193,7 +207,15 @@ size_t ps_obs_dedupe_build_summary(char *out, size_t cap, const char *kind,
 /* Snapshot of the running counters. */
 void ps_obs_dedupe_get_counters(struct ps_obs_dedupe_counters *out);
 
-/* Number of open entries (tests / diagnostics). */
+/* Put summaries that were flushed but not delivered at all back at the
+ * FRONT of the staging list (order kept), so the next flush returns them
+ * first. Bounded at PS_DEDUPE_STAGE_MAX + PS_DEDUPE_RESTAGE_MAX; returns
+ * the number taken back (a shortfall is logged). */
+#define PS_DEDUPE_RESTAGE_MAX 64
+int ps_obs_dedupe_restage(const char **items, int n);
+
+/* Number of open entries / staged summaries (tests / diagnostics). */
 int ps_obs_dedupe_count(void);
+int ps_obs_dedupe_staged(void);
 
 #endif /* PS_OBS_DEDUPE_H */

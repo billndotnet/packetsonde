@@ -6,6 +6,7 @@
 #include "build_config.h"     /* PS_VERSION */
 #include "obs_queue.h"
 #include "obs_dedupe.h"
+#include "obs_ship.h"
 #include "platform/platform.h"
 #include "reporter.h"         /* ps_report_events, ps_report_result */
 #include <pthread.h>
@@ -51,81 +52,82 @@ int ps_central_checkin_once(long uptime_seconds) {
     return ps_checkin_post_heartbeat(&cc, uptime_seconds);
 }
 
-/* Drain queued observations and ship them to central in bounded batches.
- * PS_OBS_SHIP_BATCH bounds the items drained per call; the reporter splits a
- * batch across several POSTs when its envelopes outgrow one request, and skips
- * (and logs) any single item it cannot envelope instead of failing the batch.
- * The per-cycle batch cap bounds work. Best-effort: items that cannot be
- * delivered (central unreachable, non-2xx) are already dequeued and dropped;
- * Phase-1 reconciliation backstops gaps; we never block the daemon on central
- * availability. */
-#define PS_OBS_SHIP_BATCH        50   /* items drained per reporter call */
-#define PS_OBS_SHIP_MAX_BATCHES  16   /* up to 800 observations drained per cycle */
+/* Ship queued observations and dedupe summaries to central (obs_ship.h).
+ * The reporter splits a batch across several POSTs when its envelopes
+ * outgrow one request, and skips (and logs) any single item it cannot
+ * envelope instead of failing the batch. Best-effort: a batch that cannot be
+ * delivered (central unreachable, non-2xx) is dropped; Phase-1 reconciliation
+ * backstops gaps; we never block the daemon on central availability. Dedupe
+ * summaries are only flushed while central takes them, so they wait inside
+ * dedupe instead of being dropped. */
 static pthread_mutex_t g_ship_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* Move dedupe summaries into the queue: those whose window ended, or all of
- * them with `force`. A summary is never dropped here: the dedupe table keeps
- * any that do not fit one round for the next. */
-static void ps_checkin_flush_dedupe(int force) {
-    static char items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];
+struct ship_ctx {
+    const struct ps_central_config *cc;
+    int shipped, skipped, failed, accepted, last_status;
+};
+
+static int ship_to_central(const char **items, int n, void *user) {
+    struct ship_ctx *x = user;
+    if (!x->cc->url || !x->cc->url[0]) return -1;
+    struct ps_report_result rr;
+    memset(&rr, 0, sizeof(rr));
+    int rc = ps_report_observations(x->cc, NULL, items, (size_t)n, &rr);
+    x->skipped  += rr.skipped;
+    x->failed   += rr.unsent;
+    x->shipped  += n - rr.skipped - rr.unsent;
+    x->accepted += rr.accepted;
+    if (rr.http_status) x->last_status = rr.http_status;
+    /* Central unreachable, or it (or the proxy in front of it) answered
+     * "unavailable"/"slow down": stop this cycle instead of draining the
+     * rest into the same wall. */
+    if (rc != 0 || rr.http_status >= 500 || rr.http_status == 429)
+        return (rr.unsent == n) ? -2 : -1;   /* -2: nothing delivered, retry it */
+    return 0;
+}
+
+/* Test seam: replaces ship_to_central (NULL restores it). */
+static ps_obs_ship_fn g_ship_fn_override;
+static void *g_ship_user_override;
+void ps_central_checkin_set_ship_fn(ps_obs_ship_fn fn, void *user) {
+    g_ship_fn_override = fn;
+    g_ship_user_override = user;
+}
+
+static void ps_checkin_ship_observations(const struct ps_central_config *cc, int force) {
+    struct ship_ctx x;
+    memset(&x, 0, sizeof x);
+    x.cc = cc;
     int64_t now_ms = (int64_t)(ps_platform_wall_usec() / 1000);
-    int n;
-    do {
-        n = ps_obs_dedupe_flush(now_ms, force, items, PS_OBS_SHIP_BATCH);
-        for (int i = 0; i < n; i++) ps_obs_queue_push(items[i], strlen(items[i]));
-    } while (n == PS_OBS_SHIP_BATCH);
+    struct ps_obs_ship_counts sc;
+    if (g_ship_fn_override)
+        ps_obs_ship_cycle(now_ms, force, g_ship_fn_override, g_ship_user_override, &sc);
+    else if (cc->url && cc->url[0])
+        ps_obs_ship_cycle(now_ms, force, ship_to_central, &x, &sc);
+    else
+        return;
+
+    if (x.skipped > 0 || x.failed > 0)
+        ps_warn("central: observations shipped %d (accepted %d), skipped %d (could not be "
+                "enveloped), failed %d (not delivered, last HTTP %d)",
+                x.shipped, x.accepted, x.skipped, x.failed, x.last_status);
+    else if (x.shipped > 0)
+        ps_info("central: shipped %d observations (accepted %d)", x.shipped, x.accepted);
 
     static struct ps_obs_dedupe_counters last;
     struct ps_obs_dedupe_counters c;
     ps_obs_dedupe_get_counters(&c);
     if (c.summaries != last.summaries || c.sent != last.sent)
         ps_info("dedupe: offered %llu, sent %llu, suppressed %llu, summaries %llu "
-                "(%llu repeats), evicted %llu, closed %llu, truncated %llu, open %d",
+                "(%llu repeats, %d this cycle), evicted %llu, closed %llu, truncated %llu, "
+                "staging full %llu, open %d",
                 (unsigned long long)c.offered, (unsigned long long)c.sent,
                 (unsigned long long)c.suppressed, (unsigned long long)c.summaries,
-                (unsigned long long)c.summary_repeats, (unsigned long long)c.evicted,
-                (unsigned long long)c.closed, (unsigned long long)c.truncated,
+                (unsigned long long)c.summary_repeats, sc.summaries,
+                (unsigned long long)c.evicted, (unsigned long long)c.closed,
+                (unsigned long long)c.truncated, (unsigned long long)c.stage_full,
                 ps_obs_dedupe_count());
     last = c;
-}
-
-static void ps_checkin_ship_observations(const struct ps_central_config *cc) {
-    if (!cc->url || !cc->url[0]) return;
-
-    static char items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];
-    const char *jsons[PS_OBS_SHIP_BATCH];
-    int shipped = 0, skipped = 0, failed = 0, accepted = 0, last_status = 0;
-
-    for (int batch = 0; batch < PS_OBS_SHIP_MAX_BATCHES; batch++) {
-        int n = ps_obs_queue_drain(items, PS_OBS_SHIP_BATCH);
-        if (n <= 0) break;
-        for (int i = 0; i < n; i++) jsons[i] = items[i];
-
-        struct ps_report_result rr;
-        memset(&rr, 0, sizeof(rr));
-        int rc = ps_report_observations(cc, NULL, jsons, (size_t)n, &rr);
-        skipped  += rr.skipped;
-        failed   += rr.unsent;
-        shipped  += n - rr.skipped - rr.unsent;
-        accepted += rr.accepted;
-        if (rr.http_status) last_status = rr.http_status;
-        if (rc != 0) {
-            /* Central is unreachable: stop draining this cycle so queued items
-             * wait for the next one instead of being dropped too. */
-            break;
-        }
-        if (rr.http_status >= 500 || rr.http_status == 429) {
-            /* Central (or the proxy in front of it) answered "unavailable"/"slow down": the batch in flight is
-             * lost, but do not drain the rest of the queue into the same wall. */
-            break;
-        }
-    }
-    if (skipped > 0 || failed > 0)
-        ps_warn("central: observations shipped %d (accepted %d), skipped %d (could not be "
-                "enveloped), failed %d (not delivered, last HTTP %d)",
-                shipped, accepted, skipped, failed, last_status);
-    else if (shipped > 0)
-        ps_info("central: shipped %d observations (accepted %d)", shipped, accepted);
 }
 
 static volatile int g_stop = 0;
@@ -140,10 +142,7 @@ static void *checkin_loop(void *arg) {
         if (ps_checkin_post_heartbeat(&cc, time(NULL) - g_start) != 0)
             ps_warn("central: checkin failed");
         pthread_mutex_lock(&g_ship_lock);
-        if (!g_stop) {
-            ps_checkin_flush_dedupe(0);
-            ps_checkin_ship_observations(&cc);
-        }
+        if (!g_stop) ps_checkin_ship_observations(&cc, 0);
         pthread_mutex_unlock(&g_ship_lock);
         for (int i = 0; i < g_interval && !g_stop; i++) sleep(1);
     }
@@ -153,9 +152,8 @@ static void *checkin_loop(void *arg) {
 void ps_central_checkin_stop(void) {
     pthread_mutex_lock(&g_ship_lock);   /* waits for a shipment in flight */
     g_stop = 1;
-    ps_checkin_flush_dedupe(1);
     struct ps_central_config cc = ps_central_config_from_env();
-    ps_checkin_ship_observations(&cc);
+    ps_checkin_ship_observations(&cc, 1);   /* every open window */
     pthread_mutex_unlock(&g_ship_lock);
 }
 

@@ -120,6 +120,7 @@ add_library(packetsonde_daemon STATIC
     src/module.c
     src/obs_queue.c
     src/obs_dedupe.c
+    src/obs_ship.c
     src/priv_client.c
     src/iso8601.c
     src/platform/unix.c
@@ -373,6 +374,7 @@ add_test(NAME test_obs_queue COMMAND test_obs_queue)
 
 # Test: observation dedupe (key canonicalisation, windows, temporal summary)
 add_executable(test_obs_dedupe tests/test_obs_dedupe.c src/obs_dedupe.c src/obs_queue.c
+    src/obs_ship.c src/central_checkin.c src/platform/unix.c
     src/iso8601.c src/config.c src/config_to_env.c)
 target_include_directories(test_obs_dedupe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})

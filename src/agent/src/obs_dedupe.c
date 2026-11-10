@@ -1,7 +1,6 @@
 /* Observation dedupe: see obs_dedupe.h for the key format, the window
  * semantics and the summary event. */
 #include "obs_dedupe.h"
-#include "obs_queue.h"
 #include "iso8601.h"
 #include "json_extract.h"
 #include "log.h"
@@ -554,7 +553,7 @@ struct entry {
     size_t   obs_len;
     int64_t  window_ms;
     int64_t  prev_ms;     /* time of the latest sighting (sent or repeat) */
-    int      cur_gap_s;   /* rounded gap of the current run */
+    int64_t  cur_gap_s;   /* rounded gap of the current run */
     uint64_t tick;        /* LRU */
     struct ps_obs_dedupe_stats st;
 };
@@ -567,6 +566,9 @@ static int             g_on;
 static uint64_t        g_tick;
 static struct ps_obs_dedupe_cfg g_cfg;
 static struct ps_obs_dedupe_counters g_ctr;
+/* Summaries closed during an offer, waiting for the next flush. */
+static char           *g_stage[PS_DEDUPE_STAGE_MAX + PS_DEDUPE_RESTAGE_MAX];
+static int             g_nstage;
 
 void ps_obs_dedupe_cfg_defaults(struct ps_obs_dedupe_cfg *c) {
     memset(c, 0, sizeof *c);
@@ -631,6 +633,8 @@ int ps_obs_dedupe_window_for(const char *kind) {
 }
 
 static void free_table_locked(void) {
+    for (int i = 0; i < g_nstage; i++) free(g_stage[i]);
+    g_nstage = 0;
     if (g_tab) for (int i = 0; i < g_max; i++) free(g_tab[i].obs);
     free(g_tab);
     g_tab = NULL;
@@ -685,11 +689,6 @@ static int neighbor_subject(const char *kind, const char *obs, unsigned char out
     return 1;
 }
 
-static void emit_locked(const char *ev, size_t len) {
-    if (g_cfg.emit) g_cfg.emit(ev, len, g_cfg.emit_user);
-    else ps_obs_queue_push(ev, len);
-}
-
 /* Build the entry's summary into out (lim bytes). Returns length, 0 if no
  * repeats or it could not be built. */
 static size_t summarise_locked(struct entry *e, char *out, size_t lim) {
@@ -714,19 +713,42 @@ static void drop_locked(struct entry *e) {
     g_used--;
 }
 
-/* Emit the entry's summary (if it has repeats) and remove it. */
-static void close_locked(struct entry *e) {
+/* Close an entry during an offer: its summary (if it has repeats) goes to
+ * the emit hook, or to the staging list that the next flush returns first,
+ * and the entry is removed. Returns -1 (entry left untouched) when the
+ * staging list is full: the caller must then keep the entry, so no repeat
+ * count is ever dropped. */
+static int close_locked(struct entry *e) {
+    if (e->st.n == 0) { drop_locked(e); return 0; }
     static char ev[PS_OBS_ITEM_MAX];
+    if (g_cfg.emit) {
+        size_t n = summarise_locked(e, ev, sizeof ev);
+        if (n) g_cfg.emit(ev, n, g_cfg.emit_user);
+        drop_locked(e);
+        return 0;
+    }
+    if (g_nstage >= PS_DEDUPE_STAGE_MAX) { g_ctr.stage_full++; return -1; }
     size_t n = summarise_locked(e, ev, sizeof ev);
-    if (n) emit_locked(ev, n);
+    if (n) {
+        char *copy = malloc(n + 1);
+        if (!copy) {   /* undo the accounting; keep the entry */
+            g_ctr.summaries--;
+            g_ctr.summary_repeats -= e->st.n;
+            g_ctr.stage_full++;
+            return -1;
+        }
+        memcpy(copy, ev, n + 1);
+        g_stage[g_nstage++] = copy;
+    }
     drop_locked(e);
+    return 0;
 }
 
 static void account_locked(struct entry *e, int64_t now) {
     struct ps_obs_dedupe_stats *st = &e->st;
     int64_t t = now < e->prev_ms ? e->prev_ms : now;   /* clock step back: zero gap */
     int64_t gap = t - e->prev_ms;
-    int g = (int)((gap + 500) / 1000);
+    int64_t g = (gap + 500) / 1000;
     int64_t off = (e->prev_ms - st->since_ms + 500) / 1000;
     if (st->n == 0) {
         st->first_ms = t;
@@ -793,22 +815,32 @@ enum ps_dedupe_action ps_obs_dedupe_offer_n(const char *kind, const char *obs,
             pthread_mutex_unlock(&g_mu);
             return PS_DEDUPE_SUPPRESS;
         }
-        close_locked(hit);   /* window over: its summary first, then a new sighting */
+        /* window over: its summary first, then a new sighting. If the
+         * summary cannot be staged now, keep counting into the old entry:
+         * the next flush emits it (its window has ended). */
+        if (close_locked(hit) < 0) {
+            account_locked(hit, now_ms);
+            hit->tick = ++g_tick;
+            g_ctr.suppressed++;
+            pthread_mutex_unlock(&g_mu);
+            return PS_DEDUPE_SUPPRESS;
+        }
     }
     if (has_subj) {
         for (int i = 0; i < g_max; i++) {
             struct entry *e = &g_tab[i];
-            if (e->used && e->has_subj && memcmp(e->subj, subj, 32) == 0) {
+            /* staging full: leave it open, its window end flushes it */
+            if (e->used && e->has_subj && memcmp(e->subj, subj, 32) == 0 &&
+                close_locked(e) == 0)
                 g_ctr.closed++;
-                close_locked(e);
-            }
         }
     }
     if (g_used >= g_max) {
         struct entry *lru = NULL;
         for (int i = 0; i < g_max; i++)
             if (g_tab[i].used && (!lru || g_tab[i].tick < lru->tick)) lru = &g_tab[i];
-        if (lru) { g_ctr.evicted++; close_locked(lru); }
+        /* staging full: the new sighting is sent but not tracked */
+        if (lru && close_locked(lru) == 0) g_ctr.evicted++;
     }
     struct entry *slot = NULL;
     for (int i = 0; i < g_max; i++) if (!g_tab[i].used) { slot = &g_tab[i]; break; }
@@ -850,7 +882,15 @@ int ps_obs_dedupe_flush(int64_t now_ms, int force, char out_items[][PS_OBS_ITEM_
     int k = 0;
     pthread_mutex_lock(&g_mu);
     if (g_on && out_items && max > 0) {
-        for (int i = 0; i < g_max; i++) {
+        /* staged summaries first, in the order they were closed */
+        int take = g_nstage < max ? g_nstage : max;
+        for (int i = 0; i < take; i++) {
+            snprintf(out_items[k++], PS_OBS_ITEM_MAX, "%s", g_stage[i]);
+            free(g_stage[i]);
+        }
+        memmove(g_stage, g_stage + take, (size_t)(g_nstage - take) * sizeof g_stage[0]);
+        g_nstage -= take;
+        for (int i = 0; k < max && i < g_max; i++) {
             struct entry *e = &g_tab[i];
             if (!e->used) continue;
             if (!force && now_ms < e->st.since_ms + e->window_ms) continue;
@@ -869,6 +909,33 @@ void ps_obs_dedupe_get_counters(struct ps_obs_dedupe_counters *out) {
     pthread_mutex_lock(&g_mu);
     *out = g_ctr;
     pthread_mutex_unlock(&g_mu);
+}
+
+int ps_obs_dedupe_restage(const char **items, int n) {
+    int took = 0;
+    pthread_mutex_lock(&g_mu);
+    if (g_on && items && n > 0) {
+        int room = PS_DEDUPE_STAGE_MAX + PS_DEDUPE_RESTAGE_MAX - g_nstage;
+        int k = n < room ? n : room;
+        char *tmp[PS_DEDUPE_STAGE_MAX + PS_DEDUPE_RESTAGE_MAX];
+        for (int i = 0; i < k; i++) {
+            tmp[took] = strdup(items[i]);
+            if (tmp[took]) took++;
+        }
+        memmove(g_stage + took, g_stage, (size_t)g_nstage * sizeof g_stage[0]);
+        memcpy(g_stage, tmp, (size_t)took * sizeof g_stage[0]);
+        g_nstage += took;
+    }
+    pthread_mutex_unlock(&g_mu);
+    if (took < n) ps_warn("dedupe: %d undelivered summaries could not be re-staged", n - took);
+    return took;
+}
+
+int ps_obs_dedupe_staged(void) {
+    pthread_mutex_lock(&g_mu);
+    int n = g_nstage;
+    pthread_mutex_unlock(&g_mu);
+    return n;
 }
 
 int ps_obs_dedupe_count(void) {
