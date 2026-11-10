@@ -13,6 +13,8 @@ static struct obs_item  g_ring[PS_OBS_QUEUE_CAP];
 static int              g_head;   /* next pop */
 static int              g_tail;   /* next push */
 static int              g_count;
+static uint64_t         g_next_id;   /* id of the next push; head id = g_next_id - g_count */
+static uint64_t         g_dropped;
 static pthread_mutex_t  g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* JSON-escape is NOT applied to `channel`/`ts_iso` — both are controlled,
@@ -35,6 +37,8 @@ size_t ps_obs_build_event(char *out, size_t cap,
 void ps_obs_queue_init(void) {
     pthread_mutex_lock(&g_lock);
     g_head = g_tail = g_count = 0;
+    g_next_id = 0;
+    g_dropped = 0;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -44,6 +48,7 @@ void ps_obs_queue_push(const char *event_json, size_t len) {
     if (g_count == PS_OBS_QUEUE_CAP) {
         g_head = (g_head + 1) % PS_OBS_QUEUE_CAP;  /* drop oldest */
         g_count--;
+        g_dropped++;
     }
     struct obs_item *it = &g_ring[g_tail];
     memcpy(it->data, event_json, len);
@@ -51,6 +56,7 @@ void ps_obs_queue_push(const char *event_json, size_t len) {
     it->len = len;
     g_tail = (g_tail + 1) % PS_OBS_QUEUE_CAP;
     g_count++;
+    g_next_id++;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -66,6 +72,40 @@ int ps_obs_queue_drain(char out_items[][PS_OBS_ITEM_MAX], int max) {
     }
     pthread_mutex_unlock(&g_lock);
     return drained;
+}
+
+int ps_obs_queue_peek(char out_items[][PS_OBS_ITEM_MAX], int max, uint64_t *first_id) {
+    int n = 0;
+    pthread_mutex_lock(&g_lock);
+    if (first_id) *first_id = g_next_id - (uint64_t)g_count;
+    while (n < max && n < g_count) {
+        const struct obs_item *it = &g_ring[(g_head + n) % PS_OBS_QUEUE_CAP];
+        memcpy(out_items[n], it->data, it->len + 1); /* incl NUL */
+        n++;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return n;
+}
+
+int ps_obs_queue_pop(uint64_t first_id, int n) {
+    int removed = 0;
+    if (n <= 0) return 0;
+    uint64_t end = first_id + (uint64_t)n;
+    pthread_mutex_lock(&g_lock);
+    while (g_count > 0 && g_next_id - (uint64_t)g_count < end) {
+        g_head = (g_head + 1) % PS_OBS_QUEUE_CAP;
+        g_count--;
+        removed++;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return removed;
+}
+
+uint64_t ps_obs_queue_dropped(void) {
+    pthread_mutex_lock(&g_lock);
+    uint64_t d = g_dropped;
+    pthread_mutex_unlock(&g_lock);
+    return d;
 }
 
 int ps_obs_queue_count(void) {

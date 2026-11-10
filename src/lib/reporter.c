@@ -177,6 +177,10 @@ int ps_reporter_build_envelopes(const struct ps_central_config *cc,
     return rc;
 }
 
+int ps_report_status_retryable(int status) {
+    return status >= 500 || status == 408 || status == 429;
+}
+
 #define PS_REPORT_BATCH_CAP 262144   /* bytes of envelope array per POST */
 
 /* Shared: sign + POST {envelopes:[…]} to `endpoint_path` under the host. Items
@@ -206,12 +210,14 @@ static int ps_report_to(const struct ps_central_config *cc, const char *base_url
     struct ps_http_opts opts = { cc->verify, cc->ca_cert, 15 };
 
     size_t off = 0;
+    int stopped = 0;   /* a retryable failure ended the call early */
     while (off < n) {
+        res.handled = (int)off;   /* everything before this POST is settled */
         struct ps_envelope_stats st;
         int alen = build_envelopes(cc, event_jsons + off, n - off, off,
                                    body + prelen, PS_REPORT_BATCH_CAP, &st);
         if (alen < 0 || st.consumed == 0) {   /* key unusable: nothing more can be built */
-            res.unsent += (int)(n - off); res.retryable += (int)(n - off); rc = -1; break;
+            res.unsent += (int)(n - off); res.retryable += (int)(n - off); rc = -1; stopped = 1; break;
         }
         res.skipped += (int)st.skipped;
         off += st.consumed;
@@ -228,19 +234,26 @@ static int ps_report_to(const struct ps_central_config *cc, const char *base_url
             /* central is unreachable: do not keep signing and dialling */
             res.unsent += (int)st.emitted + (int)(n - off);
             res.retryable += (int)st.emitted + (int)(n - off);
-            rc = -1; break;
+            rc = -1; stopped = 1; break;
         }
         res.http_status = status;
         if (status < 200 || status > 299) {
             report_warn(W_STATUS, "POST of %zu envelope(s), %zu-byte body answered HTTP %d",
                         st.emitted, blen, status);
-            res.unsent += (int)st.emitted;
-            if (status >= 500 || status == 429) res.retryable += (int)st.emitted;
+            if (ps_report_status_retryable(status)) {
+                /* central (or a proxy in front of it) is unavailable or asks
+                 * to slow down: stop, so what is left is one retryable tail */
+                res.unsent += (int)st.emitted + (int)(n - off);
+                res.retryable += (int)st.emitted + (int)(n - off);
+                stopped = 1; break;
+            }
+            res.unsent += (int)st.emitted;   /* poison: refused for good */
             continue;
         }
         const char *a = strstr(resp, "\"accepted\":");
         res.accepted += a ? atoi(a + 11) : 0;
     }
+    if (!stopped) res.handled = (int)n;
 out:
     free(body);
     res.rejected = res.total - res.accepted;
