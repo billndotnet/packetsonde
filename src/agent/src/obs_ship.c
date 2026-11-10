@@ -4,6 +4,9 @@
 #include <pthread.h>
 #include <string.h>
 
+/* one failed batch must always fit back into the staging list */
+_Static_assert(PS_DEDUPE_RESTAGE_MAX >= PS_OBS_SHIP_BATCH, "restage room");
+
 static pthread_mutex_t g_cycle_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_items[PS_OBS_SHIP_BATCH][PS_OBS_ITEM_MAX];   /* under g_cycle_lock */
 
@@ -27,9 +30,10 @@ int ps_obs_ship_cycle(int64_t now_ms, int force, ps_obs_ship_fn ship, void *user
         if (n <= 0) break;
         for (int i = 0; i < n; i++) jsons[i] = g_items[i];
         c.summaries += n;
-        int r = ship(jsons, n, user);
-        if (r != 0) {
-            if (r == -2) c.restaged = ps_obs_dedupe_restage(jsons, n);
+        if (ship(jsons, n, user) != 0) {
+            /* not (fully) delivered: the whole batch, byte for byte, goes
+             * back to the front of the staging list */
+            c.restaged = ps_obs_dedupe_restage(jsons, n);
             rc = -1;
             goto done;
         }

@@ -47,8 +47,11 @@
  *
  * Delivery: summaries do NOT go through the 256-slot drop-oldest
  * observation queue. ps_obs_ship_cycle (obs_ship.h) ships them straight
- * from ps_obs_dedupe_flush in batches, and stops flushing when central
- * cannot take them, so they wait inside dedupe instead.
+ * from ps_obs_dedupe_flush in batches and stops flushing when central
+ * cannot take them, so they wait inside dedupe instead; a batch that was
+ * not (fully) delivered is re-staged whole, as a frozen byte copy, and
+ * re-sent identical (central dedups on the deterministic envelope sig, so
+ * retry is safe). A non-429 4xx answer is poison: not retried.
  *
  * Canonical key text (shared with the central side; vectors in
  * src/agent/tests/fixtures/dedupe_vectors.json):
@@ -103,7 +106,9 @@
 #define PS_DEDUPE_SEEN_MAX         32
 #define PS_DEDUPE_TABLE_DEFAULT  2048
 #define PS_DEDUPE_KIND_WINDOWS     16
+#ifndef PS_DEDUPE_STAGE_MAX   /* overridable for tests (-DPS_DEDUPE_STAGE_MAX=1) */
 #define PS_DEDUPE_STAGE_MAX        64   /* summaries closed by offers, awaiting flush */
+#endif
 
 enum ps_dedupe_action { PS_DEDUPE_SEND = 0, PS_DEDUPE_SUPPRESS = 1 };
 
@@ -207,11 +212,11 @@ size_t ps_obs_dedupe_build_summary(char *out, size_t cap, const char *kind,
 /* Snapshot of the running counters. */
 void ps_obs_dedupe_get_counters(struct ps_obs_dedupe_counters *out);
 
-/* Put summaries that were flushed but not delivered at all back at the
+/* Put summaries that were flushed but not (fully) delivered back at the
  * FRONT of the staging list (order kept), so the next flush returns them
  * first. Bounded at PS_DEDUPE_STAGE_MAX + PS_DEDUPE_RESTAGE_MAX; returns
  * the number taken back (a shortfall is logged). */
-#define PS_DEDUPE_RESTAGE_MAX 64
+#define PS_DEDUPE_RESTAGE_MAX 64   /* >= PS_OBS_SHIP_BATCH: one failed batch always fits */
 int ps_obs_dedupe_restage(const char **items, int n);
 
 /* Number of open entries / staged summaries (tests / diagnostics). */

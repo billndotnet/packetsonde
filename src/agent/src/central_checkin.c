@@ -79,10 +79,14 @@ static int ship_to_central(const char **items, int n, void *user) {
     x->accepted += rr.accepted;
     if (rr.http_status) x->last_status = rr.http_status;
     /* Central unreachable, or it (or the proxy in front of it) answered
-     * "unavailable"/"slow down": stop this cycle instead of draining the
-     * rest into the same wall. */
-    if (rc != 0 || rr.http_status >= 500 || rr.http_status == 429)
-        return (rr.unsent == n) ? -2 : -1;   /* -2: nothing delivered, retry it */
+     * "unavailable"/"slow down" for any POST of the batch: stop this cycle
+     * instead of draining the rest into the same wall. A dedupe summary batch
+     * is then re-staged WHOLE and re-sent byte-identical next cycle; central
+     * dedups on the deterministic envelope sig (central-protocol-v1:
+     * "redelivery is idempotent"), so retrying the parts it did store is
+     * safe. A POST answered with any other non-2xx (400, 413, ...) is poison:
+     * those items are counted as failed and not retried. */
+    if (rc != 0 || rr.retryable > 0) return -1;
     return 0;
 }
 

@@ -472,11 +472,36 @@ static void test_mixed_stream_accounting(void) {
 struct fake_central {
     long raw, summaries, repeats;
     int  fail_calls;   /* ship answers fail_rc this many times first */
-    int  fail_rc;      /* -1: delivery unknown/partial, -2: nothing delivered */
+    int  fail_rc;      /* non-zero: not delivered, retry */
+    int  calls;                 /* every ship call, failed ones included */
+    int  sizes[64];             /* items per call */
+    char *blob[64];             /* the call's items, concatenated with '\n' */
 };
+/* recorded call blobs live in one pool, freed at exit */
+static char *g_blob_pool[4096];
+static int   g_nblob;
+static void fake_free(struct fake_central *f) { (void)f; }
+static void fake_init(struct fake_central *f, int fail_calls, int fail_rc) {
+    memset(f, 0, sizeof *f);
+    f->fail_calls = fail_calls;
+    f->fail_rc = fail_rc;
+}
+static int g_fail_on_call;   /* 1-based call number that fails, 0: none */
 static int fake_ship(const char **items, int n, void *user) {
     struct fake_central *f = user;
     CHECK(n > 0 && n <= PS_OBS_SHIP_BATCH);
+    if (f->calls < 64) {
+        size_t L = 0;
+        for (int i = 0; i < n; i++) L += strlen(items[i]) + 1;
+        char *b = malloc(L + 1), *q = b;
+        for (int i = 0; i < n; i++) { size_t l = strlen(items[i]); memcpy(q, items[i], l); q += l; *q++ = '\n'; }
+        *q = 0;
+        f->sizes[f->calls] = n;
+        f->blob[f->calls] = b;
+        if (g_nblob < 4096) g_blob_pool[g_nblob++] = b; else free(b);
+    }
+    f->calls++;
+    if (g_fail_on_call && f->calls == g_fail_on_call) return -1;
     if (f->fail_calls > 0) { f->fail_calls--; return f->fail_rc ? f->fail_rc : -1; }
     for (int i = 0; i < n; i++) {
         CHECK(strlen(items[i]) < PS_OBS_ITEM_MAX);
@@ -527,7 +552,7 @@ static void test_ship_many_summaries(void) {
         snprintf(obs, sizeof obs, "{\"group\":\"g%d\"}", k);
         CHECK(offer_like_daemon("discovery.mld", obs, T0 + 1000) == 0);
     }
-    struct fake_central f = { 0, 0, 0, 0, 0 };
+    struct fake_central f; fake_init(&f, 0, 0);
     struct ps_obs_ship_counts sc;
     CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
     CHECK(f.summaries == 1000);
@@ -555,7 +580,7 @@ static void test_eviction_burst_full_queue(void) {
     ps_obs_dedupe_get_counters(&c);
     CHECK(c.stage_full > 0);                     /* the cap was exercised */
     CHECK(ps_obs_dedupe_staged() == PS_DEDUPE_STAGE_MAX);
-    struct fake_central f = { 0, 0, 0, 0, 0 };
+    struct fake_central f; fake_init(&f, 0, 0);
     CHECK(ps_obs_ship_cycle(T0 + 1000, 1, fake_ship, &f, NULL) == 0);
     CHECK(sends + f.repeats == N);
     CHECK(f.repeats == (long)c.suppressed);
@@ -583,7 +608,7 @@ static void test_stage_full_keeps_counting(void) {
     }
     CHECK(sends == (PS_DEDUPE_STAGE_MAX + 1) + PS_DEDUPE_STAGE_MAX);   /* last one suppressed */
     CHECK(ps_obs_dedupe_staged() == PS_DEDUPE_STAGE_MAX);
-    struct fake_central f = { 0, 0, 0, 0, 0 };
+    struct fake_central f; fake_init(&f, 0, 0);
     CHECK(ps_obs_ship_cycle(T0 + 900001, 1, fake_ship, &f, NULL) == 0);
     CHECK(sends + f.repeats == N);
 }
@@ -600,32 +625,123 @@ static void make_120_pending(void) {
     ps_obs_queue_init();   /* the first sightings are not the point here */
 }
 
-/* Central down: summaries wait inside dedupe; the next cycle ships them. */
+/* Central down: summaries wait inside dedupe; the next cycle ships them.
+ * ANY failed ship re-stages the whole batch (central dedups on the
+ * deterministic envelope sig, so retry is safe) and the retry is
+ * byte-identical. */
 static void test_ship_stops_and_resumes(void) {
-    /* nothing of the batch delivered (-2): it is re-staged, nothing lost */
-    make_120_pending();
-    struct fake_central f = { 0, 0, 0, 2, -2 };
-    struct ps_obs_ship_counts sc;
-    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
-    CHECK(sc.stopped && sc.summaries == PS_OBS_SHIP_BATCH);
-    CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
-    CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
-    /* a second failure: the same batch again, the staging stays bounded */
-    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
-    CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
-    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
-    CHECK(f.summaries == 120 && f.repeats == 240);
-    CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 0);
+    static const int rcs[] = { -1, -2, 1 };
+    for (int v = 0; v < 3; v++) {
+        make_120_pending();
+        struct fake_central f; fake_init(&f, 2, rcs[v]);
+        struct ps_obs_ship_counts sc;
+        CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
+        CHECK(sc.stopped && sc.summaries == PS_OBS_SHIP_BATCH && sc.restaged == PS_OBS_SHIP_BATCH);
+        CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
+        CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
+        /* a second failure: the same batch again, the staging stays bounded */
+        CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
+        CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH);
+        CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
+        CHECK(f.summaries == 120 && f.repeats == 240);
+        CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 0);
+        /* calls: fail, fail, then 50 + 50 + 20; every retry byte-identical */
+        CHECK(f.calls == 5);
+        CHECK(f.blob[0] && f.blob[1] && f.blob[2] &&
+              strcmp(f.blob[0], f.blob[1]) == 0 && strcmp(f.blob[0], f.blob[2]) == 0);
+        CHECK(f.sizes[2] == 50 && f.sizes[3] == 50 && f.sizes[4] == 20);
+        fake_free(&f);
+    }
+}
 
-    /* delivery unknown (-1, e.g. a later POST of the batch failed): not
-     * re-sent (no double count); the rest still waits in dedupe */
+/* A failed batch goes back to the FRONT: a summary staged meanwhile (here
+ * by a MAC change) ships after it, and the batch keeps its order. */
+static void test_restage_order(void) {
     make_120_pending();
-    struct fake_central g = { 0, 0, 0, 1, -1 };
+    struct fake_central f; fake_init(&f, 1, -1);
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, NULL) == -1);
+    CHECK(offer_like_daemon("discovery.neighbor", NB_A, T0 + 900000) == 1);
+    CHECK(offer_like_daemon("discovery.neighbor", NB_A, T0 + 900001) == 0);
+    CHECK(offer_like_daemon("discovery.neighbor", NB_B, T0 + 900002) == 1);   /* stages NB_A */
+    /* with the staging list already holding the failed batch, NB_A is only
+     * closed when there is room (default build); with PS_DEDUPE_STAGE_MAX=1
+     * it stays open and is flushed later */
+    int room = PS_DEDUPE_STAGE_MAX > PS_OBS_SHIP_BATCH;
+    CHECK(ps_obs_dedupe_staged() == PS_OBS_SHIP_BATCH + room);
+    ps_obs_queue_init();
+    CHECK(ps_obs_ship_cycle(T0 + 900003, 0, fake_ship, &f, NULL) == 0);
+    CHECK(f.calls >= 2 && f.blob[1] != NULL);
+    /* the retry's first 50 items are the failed batch, in the same order */
+    CHECK(f.sizes[1] == PS_OBS_SHIP_BATCH && strcmp(f.blob[0], f.blob[1]) == 0);
+    /* then the summary staged while central was down */
+    if (room)
+        CHECK(f.calls >= 3 && f.blob[2] &&
+              strncmp(f.blob[2], "{\"kind\":\"discovery.neighbor\"", 28) == 0 &&
+              strstr(f.blob[2], "02:00:00:00:00:01") < strchr(f.blob[2], '\n'));
+    CHECK(ps_obs_ship_cycle(T0 + 900004, 1, fake_ship, &f, NULL) == 0);
+    CHECK(f.repeats == 240 + 1);
+    fake_free(&f);
+}
+
+/* Re-staged at the FRONT of summaries that were already staged: 60 staged
+ * (evictions from a 1-slot table), the first 50 fail, the retry ships those
+ * same 50 first and the other 10 after them. */
+static void test_restage_front_of_staged(void) {
+    if (PS_DEDUPE_STAGE_MAX < 60) return;   /* needs room for 60 staged */
+    init_prod(1);
+    char obs[64];
+    for (int k = 0; k <= 60; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"f%02d\"}", k);
+        offer_like_daemon("discovery.mld", obs, T0 + 2 * k);
+        offer_like_daemon("discovery.mld", obs, T0 + 2 * k + 1);
+    }
+    ps_obs_queue_init();
+    CHECK(ps_obs_dedupe_staged() == 60);
+    struct fake_central f; fake_init(&f, 1, -1);
+    CHECK(ps_obs_ship_cycle(T0 + 200, 0, fake_ship, &f, NULL) == -1);
+    CHECK(ps_obs_dedupe_staged() == 60);
+    CHECK(ps_obs_ship_cycle(T0 + 200, 0, fake_ship, &f, NULL) == 0);
+    CHECK(f.calls >= 3 && f.sizes[1] == PS_OBS_SHIP_BATCH && strcmp(f.blob[0], f.blob[1]) == 0);
+    CHECK(f.blob[2] && strstr(f.blob[2], "\"f50\"") && f.sizes[2] == 10);
+    CHECK(f.repeats == 60);
+}
+
+/* Batch boundary: 50 summaries are one call, 51 are 50 + 1. */
+static void test_batch_boundary(void) {
+    for (int total = 49; total <= 51; total++) {
+        init_prod(0);
+        char obs[64];
+        for (int k = 0; k < total; k++) {
+            snprintf(obs, sizeof obs, "{\"group\":\"b%d\"}", k);
+            offer_like_daemon("discovery.mld", obs, T0);
+            offer_like_daemon("discovery.mld", obs, T0 + 1);
+        }
+        ps_obs_queue_init();
+        struct fake_central f; fake_init(&f, 0, 0);
+        CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, NULL) == 0);
+        CHECK(f.repeats == total);
+        if (total <= PS_OBS_SHIP_BATCH) CHECK(f.calls == 1 && f.sizes[0] == total);
+        else CHECK(f.calls == 2 && f.sizes[0] == PS_OBS_SHIP_BATCH && f.sizes[1] == 1);
+        fake_free(&f);
+    }
+    /* 51 with the 1-item tail failing: only that item is re-staged */
+    init_prod(0);
+    char obs[64];
+    for (int k = 0; k < 51; k++) {
+        snprintf(obs, sizeof obs, "{\"group\":\"c%d\"}", k);
+        offer_like_daemon("discovery.mld", obs, T0);
+        offer_like_daemon("discovery.mld", obs, T0 + 1);
+    }
+    ps_obs_queue_init();
+    struct ps_obs_ship_counts sc;
+    struct fake_central g; fake_init(&g, 0, 0);
+    g_fail_on_call = 2;   /* the first call is fine, the 1-item tail fails */
     CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &g, &sc) == -1);
-    CHECK(ps_obs_dedupe_staged() == 0);
-    CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
+    g_fail_on_call = 0;
+    CHECK(sc.restaged == 1 && ps_obs_dedupe_staged() == 1 && ps_obs_dedupe_count() == 0);
     CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &g, &sc) == 0);
-    CHECK(g.repeats == 2L * (120 - PS_OBS_SHIP_BATCH));
+    CHECK(g.repeats == 51 && g.calls == 3 && strcmp(g.blob[1], g.blob[2]) == 0);
+    fake_free(&g);
 }
 
 /* Staged summaries come out of the next flush, before any window ends. */
@@ -648,7 +764,7 @@ static void test_checkin_stop_forces(void) {
     CHECK(offer_like_daemon("discovery.mld", "{\"g\":\"stop\"}", now) == 1);
     for (int i = 1; i <= 3; i++)
         CHECK(offer_like_daemon("discovery.mld", "{\"g\":\"stop\"}", now + i) == 0);
-    struct fake_central f = { 0, 0, 0, 0, 0 };
+    struct fake_central f; fake_init(&f, 0, 0);
     ps_central_checkin_set_ship_fn(fake_ship, &f);
     ps_central_checkin_stop();   /* window (900 s) still open: force */
     ps_central_checkin_set_ship_fn(NULL, NULL);
@@ -722,9 +838,13 @@ int main(int argc, char **argv) {
     test_eviction_burst_full_queue();
     test_stage_full_keeps_counting();
     test_ship_stops_and_resumes();
+    test_restage_order();
+    test_restage_front_of_staged();
+    test_batch_boundary();
     test_checkin_stop_forces();
     test_gap_order_and_rounding();
     cap_reset();
+    for (int i = 0; i < g_nblob; i++) free(g_blob_pool[i]);
     if (g_fail) { fprintf(stderr, "%d check(s) failed\n", g_fail); return 1; }
     printf("test_obs_dedupe: all passed\n");
     return 0;

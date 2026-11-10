@@ -14,6 +14,11 @@
 struct ps_report_result {
     int accepted; int rejected; int total; int http_status;
     int skipped; int unsent; int posts;
+    /* Of `unsent`, the items that failed for a reason worth retrying: the
+     * signing key could not be loaded, a POST failed in transport, or central
+     * answered 5xx or 429. Items of a POST answered with any other non-2xx
+     * (e.g. 400, 413) are unsent but NOT retryable (poison). */
+    int retryable;
 };
 
 /* Per-call counters from building an envelope array. */
