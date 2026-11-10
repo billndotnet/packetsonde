@@ -16,20 +16,22 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 77
 fi
 
-PORT="${PS_TEST_RDP_PORT:-$((30000 + RANDOM % 20000))}"
 READY_FIFO=$(mktemp -u)
 mkfifo "$READY_FIFO"
+# Read-write open: neither side blocks on the FIFO. The mock binds an
+# OS-assigned port and reports it.
+exec 3<>"$READY_FIFO"
 
-python3 - "$PORT" "$READY_FIFO" <<'PY' &
+python3 - "$READY_FIFO" <<'PY' &
 import socket, sys
-port = int(sys.argv[1])
-ready_fifo = sys.argv[2]
+ready_fifo = sys.argv[1]
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", port))
+s.bind(("127.0.0.1", 0))
 s.listen(1)
+s.settimeout(30)
 with open(ready_fifo, "w") as f:
-    f.write("ready\n")
+    f.write("ready %d\n" % s.getsockname()[1])
 c, _ = s.accept()
 # Drain the X.224 ConnReq (19 bytes for our auditor)
 c.recv(1024)
@@ -51,7 +53,7 @@ MOCK_PID=$!
 cleanup() { kill $MOCK_PID 2>/dev/null || true; rm -f "$READY_FIFO"; }
 trap cleanup EXIT
 
-read READY < "$READY_FIFO"
+read -t 10 -u 3 READY PORT || { echo "FAIL: mock server not ready"; exit 1; }
 
 OUT="$("$CLI" --jsonl audit rdp "127.0.0.1:$PORT" 2>/dev/null || true)"
 

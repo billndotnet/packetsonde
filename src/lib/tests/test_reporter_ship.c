@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 /* ---------------------------------------------------------------- sink --- */
@@ -92,6 +93,9 @@ static void *sink_main(void *arg) {
         if (poll(&p, 1, 50) <= 0) continue;
         int fd = accept(s->lfd, NULL, NULL);
         if (fd < 0) continue;
+        /* Bound every read so a short body fails the test instead of hanging. */
+        struct timeval tmo = { 10, 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tmo, sizeof tmo);
         sink_handle(s, fd);
         close(fd);
     }

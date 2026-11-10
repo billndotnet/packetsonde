@@ -11,7 +11,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-enable_testing()
+# Default per-test timeout (seconds): a hung test fails instead of stalling
+# ctest for its 1500 s default. Individual tests may set a larger TIMEOUT.
+set(DART_TESTING_TIMEOUT 60 CACHE STRING "Default ctest per-test timeout")
+include(CTest)
 set(BUILD_TESTING ON)
 
 # Project-wide options propagate to subdirs.

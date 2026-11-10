@@ -171,119 +171,139 @@ if(BUILD_TESTING)
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_tls.sh)
     set_tests_properties(test_audit_tls PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_ssh
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_ssh.sh)
     set_tests_properties(test_audit_ssh PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_imap
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_imap.sh)
     set_tests_properties(test_audit_imap PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_pop3
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_pop3.sh)
     set_tests_properties(test_audit_pop3 PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_snmp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_snmp.sh)
     set_tests_properties(test_audit_snmp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_rdp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_rdp.sh)
     set_tests_properties(test_audit_rdp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_mssql
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_mssql.sh)
     set_tests_properties(test_audit_mssql PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_audit_kafka
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_kafka.sh)
     set_tests_properties(test_audit_kafka PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_discover_agents
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_discover_agents.sh)
     set_tests_properties(test_discover_agents PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_e2e
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_e2e.sh)
     set_tests_properties(test_via_e2e PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_fail_on
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_fail_on.sh)
     set_tests_properties(test_via_fail_on PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_probe_tcp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_tcp.sh)
     set_tests_properties(test_via_probe_tcp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_probe_udp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_probe_udp.sh)
     set_tests_properties(test_probe_udp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_probe_udp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_probe_udp.sh)
     set_tests_properties(test_via_probe_udp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_traceroute
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_traceroute.sh)
     set_tests_properties(test_via_traceroute PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_probe_icmp
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_probe_icmp.sh)
     set_tests_properties(test_probe_icmp PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_via_multihop
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_via_multihop.sh)
     set_tests_properties(test_via_multihop PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_inspect_stream
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_inspect_stream.sh)
     set_tests_properties(test_inspect_stream PROPERTIES
         SKIP_RETURN_CODE 77
+        TIMEOUT 60
         ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_traceroute_via_error
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_traceroute_via_error.sh)
     set_tests_properties(test_traceroute_via_error PROPERTIES
-        SKIP_RETURN_CODE 77 ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60 ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     add_test(NAME test_traceroute_argorder
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_traceroute_argorder.sh)
     set_tests_properties(test_traceroute_argorder PROPERTIES
-        SKIP_RETURN_CODE 77 ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60 ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
 
     # ---- coverage backfill for audit kinds that previously had no
     # integration test (review finding #14). Same Python+FIFO mock pattern
@@ -296,6 +316,7 @@ if(BUILD_TESTING)
                  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audit_${_kind}.sh)
         set_tests_properties(test_audit_${_kind} PROPERTIES
             SKIP_RETURN_CODE 77
+        TIMEOUT 60
             ENVIRONMENT "PS_BUILD_DIR=${CMAKE_BINARY_DIR}")
     endforeach()
 endif()

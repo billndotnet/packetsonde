@@ -40,27 +40,30 @@ AGENT_FPR=$(PS_KEY_DIR="$KDIR" "$CLI" key fingerprint agent | sed 's/^sha256://'
 
 # Trivial UDP echo server -- probe target. Echoes the first datagram back to
 # the sender, then exits.
-UDP_PORT=$((30000 + RANDOM % 20000))
 UDP_FIFO=$(mktemp -u); mkfifo "$UDP_FIFO"
-python3 - "$UDP_PORT" "$UDP_FIFO" <<'PY' &
+# FIFO opened read-write so neither side blocks on open; the listener binds
+# an OS-assigned port and reports it.
+exec 3<>"$UDP_FIFO"
+python3 - "$UDP_FIFO" <<'PY' &
 import socket, sys
-port = int(sys.argv[1]); fifo = sys.argv[2]
+fifo = sys.argv[1]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", port))
-with open(fifo, "w") as f: f.write("ready\n")
+s.bind(("127.0.0.1", 0))
+s.settimeout(30)
+with open(fifo, "w") as f: f.write("ready %d\n" % s.getsockname()[1])
 data, addr = s.recvfrom(2048)
 s.sendto(data if data else b"\x00", addr)
 s.close()
 PY
 UDP_PID=$!
 trap "kill $UDP_PID 2>/dev/null || true; rm -f $UDP_FIFO; rm -rf $KDIR $AGENTS_CFG" EXIT
-read UDP_READY < "$UDP_FIFO"
+read -t 10 -u 3 UDP_READY UDP_PORT || { echo "FAIL: udp listener not ready"; exit 1; }
 
 # Spin up the agent listener via the test driver. Redirect its output to a log
 # rather than inheriting our stdout (see test_via_probe_tcp.sh for the held-
 # pipe rationale under ctest).
-LISTEN_PORT=$((30000 + RANDOM % 20000))
+LISTEN_PORT=$((10000 + RANDOM % 20000))
 PS_KEY_DIR="$KDIR" \
 PS_AGENT_LISTEN_ENABLED=1 \
 PS_AGENT_LISTEN_PORT="$LISTEN_PORT" \
