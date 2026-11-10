@@ -126,6 +126,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_recipe PRIVATE packetsonde_lib)
     add_test(NAME test_recipe COMMAND test_recipe)
 
+    add_executable(test_recipe_envelope_overflow tests/test_recipe_envelope_overflow.c)
+    target_link_libraries(test_recipe_envelope_overflow PRIVATE packetsonde_lib)
+    add_test(NAME test_recipe_envelope_overflow COMMAND test_recipe_envelope_overflow)
+
     add_executable(test_recipe_engine tests/test_recipe_engine.c)
     target_link_libraries(test_recipe_engine PRIVATE packetsonde_lib)
     add_test(NAME test_recipe_engine COMMAND test_recipe_engine)

@@ -163,6 +163,7 @@ static void test_small_batch_ships(void) {
     assert(rc == 0);
     assert(got == 3 && s.posts == 1 && s.malformed == 0);
     assert(rr.http_status == 200 && rr.accepted == 3);
+    assert(rr.unsent == 0 && rr.retryable == 0);
     free_all(ev, 3);
 }
 
@@ -241,6 +242,7 @@ static void test_unreachable_accounts_every_item(void) {
     int rc = ps_report_observations(&cc, NULL, (const char **)ev, N, &rr);
     assert(rc == -1);
     assert(rr.total == N && rr.unsent == N && rr.skipped == 0 && rr.accepted == 0);
+    assert(rr.retryable == N);
     assert(strcmp(ps_http_last_error(), "connect") == 0);
     free_all(ev, N);
 }

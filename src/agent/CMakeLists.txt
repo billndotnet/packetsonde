@@ -119,6 +119,8 @@ add_library(packetsonde_daemon STATIC
     src/ipc_server.c
     src/module.c
     src/obs_queue.c
+    src/obs_dedupe.c
+    src/obs_ship.c
     src/priv_client.c
     src/iso8601.c
     src/platform/unix.c
@@ -330,6 +332,14 @@ target_link_libraries(test_dns_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_dns_listener PRIVATE PS_DNS_LISTENER_TESTING=1)
 add_test(NAME test_dns_listener COMMAND test_dns_listener)
 
+foreach(mod dhcp stp mld)
+    add_executable(test_${mod}_listener tests/test_${mod}_listener.c src/platform/unix.c)
+    target_include_directories(test_${mod}_listener PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(test_${mod}_listener PRIVATE packetsonde_lib)
+    add_test(NAME test_${mod}_listener COMMAND test_${mod}_listener)
+endforeach()
+
 # Test: honeypot listener (config parser + socket lifecycle + JSON events — no pcap or Redis needed)
 add_executable(test_honeypot_listener tests/test_honeypot_listener.c src/platform/unix.c)
 target_include_directories(test_honeypot_listener PRIVATE
@@ -369,6 +379,34 @@ target_include_directories(test_obs_queue PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_obs_queue PRIVATE pthread)
 add_test(NAME test_obs_queue COMMAND test_obs_queue)
+
+# Test: observation dedupe (key canonicalisation, windows, temporal summary)
+add_executable(test_obs_dedupe tests/test_obs_dedupe.c src/obs_dedupe.c src/obs_queue.c
+    src/obs_ship.c src/central_checkin.c src/platform/unix.c
+    src/iso8601.c src/config.c src/config_to_env.c)
+target_include_directories(test_obs_dedupe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_obs_dedupe PRIVATE packetsonde_lib pthread)
+add_test(NAME test_obs_dedupe COMMAND test_obs_dedupe
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dedupe_vectors.json)
+# Same tests with a one-slot staging list (cap edge cases)
+add_executable(test_obs_dedupe_stage1 tests/test_obs_dedupe.c src/obs_dedupe.c src/obs_queue.c
+    src/obs_ship.c src/central_checkin.c src/platform/unix.c
+    src/iso8601.c src/config.c src/config_to_env.c)
+target_compile_definitions(test_obs_dedupe_stage1 PRIVATE PS_DEDUPE_STAGE_MAX=1)
+target_include_directories(test_obs_dedupe_stage1 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_obs_dedupe_stage1 PRIVATE packetsonde_lib pthread)
+add_test(NAME test_obs_dedupe_stage1 COMMAND test_obs_dedupe_stage1
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/dedupe_vectors.json)
+
+# Dedupe summaries through the real reporter + HTTP against a loopback sink
+add_executable(test_obs_ship_central tests/test_obs_ship_central.c src/obs_dedupe.c
+    src/obs_queue.c src/obs_ship.c src/central_checkin.c src/platform/unix.c src/iso8601.c)
+target_include_directories(test_obs_ship_central PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_obs_ship_central PRIVATE packetsonde_lib pthread)
+add_test(NAME test_obs_ship_central COMMAND test_obs_ship_central)
 
 # Test: bounded activity ring
 add_executable(test_activity_ring tests/test_activity_ring.c

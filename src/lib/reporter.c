@@ -211,7 +211,7 @@ static int ps_report_to(const struct ps_central_config *cc, const char *base_url
         int alen = build_envelopes(cc, event_jsons + off, n - off, off,
                                    body + prelen, PS_REPORT_BATCH_CAP, &st);
         if (alen < 0 || st.consumed == 0) {   /* key unusable: nothing more can be built */
-            res.unsent += (int)(n - off); rc = -1; break;
+            res.unsent += (int)(n - off); res.retryable += (int)(n - off); rc = -1; break;
         }
         res.skipped += (int)st.skipped;
         off += st.consumed;
@@ -227,6 +227,7 @@ static int ps_report_to(const struct ps_central_config *cc, const char *base_url
                         st.emitted, blen, ps_http_last_error());
             /* central is unreachable: do not keep signing and dialling */
             res.unsent += (int)st.emitted + (int)(n - off);
+            res.retryable += (int)st.emitted + (int)(n - off);
             rc = -1; break;
         }
         res.http_status = status;
@@ -234,6 +235,7 @@ static int ps_report_to(const struct ps_central_config *cc, const char *base_url
             report_warn(W_STATUS, "POST of %zu envelope(s), %zu-byte body answered HTTP %d",
                         st.emitted, blen, status);
             res.unsent += (int)st.emitted;
+            if (status >= 500 || status == 429) res.retryable += (int)st.emitted;
             continue;
         }
         const char *a = strstr(resp, "\"accepted\":");

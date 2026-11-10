@@ -9,4 +9,14 @@ int ps_central_checkin_once(long uptime_seconds);
  * Returns 0 if started, -1 if central is not configured. */
 int ps_central_checkin_start(void);
 
+/* Stop the checkin loop (if running) and run one last shipping cycle with
+ * force: the queue, then every pending dedupe summary (obs_ship.h). Bounded
+ * by the reporter's HTTP timeout; safe to call when central is not
+ * configured (nothing is shipped then). */
+void ps_central_checkin_stop(void);
+
+/* Test seam: ship through `fn` instead of the reporter (NULL restores). */
+#include "obs_ship.h"
+void ps_central_checkin_set_ship_fn(ps_obs_ship_fn fn, void *user);
+
 #endif
