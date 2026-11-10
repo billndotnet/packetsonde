@@ -16,10 +16,19 @@ struct ps_report_result {
     int skipped; int unsent; int posts;
     /* Of `unsent`, the items that failed for a reason worth retrying: the
      * signing key could not be loaded, a POST failed in transport, or central
-     * answered 5xx or 429. Items of a POST answered with any other non-2xx
-     * (e.g. 400, 413) are unsent but NOT retryable (poison). */
+     * answered 5xx, 408 or 429. Items of a POST answered with any other
+     * non-2xx (e.g. 400, 413) are unsent but NOT retryable (poison). */
     int retryable;
+    /* Items from the front that need no retry: delivered with a 2xx (whatever
+     * central's per-envelope verdict, so accepted items are never re-sent and
+     * rejected ones are final), refused for good (poison), or skipped as
+     * unbuildable. A retryable failure stops the call, so the items still
+     * to retry are always the tail [handled, total). */
+    int handled;
 };
+
+/* 1 when an HTTP status is worth retrying later: 5xx, 408, 429. */
+int ps_report_status_retryable(int status);
 
 /* Per-call counters from building an envelope array. */
 struct ps_envelope_stats {

@@ -55,11 +55,10 @@ int ps_central_checkin_once(long uptime_seconds) {
 /* Ship queued observations and dedupe summaries to central (obs_ship.h).
  * The reporter splits a batch across several POSTs when its envelopes
  * outgrow one request, and skips (and logs) any single item it cannot
- * envelope instead of failing the batch. Best-effort: a batch that cannot be
- * delivered (central unreachable, non-2xx) is dropped; Phase-1 reconciliation
- * backstops gaps; we never block the daemon on central availability. Dedupe
- * summaries are only flushed while central takes them, so they wait inside
- * dedupe instead of being dropped. */
+ * envelope instead of failing the batch. Items central could not take
+ * (unreachable, 5xx, 408, 429) stay queued / staged and are retried next
+ * cycle; the queue stays bounded by drop-oldest, so the daemon never blocks
+ * on central availability. */
 static pthread_mutex_t g_ship_lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct ship_ctx {
@@ -67,26 +66,29 @@ struct ship_ctx {
     int shipped, skipped, failed, accepted, last_status;
 };
 
-static int ship_to_central(const char **items, int n, void *user) {
+static int ship_to_central(const char **items, int n, void *user, int *done) {
     struct ship_ctx *x = user;
     if (!x->cc->url || !x->cc->url[0]) return -1;
     struct ps_report_result rr;
     memset(&rr, 0, sizeof(rr));
     int rc = ps_report_observations(x->cc, NULL, items, (size_t)n, &rr);
     x->skipped  += rr.skipped;
-    x->failed   += rr.unsent;
+    x->failed   += rr.unsent - rr.retryable;
     x->shipped  += n - rr.skipped - rr.unsent;
     x->accepted += rr.accepted;
     if (rr.http_status) x->last_status = rr.http_status;
     /* Central unreachable, or it (or the proxy in front of it) answered
-     * "unavailable"/"slow down" for any POST of the batch: stop this cycle
-     * instead of draining the rest into the same wall. A dedupe summary batch
-     * is then re-staged WHOLE and re-sent byte-identical next cycle; central
-     * dedups on the deterministic envelope sig (central-protocol-v1:
-     * "redelivery is idempotent"), so retrying the parts it did store is
-     * safe. A POST answered with any other non-2xx (400, 413, ...) is poison:
-     * those items are counted as failed and not retried. */
-    if (rc != 0 || rr.retryable > 0) return -1;
+     * "unavailable"/"timeout"/"slow down" (5xx, 408, 429): the reporter
+     * stopped at that POST, so items [handled, n) are one tail to retry and
+     * everything before it is settled (a 2xx: delivered, central's
+     * per-envelope verdicts are final; or poison). Stop this cycle instead of
+     * draining the rest into the same wall. The retry sends the same bytes,
+     * so the same envelope sigs, which central dedups on
+     * (central-protocol-v1: "redelivery is idempotent"). A POST answered with
+     * any other non-2xx (400, 413, ...) is poison: those items are counted as
+     * failed and not retried. */
+    *done = rr.handled;
+    if (rc != 0 || rr.handled < n) return -1;
     return 0;
 }
 
@@ -111,12 +113,24 @@ static void ps_checkin_ship_observations(const struct ps_central_config *cc, int
     else
         return;
 
-    if (x.skipped > 0 || x.failed > 0)
+    if (x.skipped > 0 || x.failed > 0 || sc.stopped)
         ps_warn("central: observations shipped %d (accepted %d), skipped %d (could not be "
-                "enveloped), failed %d (not delivered, last HTTP %d)",
-                x.shipped, x.accepted, x.skipped, x.failed, x.last_status);
+                "enveloped), failed %d (refused, not retried), kept %d for retry "
+                "(last HTTP %d)",
+                x.shipped, x.accepted, x.skipped, x.failed, sc.kept + sc.restaged,
+                x.last_status);
     else if (x.shipped > 0)
         ps_info("central: shipped %d observations (accepted %d)", x.shipped, x.accepted);
+
+    static uint64_t last_dropped;
+    uint64_t dropped = ps_obs_queue_dropped();
+    if (dropped != last_dropped) {
+        if (dropped > last_dropped)
+            ps_warn("central: observation queue full, dropped %llu oldest (%llu total, "
+                    "%d queued)", (unsigned long long)(dropped - last_dropped),
+                    (unsigned long long)dropped, ps_obs_queue_count());
+        last_dropped = dropped;
+    }
 
     static struct ps_obs_dedupe_counters last;
     struct ps_obs_dedupe_counters c;

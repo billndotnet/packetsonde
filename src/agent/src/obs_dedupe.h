@@ -48,10 +48,11 @@
  * Delivery: summaries do NOT go through the 256-slot drop-oldest
  * observation queue. ps_obs_ship_cycle (obs_ship.h) ships them straight
  * from ps_obs_dedupe_flush in batches and stops flushing when central
- * cannot take them, so they wait inside dedupe instead; a batch that was
- * not (fully) delivered is re-staged whole, as a frozen byte copy, and
- * re-sent identical (central dedups on the deterministic envelope sig, so
- * retry is safe). A non-429 4xx answer is poison: not retried.
+ * cannot take them, so they wait inside dedupe instead; the part of a
+ * batch that central did not take (transport failure, 5xx, 408, 429) is
+ * re-staged, in order, as a frozen byte copy, and re-sent identical
+ * (central dedups on the deterministic envelope sig, so retry is safe).
+ * Any other 4xx answer is poison: not retried.
  *
  * Canonical key text (shared with the central side; vectors in
  * src/agent/tests/fixtures/dedupe_vectors.json):
