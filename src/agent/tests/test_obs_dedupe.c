@@ -487,7 +487,8 @@ static void fake_init(struct fake_central *f, int fail_calls, int fail_rc) {
     f->fail_rc = fail_rc;
 }
 static int g_fail_on_call;   /* 1-based call number that fails, 0: none */
-static int fake_ship(const char **items, int n, void *user) {
+static int g_done_on_fail;   /* items a failing call reports handled */
+static int fake_ship(const char **items, int n, void *user, int *done) {
     struct fake_central *f = user;
     CHECK(n > 0 && n <= PS_OBS_SHIP_BATCH);
     if (f->calls < 64) {
@@ -501,8 +502,12 @@ static int fake_ship(const char **items, int n, void *user) {
         if (g_nblob < 4096) g_blob_pool[g_nblob++] = b; else free(b);
     }
     f->calls++;
-    if (g_fail_on_call && f->calls == g_fail_on_call) return -1;
-    if (f->fail_calls > 0) { f->fail_calls--; return f->fail_rc ? f->fail_rc : -1; }
+    if (g_fail_on_call && f->calls == g_fail_on_call) { *done = g_done_on_fail; return -1; }
+    if (f->fail_calls > 0) {
+        f->fail_calls--;
+        *done = g_done_on_fail;
+        return f->fail_rc ? f->fail_rc : -1;
+    }
     for (int i = 0; i < n; i++) {
         CHECK(strlen(items[i]) < PS_OBS_ITEM_MAX);
         if (strstr(items[i], "\"dedupe\":")) {
@@ -744,6 +749,54 @@ static void test_batch_boundary(void) {
     fake_free(&g);
 }
 
+/* Central handled the first 20 of a failed summary batch (a 2xx POST before
+ * the failing one): only the other 30 are re-staged, in order, and the retry
+ * sends exactly those, byte-identical; nothing is delivered twice. */
+static void test_restage_partial(void) {
+    make_120_pending();
+    struct fake_central f; fake_init(&f, 1, -1);
+    struct ps_obs_ship_counts sc;
+    g_done_on_fail = 20;
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == -1);
+    g_done_on_fail = 0;
+    CHECK(sc.restaged == 30 && ps_obs_dedupe_staged() == 30);
+    CHECK(ps_obs_dedupe_count() == 120 - PS_OBS_SHIP_BATCH);
+    CHECK(ps_obs_ship_cycle(T0 + 900000, 0, fake_ship, &f, &sc) == 0);
+    /* calls: fail(50), then 50 (30 retried + 20 new), 50 */
+    CHECK(f.calls == 3 && f.sizes[1] == 50 && f.sizes[2] == 50);
+    /* the retry starts with items 20..49 of the failed call */
+    const char *tail = f.blob[0];
+    for (int i = 0; i < 20 && tail; i++) { tail = strchr(tail, '\n'); if (tail) tail++; }
+    CHECK(tail && f.blob[1] && strncmp(f.blob[1], tail, strlen(tail)) == 0);
+    CHECK(f.repeats == 240 - 20 * 2);   /* the 20 "handled" are not re-counted */
+    CHECK(ps_obs_dedupe_staged() == 0 && ps_obs_dedupe_count() == 0);
+    fake_free(&f);
+}
+
+/* Queue items: a failed ship leaves them at the head of the queue, in
+ * order; a partially handled batch pops only the handled part. */
+static void test_queue_kept_on_failure(void) {
+    init_prod(0);
+    char ev[64];
+    for (int i = 0; i < 60; i++) {
+        int l = snprintf(ev, sizeof ev, "{\"raw\":%d}", i);
+        ps_obs_queue_push(ev, (size_t)l);
+    }
+    struct fake_central f; fake_init(&f, 2, -1);
+    struct ps_obs_ship_counts sc;
+    CHECK(ps_obs_ship_cycle(T0, 0, fake_ship, &f, &sc) == -1);
+    CHECK(sc.kept == PS_OBS_SHIP_BATCH && ps_obs_queue_count() == 60);
+    g_done_on_fail = 10;
+    CHECK(ps_obs_ship_cycle(T0, 0, fake_ship, &f, &sc) == -1);
+    g_done_on_fail = 0;
+    CHECK(sc.kept == 40 && ps_obs_queue_count() == 50);
+    CHECK(ps_obs_ship_cycle(T0, 0, fake_ship, &f, &sc) == 0);
+    CHECK(ps_obs_queue_count() == 0 && f.raw == 50);
+    CHECK(f.calls == 3 && strcmp(f.blob[0], f.blob[1]) == 0);
+    CHECK(strncmp(f.blob[2], "{\"raw\":10}\n", 11) == 0);
+    fake_free(&f);
+}
+
 /* Staged summaries come out of the next flush, before any window ends. */
 static void test_staging_order(void) {
     init_prod(1);
@@ -840,6 +893,8 @@ int main(int argc, char **argv) {
     test_ship_stops_and_resumes();
     test_restage_order();
     test_restage_front_of_staged();
+    test_restage_partial();
+    test_queue_kept_on_failure();
     test_batch_boundary();
     test_checkin_stop_forces();
     test_gap_order_and_rounding();
