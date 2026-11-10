@@ -40,23 +40,25 @@ AGENT_FPR=$(PS_KEY_DIR="$KDIR" "$CLI" key fingerprint agent | sed 's/^sha256://'
 
 # Trivial TCP listener -- probe target. Accepts one connection and sends a
 # banner, then closes.
-TCP_PORT=$((30000 + RANDOM % 20000))
 TCP_FIFO=$(mktemp -u); mkfifo "$TCP_FIFO"
-python3 - "$TCP_PORT" "$TCP_FIFO" <<'PY' &
+# Open the FIFO read-write so neither side can block on open; the listener
+# binds an OS-assigned port and reports it, so there is nothing to collide.
+exec 3<>"$TCP_FIFO"
+python3 - "$TCP_FIFO" <<'PY' &
 import socket, sys
-port = int(sys.argv[1])
-fifo = sys.argv[2]
+fifo = sys.argv[1]
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", port)); s.listen(1)
-with open(fifo, "w") as f: f.write("ready\n")
+s.bind(("127.0.0.1", 0)); s.listen(1)
+s.settimeout(30)
+with open(fifo, "w") as f: f.write("ready %d\n" % s.getsockname()[1])
 c, _ = s.accept()
 c.send(b"PROBE-BANNER hello\r\n")
 c.close(); s.close()
 PY
 TCP_PID=$!
 trap "kill $TCP_PID 2>/dev/null || true; rm -f $TCP_FIFO; rm -rf $KDIR $AGENTS_CFG" EXIT
-read TCP_READY < "$TCP_FIFO"
+read -t 10 -u 3 TCP_READY TCP_PORT || { echo "FAIL: tcp listener not ready"; exit 1; }
 
 # Spin up the agent listener via the test driver. Redirect its output to a
 # log rather than inheriting our stdout: the driver forks a packetsonde
@@ -64,7 +66,7 @@ read TCP_READY < "$TCP_FIFO"
 # stdout open. Under ctest (which reads the test's stdout to EOF) that held
 # pipe blocks the run until timeout even after the script has finished and
 # reaped the driver. The sibling via tests already redirect for this reason.
-LISTEN_PORT=$((30000 + RANDOM % 20000))
+LISTEN_PORT=$((10000 + RANDOM % 20000))
 PS_KEY_DIR="$KDIR" \
 PS_AGENT_LISTEN_ENABLED=1 \
 PS_AGENT_LISTEN_PORT="$LISTEN_PORT" \

@@ -58,14 +58,17 @@ TRUNKBOX_FPR=$(PS_KEY_DIR="$TRUNKBOX_KEYS" "$CLI" key fingerprint agent | sed 's
 
 # Mock SSH target. One accept per request; multi-hop only opens one
 # back-end connection.
-SSH_PORT=$((30000 + RANDOM % 20000))
 SSH_FIFO="$WORK/ssh-ready"; mkfifo "$SSH_FIFO"
-python3 - "$SSH_PORT" "$SSH_FIFO" <<'PY' &
+# FIFO opened read-write so neither side blocks; the mock binds an OS-assigned
+# port and reports it.
+exec 3<>"$SSH_FIFO"
+python3 - "$SSH_FIFO" <<'PY' &
 import socket, sys
-port = int(sys.argv[1]); fifo = sys.argv[2]
+fifo = sys.argv[1]
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("127.0.0.1", port)); s.listen(2)
-open(fifo, "w").write("ready\n")
+s.bind(("127.0.0.1", 0)); s.listen(2)
+s.settimeout(30)
+open(fifo, "w").write("ready %d\n" % s.getsockname()[1])
 for _ in range(2):
     c, _ = s.accept()
     c.send(b"SSH-2.0-OpenSSH_6.0p1\r\n")
@@ -73,11 +76,11 @@ for _ in range(2):
 s.close()
 PY
 SSH_PID=$!
-read READY < "$SSH_FIFO"
+read -t 10 -u 3 READY SSH_PORT || { echo "FAIL: ssh mock not ready"; exit 1; }
 
 # trunkbox: terminus. Runs the audit subprocess. Its agents.toml is
 # empty -- trunkbox has nothing to forward to.
-TRUNKBOX_PORT=$((30000 + RANDOM % 20000))
+TRUNKBOX_PORT=$((10000 + RANDOM % 20000))
 TRUNKBOX_AGENTS="$WORK/trunkbox-agents.toml"
 : > "$TRUNKBOX_AGENTS"
 PS_AGENT_LISTEN_MODE=persistent \
@@ -92,7 +95,7 @@ TRUNKBOX_PID=$!
 
 # bunker: forwarder. Its agents.toml has a 'trunkbox' entry pinning
 # trunkbox's pubkey, address points at trunkbox's listener.
-BUNKER_PORT=$((30000 + RANDOM % 20000))
+BUNKER_PORT=$((10000 + RANDOM % 20000))
 BUNKER_AGENTS="$WORK/bunker-agents.toml"
 cat > "$BUNKER_AGENTS" <<EOF
 [agents.trunkbox]
