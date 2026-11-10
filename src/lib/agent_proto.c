@@ -1,6 +1,7 @@
 #include "agent_proto.h"
 #include "json_extract.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 
@@ -53,6 +54,28 @@ int ps_ap_read_frame(const struct ps_ap_io *io,
      * parse; we only enforce the protocol invariant that payloads are JSON
      * objects so a malformed peer cannot DOS us with non-JSON garbage. */
     if (len < 2 || out_buf[0] != '{') return PS_AP_ERR_BAD_JSON;
+    *out_len = len;
+    return PS_AP_OK;
+}
+
+int ps_ap_read_frame_alloc(const struct ps_ap_io *io, size_t max,
+                           uint8_t **out_buf, size_t *out_len) {
+    *out_buf = NULL;
+    *out_len = 0;
+    uint8_t hdr[4];
+    int rc = io_read_all(io, hdr, 4);
+    if (rc != PS_AP_OK) return rc;
+    uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+                   ((uint32_t)hdr[2] <<  8) |  (uint32_t)hdr[3];
+    if (max > PS_AGENT_FRAME_MAX) max = PS_AGENT_FRAME_MAX;
+    if (len > max) return PS_AP_ERR_OVERSIZE;
+    uint8_t *buf = malloc((size_t)len + 1);
+    if (!buf) return PS_AP_ERR_IO;
+    rc = io_read_all(io, buf, len);
+    if (rc == PS_AP_OK && (len < 2 || buf[0] != '{')) rc = PS_AP_ERR_BAD_JSON;
+    if (rc != PS_AP_OK) { free(buf); return rc; }
+    buf[len] = '\0';
+    *out_buf = buf;
     *out_len = len;
     return PS_AP_OK;
 }

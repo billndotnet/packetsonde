@@ -89,6 +89,15 @@ int  ps_ap_read_frame (const struct ps_ap_io *io,
                        uint8_t *out_buf, size_t out_buf_cap,
                        size_t *out_len);
 
+/* Read one frame into a heap buffer sized to the frame. Frames whose length
+ * header exceeds `max` (itself capped at PS_AGENT_FRAME_MAX) yield
+ * PS_AP_ERR_OVERSIZE with the payload left unread, so the caller can answer
+ * with an error frame. On PS_AP_OK *out_buf holds `*out_len` bytes plus a
+ * trailing NUL (not counted) and the caller frees it; on any error *out_buf is
+ * NULL and nothing is left allocated. Memory per call is bounded by `max`. */
+int  ps_ap_read_frame_alloc(const struct ps_ap_io *io, size_t max,
+                            uint8_t **out_buf, size_t *out_len);
+
 /* Write one frame; payload is the raw JSON bytes. Returns PS_AP_OK or
  * PS_AP_ERR_IO / PS_AP_ERR_OVERSIZE. */
 int  ps_ap_write_frame(const struct ps_ap_io *io,

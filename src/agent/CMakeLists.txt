@@ -311,7 +311,8 @@ target_link_libraries(test_network_listener_driver PRIVATE packetsonde_lib pthre
 # Test: relay forwarder body builder + handle_ingest against a loopback central
 add_executable(test_relay_forward tests/test_relay_forward.c)
 target_include_directories(test_relay_forward PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cli)
 target_link_libraries(test_relay_forward PRIVATE packetsonde_lib pthread)
 add_test(NAME test_relay_forward COMMAND test_relay_forward)
 

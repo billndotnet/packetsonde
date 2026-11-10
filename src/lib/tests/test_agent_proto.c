@@ -84,6 +84,66 @@ static int test_bad_json_payload(void) {
     return 0;
 }
 
+/* Frame of exactly `len` bytes: '{' + filler + '}'. */
+static void put_frame(struct mem_io *m, size_t len) {
+    uint8_t hdr[4] = { (uint8_t)(len >> 24), (uint8_t)(len >> 16), (uint8_t)(len >> 8), (uint8_t)len };
+    mem_write(m, hdr, 4);
+    for (size_t i = 0; i < len; i++) {
+        uint8_t c = i == 0 ? '{' : (i == len - 1 ? '}' : '.');
+        mem_write(m, &c, 1);
+    }
+}
+
+static int test_read_alloc(void) {
+    uint8_t *buf; size_t len;
+
+    /* Up to and including `max` is read whole, NUL-terminated past len. */
+    for (size_t want = 99; want <= 100; want++) {
+        struct mem_io m = {0};
+        struct ps_ap_io io = { mem_read, mem_write, &m };
+        put_frame(&m, want);
+        CHECK(ps_ap_read_frame_alloc(&io, 100, &buf, &len) == PS_AP_OK);
+        CHECK(buf != NULL && len == want && buf[0] == '{' && buf[len - 1] == '}' && buf[len] == 0);
+        free(buf);
+    }
+
+    /* One over `max`: refused from the header alone, payload left unread. */
+    struct mem_io m = {0};
+    struct ps_ap_io io = { mem_read, mem_write, &m };
+    put_frame(&m, 101);
+    buf = (uint8_t *)&m;
+    CHECK(ps_ap_read_frame_alloc(&io, 100, &buf, &len) == PS_AP_ERR_OVERSIZE);
+    CHECK(buf == NULL && len == 0);
+    CHECK(m.r == 4);
+
+    /* `max` above the protocol limit is clamped to it. */
+    struct mem_io m2 = {0};
+    struct ps_ap_io io2 = { mem_read, mem_write, &m2 };
+    uint32_t over = PS_AGENT_FRAME_MAX + 1;
+    uint8_t hdr[4] = { (uint8_t)(over >> 24), (uint8_t)(over >> 16), (uint8_t)(over >> 8), (uint8_t)over };
+    mem_write(&m2, hdr, 4);
+    CHECK(ps_ap_read_frame_alloc(&io2, (size_t)-1, &buf, &len) == PS_AP_ERR_OVERSIZE);
+    CHECK(buf == NULL);
+
+    /* Truncated payload and non-JSON payload free their buffer (ASan checks). */
+    struct mem_io m3 = {0};
+    struct ps_ap_io io3 = { mem_read, mem_write, &m3 };
+    uint8_t h50[4] = { 0, 0, 0, 50 };
+    mem_write(&m3, h50, 4);
+    mem_write(&m3, "{abc", 4);
+    CHECK(ps_ap_read_frame_alloc(&io3, 100, &buf, &len) == PS_AP_ERR_IO);
+    CHECK(buf == NULL);
+
+    struct mem_io m4 = {0};
+    struct ps_ap_io io4 = { mem_read, mem_write, &m4 };
+    uint8_t h10[4] = { 0, 0, 0, 10 };
+    mem_write(&m4, h10, 4);
+    mem_write(&m4, "not-json!!", 10);
+    CHECK(ps_ap_read_frame_alloc(&io4, 100, &buf, &len) == PS_AP_ERR_BAD_JSON);
+    CHECK(buf == NULL);
+    return 0;
+}
+
 static int test_frame_type(void) {
     char out[32];
     const char *a = "{\"type\":\"hello\",\"v\":1}";
@@ -125,6 +185,7 @@ int main(void) {
     if (test_oversize_refused())   return 1;
     if (test_short_buffer())       return 1;
     if (test_bad_json_payload())   return 1;
+    if (test_read_alloc())         return 1;
     if (test_frame_type())         return 1;
     if (test_hello_recipe_schema()) return 1;
     if (strcmp(PS_AP_MSG_INGEST, "ingest") != 0) return 1;

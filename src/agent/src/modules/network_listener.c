@@ -550,6 +550,100 @@ static int handle_ingest(struct nl_state *st, const char *peer_id,
     return accepted;
 }
 
+/* Refuse a frame the session cannot take, in the protocol's error shape, so
+ * the peer gets a reason instead of a bare close. */
+static void nl_send_error(const struct ps_ap_io *io, const char *msg) {
+    char e[256];
+    int n = snprintf(e, sizeof e, "{\"type\":\"error\",\"message\":\"%s\"}", msg);
+    if (n > 0 && (size_t)n < sizeof e) ps_ap_write_frame(io, e, (size_t)n);
+}
+
+/* Serve one authorized session: send our hello, then read frames until one
+ * request has been dispatched. Each frame is read into a heap buffer sized to
+ * it, at most PS_AGENT_FRAME_MAX (the protocol's own limit, which the CLI also
+ * enforces on what it sends), and freed before the next read, so a session
+ * holds at most one frame. `peer_id` is the client's key fingerprint. */
+static void nl_serve(struct nl_state *st, struct ps_ap_io *io, const char *peer_id) {
+    char hello[256];
+    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
+    ps_keystore_fingerprint(st->agent_kp.pubkey, fpr);
+    int hn = snprintf(hello, sizeof(hello),
+                      "{\"type\":\"hello\",\"v\":%d,\"agent_fingerprint\":\"sha256:%s\","
+                      "\"max_recipe_schema\":%d}",
+                      PS_AGENT_PROTO_VERSION, fpr, PS_RECIPE_SCHEMA_MAX);
+    if (hn < 0 || ps_ap_write_frame(io, hello, (size_t)hn) != PS_AP_OK) return;
+
+    /* Expect hello + audit request from client. */
+    uint8_t *buf = NULL; size_t blen;
+    int saw_hello = 0;
+    int dispatched = 0;
+    while (!dispatched) {
+        free(buf); buf = NULL;
+        int rrc = ps_ap_read_frame_alloc(io, PS_AGENT_FRAME_MAX, &buf, &blen);
+        if (rrc == PS_AP_ERR_OVERSIZE) {
+            char m[96];
+            snprintf(m, sizeof m, "frame too large (max %u bytes)", (unsigned)PS_AGENT_FRAME_MAX);
+            nl_send_error(io, m);
+            break;
+        }
+        if (rrc == PS_AP_ERR_BAD_JSON) { nl_send_error(io, "malformed frame"); break; }
+        if (rrc != PS_AP_OK) break;
+        char type[32];
+        if (ps_ap_frame_type(buf, blen, type, sizeof(type)) != 0) continue;
+        if (strcmp(type, "hello") == 0) { saw_hello = 1; continue; }
+        if (strcmp(type, "ingest") == 0) {
+            char ack[1024];
+            handle_ingest(st, peer_id, buf, blen, ack, sizeof ack);
+            ps_ap_write_frame(io, ack, strlen(ack));
+            dispatched = 1;
+            continue;
+        }
+        bool is_probe = strcmp(type, "probe") == 0;
+        if (!is_probe && strcmp(type, "audit") != 0) continue;
+        if (!saw_hello) {
+            nl_send_error(io, "request before hello");
+            break;
+        }
+        /* Parse + dispatch. The request shape is identical for audit and
+         * probe ({type,kind,args[],via_chain[]?}); only the verb differs. */
+        char argbuf[PS_NL_ARGBUF_SZ]; char *av[PS_NL_MAX_ARGS] = {0}; int ac = 0;
+        const char *via_chain[PS_NL_MAX_VIA_HOPS] = {0};
+        int vc = 0;
+        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, PS_NL_MAX_ARGS, &ac,
+                                via_chain, PS_NL_MAX_VIA_HOPS, &vc) != 0 || ac < 1) {
+            nl_send_error(io, "bad request");
+            break;
+        }
+        /* C-2 / M-3: allowlist the kind (against the allowlist matching the
+         * request verb) and validate each arg before handing them to execvp.
+         * JSON-content tricks (escape sequences, embedded NULs, key-order
+         * confusion) all bottom out here. */
+        if (!kind_is_allowed(av[0], is_probe)) {
+            nl_send_error(io, "unknown kind");
+            break;
+        }
+        int unsafe = 0;
+        for (int i = 1; i < ac && !unsafe; i++) {
+            if (!arg_is_safe(av[i])) {
+                nl_send_error(io, "unsafe audit argument");
+                unsafe = 1;
+            }
+        }
+        /* via_chain hops must also be safe -- they become --via args
+         * to the subprocess. */
+        for (int i = 0; i < vc && !unsafe; i++) {
+            if (!arg_is_safe(via_chain[i])) {
+                nl_send_error(io, "unsafe via_chain entry");
+                unsafe = 1;
+            }
+        }
+        if (unsafe) break;
+        run_subprocess(st, is_probe, av[0], av, ac, via_chain, vc, io);
+        dispatched = 1;
+    }
+    free(buf);
+}
+
 static void *session_thread(void *arg) {
     struct session_args *sa = arg;
     struct nl_state *st = sa->st;
@@ -564,83 +658,10 @@ static void *session_thread(void *arg) {
     }
 
     struct ps_ap_io io; ps_at_make_io(ssl, &io);
+    char peer_id[128] = "";
+    ps_at_peer_fingerprint(ssl, peer_id, sizeof peer_id);
+    nl_serve(st, &io, peer_id);
 
-    /* Send our hello. */
-    char hello[256];
-    char fpr[PS_KEYSTORE_FPR_HEX_SIZE];
-    ps_keystore_fingerprint(st->agent_kp.pubkey, fpr);
-    int hn = snprintf(hello, sizeof(hello),
-                      "{\"type\":\"hello\",\"v\":%d,\"agent_fingerprint\":\"sha256:%s\","
-                      "\"max_recipe_schema\":%d}",
-                      PS_AGENT_PROTO_VERSION, fpr, PS_RECIPE_SCHEMA_MAX);
-    if (hn < 0 || ps_ap_write_frame(&io, hello, (size_t)hn) != PS_AP_OK) goto out;
-
-    /* Expect hello + audit request from client. */
-    uint8_t buf[64 * 1024]; size_t blen;
-    int saw_hello = 0;
-    int dispatched = 0;
-    while (!dispatched) {
-        if (ps_ap_read_frame(&io, buf, sizeof(buf), &blen) != PS_AP_OK) goto out;
-        char type[32];
-        if (ps_ap_frame_type(buf, blen, type, sizeof(type)) != 0) continue;
-        if (strcmp(type, "hello") == 0) { saw_hello = 1; continue; }
-        if (strcmp(type, "ingest") == 0) {
-            char peer_id[128] = "";
-            ps_at_peer_fingerprint(ssl, peer_id, sizeof peer_id);
-            char ack[1024];
-            handle_ingest(st, peer_id, buf, blen, ack, sizeof ack);
-            ps_ap_write_frame(&io, ack, strlen(ack));
-            dispatched = 1;
-            continue;
-        }
-        bool is_probe = strcmp(type, "probe") == 0;
-        if (!is_probe && strcmp(type, "audit") != 0) continue;
-        if (!saw_hello) {
-            const char *e = "{\"type\":\"error\",\"message\":\"request before hello\"}";
-            ps_ap_write_frame(&io, e, strlen(e));
-            goto out;
-        }
-        /* Parse + dispatch. The request shape is identical for audit and
-         * probe ({type,kind,args[],via_chain[]?}); only the verb differs. */
-        char argbuf[PS_NL_ARGBUF_SZ]; char *av[PS_NL_MAX_ARGS] = {0}; int ac = 0;
-        const char *via_chain[PS_NL_MAX_VIA_HOPS] = {0};
-        int vc = 0;
-        if (parse_audit_request(buf, blen, argbuf, sizeof(argbuf), av, PS_NL_MAX_ARGS, &ac,
-                                via_chain, PS_NL_MAX_VIA_HOPS, &vc) != 0 || ac < 1) {
-            const char *e = "{\"type\":\"error\",\"message\":\"bad request\"}";
-            ps_ap_write_frame(&io, e, strlen(e));
-            goto out;
-        }
-        /* C-2 / M-3: allowlist the kind (against the allowlist matching the
-         * request verb) and validate each arg before handing them to execvp.
-         * JSON-content tricks (escape sequences, embedded NULs, key-order
-         * confusion) all bottom out here. */
-        if (!kind_is_allowed(av[0], is_probe)) {
-            const char *e = "{\"type\":\"error\",\"message\":\"unknown kind\"}";
-            ps_ap_write_frame(&io, e, strlen(e));
-            goto out;
-        }
-        for (int i = 1; i < ac; i++) {
-            if (!arg_is_safe(av[i])) {
-                const char *e = "{\"type\":\"error\",\"message\":\"unsafe audit argument\"}";
-                ps_ap_write_frame(&io, e, strlen(e));
-                goto out;
-            }
-        }
-        /* via_chain hops must also be safe -- they become --via args
-         * to the subprocess. */
-        for (int i = 0; i < vc; i++) {
-            if (!arg_is_safe(via_chain[i])) {
-                const char *e = "{\"type\":\"error\",\"message\":\"unsafe via_chain entry\"}";
-                ps_ap_write_frame(&io, e, strlen(e));
-                goto out;
-            }
-        }
-        run_subprocess(st, is_probe, av[0], av, ac, via_chain, vc, &io);
-        dispatched = 1;
-    }
-
-out:
     ps_at_close(ssl);
     atomic_fetch_sub(&st->active_clients, 1);
     return NULL;
