@@ -29,6 +29,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -369,25 +370,148 @@ struct session_args {
     SSL             *ssl;
 };
 
+/* ---- relay forward body ------------------------------------------ */
+
+/* Upper bound on the body a relay POSTs to central, and on one envelope it
+ * will forward. Envelopes that would push the body past the cap, or that are
+ * individually larger than the item cap, are dropped whole and counted; the
+ * body is always a complete JSON object. */
+#define PS_NL_RELAY_FWD_MAX  (256u * 1024u)
+#define PS_NL_RELAY_ITEM_MAX 20000u
+
+/* Writes the relay_path entry for one envelope whose ed25519_sig is `sig`.
+ * Returns the length written (> 0) or -1. */
+typedef int (*nl_attest_fn)(void *ud, const char *sig, char *out, size_t cap);
+
+struct nl_fwd_result {
+    char  *body;       /* heap, NUL-terminated; caller frees */
+    size_t len;        /* strlen(body) */
+    int    forwarded;  /* envelopes written into body */
+    int    dropped;    /* envelopes seen but not forwarded */
+};
+
+/* Append a formatted string at *off, keeping the content within limit - 1
+ * bytes (limit counts the terminating NUL). An encoding error or a result
+ * that would not fit leaves the buffer as it was before the call and returns
+ * -1; nothing partial is ever kept. */
+static int nl_appendf(char *buf, size_t limit, size_t *off, const char *fmt, ...) {
+    if (*off >= limit) return -1;
+    size_t room = limit - *off;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *off, room, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= room) { buf[*off] = '\0'; return -1; }
+    *off += (size_t)n;
+    return 0;
+}
+
+/* Bounded substring search over [p, end). */
+static const char *nl_find(const char *p, const char *end, const char *needle) {
+    size_t nl = strlen(needle);
+    for (; p && (size_t)(end - p) >= nl; p++)
+        if (memcmp(p, needle, nl) == 0) return p;
+    return NULL;
+}
+
+/* Build the body a relay forwards to central from an ingest frame of `len`
+ * bytes (not necessarily NUL-terminated): {"envelopes":[...]} with a
+ * relay_path entry appended to each envelope. The body is allocated per call
+ * (at most `cap` bytes including the NUL), so concurrent sessions never share
+ * it. Returns 0 with *out filled, or -1 if the frame has no envelopes array,
+ * `cap` cannot hold the empty skeleton, or allocation fails. */
+static int nl_build_relay_forward(const uint8_t *frame, size_t len, size_t cap,
+                                  nl_attest_fn attest, void *ud,
+                                  struct nl_fwd_result *out) {
+    memset(out, 0, sizeof *out);
+    const char *f = (const char *)frame, *end = f + len;
+    const char *p = nl_find(f, end, "\"envelopes\":");
+    const char *arr = NULL;
+    if (p) for (const char *c = p; c < end; c++) if (*c == '[') { arr = c; break; }
+    if (!arr) return -1;
+
+    static const char head[] = "{\"envelopes\":[", tail[] = "]}";
+    if (cap < sizeof head + sizeof tail - 1) return -1;
+    char *body = malloc(cap);
+    if (!body) return -1;
+    size_t fo = 0;
+    nl_appendf(body, cap, &fo, "%s", head);
+    /* Items must leave room for the closing "]}" so the body always closes. */
+    const size_t item_limit = cap - (sizeof tail - 1);
+
+    int depth = 0, in_str = 0, esc = 0;
+    const char *obj_start = NULL;
+    for (const char *c = arr + 1; c < end; c++) {
+        if (in_str) {
+            if (esc) esc = 0;
+            else if (*c == '\\') esc = 1;
+            else if (*c == '"') in_str = 0;
+            continue;
+        }
+        if (*c == '"') { in_str = 1; continue; }  /* braces in strings are data */
+        if (*c == '{') { if (depth == 0) obj_start = c; depth++; continue; }
+        if (*c == ']' && depth == 0) break;
+        if (*c != '}' || depth == 0) continue;
+        if (--depth != 0 || !obj_start) continue;
+
+        size_t objlen = (size_t)(c - obj_start) + 1;
+        const char *obj = obj_start;
+        obj_start = NULL;
+        char sig[128] = "";
+        const char *sp = nl_find(obj, c, "\"ed25519_sig\":\"");
+        if (sp) {
+            sp += 15;
+            const char *se = memchr(sp, '"', (size_t)(c - sp));
+            if (se && (size_t)(se - sp) < sizeof sig) {
+                memcpy(sig, sp, (size_t)(se - sp)); sig[se - sp] = 0;
+            }
+        }
+        char entry[1024];
+        if (objlen > PS_NL_RELAY_ITEM_MAX ||
+            attest(ud, sig, entry, sizeof entry) <= 0 ||
+            nl_appendf(body, item_limit, &fo, "%s%.*s,\"relay_path\":[%s]}",
+                       out->forwarded ? "," : "", (int)(objlen - 1), obj, entry) != 0) {
+            out->dropped++;
+            continue;
+        }
+        out->forwarded++;
+    }
+    nl_appendf(body, cap, &fo, "%s", tail);  /* fits: reserved above */
+    out->body = body;
+    out->len = fo;
+    return 0;
+}
+
+struct nl_attest_ctx {
+    const struct ps_keypair *kp;
+    const char              *self_id;
+    const char              *peer_id;
+};
+
+static int nl_relay_attest(void *ud, const char *sig, char *out, size_t cap) {
+    const struct nl_attest_ctx *a = ud;
+    return ps_relay_attest_entry(a->kp, a->self_id, sig, a->peer_id, out, cap);
+}
+
 /* Relay role: forward an ingest frame's envelopes to central, appending this
  * relay's signed attestation to each. peer_id = connecting peer (received_from).
  * Writes an ack JSON into `ack`; returns the accepted count central reported.
+ * Envelopes the relay could not forward (over the size caps) are reported in
+ * the ack's "rejected" count.
  * NOTE: appends a fresh relay_path per envelope — correct for single-hop; merging
  * into a pre-existing relay_path (multi-hop) is a follow-up. */
 static int handle_ingest(struct nl_state *st, const char *peer_id,
                          const uint8_t *frame, size_t len, char *ack, size_t ack_cap) {
-    (void)len;
     const char *allow = getenv("PS_RELAY_ALLOW_SOURCES");
     if (!allow || !peer_id[0] || !strstr(allow, peer_id)) {
         snprintf(ack, ack_cap,
                  "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"source not allowed\"}");
         return 0;
     }
-    const char *p = strstr((const char *)frame, "\"envelopes\":");
-    const char *arr = p ? strchr(p, '[') : NULL;
-    if (!arr) {
+    const char *base = getenv("PS_CENTRAL_URL");
+    if (!base || !base[0]) {
         snprintf(ack, ack_cap,
-                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"no envelopes\"}");
+                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"relay has no central url\"}");
         return 0;
     }
 
@@ -396,60 +520,33 @@ static int handle_ingest(struct nl_state *st, const char *peer_id,
     if (cid && cid[0]) snprintf(self_id, sizeof self_id, "%s", cid);
     else if (gethostname(self_id, sizeof self_id) != 0) snprintf(self_id, sizeof self_id, "relay");
 
-    static char fwd[262144];
-    size_t fo = 0;
-    fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo, "{\"envelopes\":[");
-    int depth = 0; const char *obj_start = NULL; int first = 1;
-    for (const char *c = arr; *c; c++) {
-        if (*c == '{') { if (depth == 0) obj_start = c; depth++; }
-        else if (*c == '}') {
-            depth--;
-            if (depth == 0 && obj_start) {
-                size_t objlen = (size_t)(c - obj_start) + 1;
-                char obj[20000];
-                if (objlen < sizeof obj) {
-                    memcpy(obj, obj_start, objlen); obj[objlen] = 0;
-                    char sig[128] = "";
-                    const char *sp = strstr(obj, "\"ed25519_sig\":\"");
-                    if (sp) {
-                        sp += 15; const char *se = strchr(sp, '"');
-                        if (se && (size_t)(se - sp) < sizeof sig) {
-                            memcpy(sig, sp, (size_t)(se - sp)); sig[se - sp] = 0;
-                        }
-                    }
-                    char entry[1024];
-                    if (ps_relay_attest_entry(&st->agent_kp, self_id, sig, peer_id,
-                                              entry, sizeof entry) > 0) {
-                        obj[objlen - 1] = 0;  /* drop trailing '}' */
-                        fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo,
-                                               "%s%s,\"relay_path\":[%s]}",
-                                               first ? "" : ",", obj, entry);
-                        first = 0;
-                    }
-                }
-                obj_start = NULL;
-                if (fo >= sizeof fwd - 64) break;
-            }
-        } else if (*c == ']' && depth == 0) break;
-    }
-    fo += (size_t)snprintf(fwd + fo, sizeof fwd - fo, "]}");
-
-    const char *base = getenv("PS_CENTRAL_URL");
-    if (!base || !base[0]) {
+    struct nl_attest_ctx actx = { &st->agent_kp, self_id, peer_id };
+    struct nl_fwd_result fr;
+    if (nl_build_relay_forward(frame, len, PS_NL_RELAY_FWD_MAX,
+                               nl_relay_attest, &actx, &fr) != 0) {
         snprintf(ack, ack_cap,
-                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"relay has no central url\"}");
+                 "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"no envelopes\"}");
         return 0;
     }
-    char url[640]; snprintf(url, sizeof url, "%s/api/v1/packetsonde/events", base);
-    char hdr[320]; snprintf(hdr, sizeof hdr, "X-Packetsonde-Relay: %s\r\n", self_id);
-    const char *verify = getenv("PS_CENTRAL_VERIFY");
-    struct ps_http_opts opts = { (verify && verify[0] == '0') ? 0 : 1,
-                                 getenv("PS_CENTRAL_CA_CERT"), 15 };
-    int status = 0; char resp[8192]; int accepted = 0;
-    if (ps_http_request_h("POST", url, fwd, hdr, &opts, &status, resp, sizeof resp) == 0) {
-        const char *a = strstr(resp, "\"accepted\":"); accepted = a ? atoi(a + 11) : 0;
+    if (fr.dropped)
+        ps_warn("network_listener: relay dropped %d envelope(s) over the forward size cap",
+                fr.dropped);
+
+    int accepted = 0;
+    if (fr.forwarded > 0) {
+        char url[640]; snprintf(url, sizeof url, "%s/api/v1/packetsonde/events", base);
+        char hdr[320]; snprintf(hdr, sizeof hdr, "X-Packetsonde-Relay: %s\r\n", self_id);
+        const char *verify = getenv("PS_CENTRAL_VERIFY");
+        struct ps_http_opts opts = { (verify && verify[0] == '0') ? 0 : 1,
+                                     getenv("PS_CENTRAL_CA_CERT"), 15 };
+        int status = 0; char resp[8192];
+        if (ps_http_request_h("POST", url, fr.body, hdr, &opts, &status, resp, sizeof resp) == 0) {
+            const char *a = strstr(resp, "\"accepted\":"); accepted = a ? atoi(a + 11) : 0;
+        }
     }
-    snprintf(ack, ack_cap, "{\"type\":\"ack\",\"accepted\":%d,\"rejected\":0,\"detail\":\"\"}", accepted);
+    free(fr.body);
+    snprintf(ack, ack_cap, "{\"type\":\"ack\",\"accepted\":%d,\"rejected\":%d,\"detail\":\"%s\"}",
+             accepted, fr.dropped, fr.dropped ? "over relay size cap" : "");
     return accepted;
 }
 

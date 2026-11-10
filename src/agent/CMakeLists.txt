@@ -308,6 +308,13 @@ target_include_directories(test_network_listener_driver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(test_network_listener_driver PRIVATE packetsonde_lib pthread)
 
+# Test: relay forwarder body builder + handle_ingest against a loopback central
+add_executable(test_relay_forward tests/test_relay_forward.c)
+target_include_directories(test_relay_forward PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_relay_forward PRIVATE packetsonde_lib pthread)
+add_test(NAME test_relay_forward COMMAND test_relay_forward)
+
 # Test: flow tracker (synthetic packets — no pcap or network needed)
 add_executable(test_flow_tracker tests/test_flow_tracker.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
 target_include_directories(test_flow_tracker PRIVATE
