@@ -114,7 +114,7 @@ static void mld_on_packet(ps_module_ctx_t *ctx,
 {
     struct mld_state *st = (struct mld_state *)ctx->userdata;
     if (!st) return;
-    if (handle_id != st->pcap_handle) return;
+    (void)handle_id;   /* shared capture: process every dispatched packet */
 
     (void)ts_usec;
     st->packets_seen++;

@@ -332,6 +332,14 @@ target_link_libraries(test_dns_listener PRIVATE packetsonde_lib)
 target_compile_definitions(test_dns_listener PRIVATE PS_DNS_LISTENER_TESTING=1)
 add_test(NAME test_dns_listener COMMAND test_dns_listener)
 
+foreach(mod dhcp stp mld)
+    add_executable(test_${mod}_listener tests/test_${mod}_listener.c src/platform/unix.c)
+    target_include_directories(test_${mod}_listener PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(test_${mod}_listener PRIVATE packetsonde_lib)
+    add_test(NAME test_${mod}_listener COMMAND test_${mod}_listener)
+endforeach()
+
 # Test: honeypot listener (config parser + socket lifecycle + JSON events — no pcap or Redis needed)
 add_executable(test_honeypot_listener tests/test_honeypot_listener.c src/platform/unix.c)
 target_include_directories(test_honeypot_listener PRIVATE
