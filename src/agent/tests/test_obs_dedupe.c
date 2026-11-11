@@ -9,7 +9,7 @@
 #include "central_checkin.h"
 #include "platform/platform.h"
 
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

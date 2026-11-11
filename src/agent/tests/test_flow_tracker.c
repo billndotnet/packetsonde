@@ -5,7 +5,7 @@
  * No pcap, no network access needed.
  */
 
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

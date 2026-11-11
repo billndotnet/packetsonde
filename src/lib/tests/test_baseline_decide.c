@@ -1,6 +1,6 @@
 #include "baseline_decide.h"
 #include "baseline_set.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 
 int main(void) {

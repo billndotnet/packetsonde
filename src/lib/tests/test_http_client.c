@@ -1,6 +1,6 @@
 /* src/lib/tests/test_http_client.c */
 #include "http_client.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 

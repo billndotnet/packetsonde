@@ -1,6 +1,6 @@
 #include "sock_snapshot.h"
 #include "activity_record.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

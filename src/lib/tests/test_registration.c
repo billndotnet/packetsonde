@@ -1,6 +1,6 @@
 /* src/lib/tests/test_registration.c */
 #include "registration.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

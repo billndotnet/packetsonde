@@ -24,6 +24,13 @@ jobs:
       # end-to-end (needs a live peer) and the raw-socket ICMP probe (CAP_NET_RAW).
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure --timeout 60 -E 'via_e2e|probe_icmp'
+      # Production is a Release build (NDEBUG, fortify): run the suite there too.
+      - name: Configure (Release)
+        run: cmake -S . -B build-release -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+      - name: Build (Release)
+        run: cmake --build build-release -j"$(nproc)"
+      - name: Unit tests (Release)
+        run: ctest --test-dir build-release --output-on-failure --timeout 60 -E 'via_e2e|probe_icmp'
       - name: Signing parity (Python verifies a C signature, no canonicalization)
         run: |
           python3 -m pip install --quiet --break-system-packages cryptography || python3 -m pip install --quiet cryptography

@@ -1,5 +1,5 @@
 #include "unit_envelope.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 

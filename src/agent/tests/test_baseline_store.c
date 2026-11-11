@@ -1,7 +1,7 @@
 #include "baseline_store.h"
 #include "baseline_set.h"
 #include "exe_slug.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

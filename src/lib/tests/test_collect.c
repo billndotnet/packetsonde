@@ -2,7 +2,7 @@
 #include "collect.h"
 #include "keystore.h"
 #include "reporter.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

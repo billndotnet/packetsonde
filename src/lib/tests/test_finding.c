@@ -1,6 +1,6 @@
 #include "../finding.h"
 #include "../ulid.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <string.h>
 
