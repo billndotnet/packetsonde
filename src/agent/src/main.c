@@ -668,20 +668,9 @@ static void on_ipc_frame(int client_fd, const char *channel,
             ps_info("discovery.control: disabled all passive modules");
         } else if (strcmp(action, "list") == 0) {
             char resp[2048];
-            int off = 0;
-            off += snprintf(resp + off, sizeof(resp) - off, "{\"modules\":[");
-            int first = 1;
-            for (int i = 0; i < g_registry.count; i++) {
-                if (!(g_registry.instances[i].module->flags & PS_MOD_PASSIVE)) continue;
-                if (!first) off += snprintf(resp + off, sizeof(resp) - off, ",");
-                first = 0;
-                off += snprintf(resp + off, sizeof(resp) - off,
-                    "{\"name\":\"%s\",\"enabled\":%s}",
-                    g_registry.instances[i].module->name,
-                    g_registry.instances[i].enabled ? "true" : "false");
-            }
-            off += snprintf(resp + off, sizeof(resp) - off, "]}");
-            ps_ipc_server_broadcast(&g_ipc, "discovery.modules", resp, (uint32_t)off);
+            int len = ps_module_registry_passive_list_json(&g_registry, resp, sizeof(resp));
+            if (len > 0)
+                ps_ipc_server_broadcast(&g_ipc, "discovery.modules", resp, (uint32_t)len);
         }
     } else if (strcmp(channel, "query.modules") == 0) {
         /*

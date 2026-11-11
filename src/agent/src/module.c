@@ -1,5 +1,6 @@
 #include "module.h"
 #include "log.h"
+#include "strbuf.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -128,4 +129,32 @@ int ps_module_register(const ps_module_t *mod)
         return -1;
     }
     return ps_module_registry_add(g_registry, mod);
+}
+
+int ps_module_registry_passive_list_json(const struct ps_module_registry *reg,
+                                         char *buf, size_t cap)
+{
+    static const char tail[] = "]}", trunc_tail[] = "],\"truncated\":true}";
+    if (!reg || !buf || cap == 0) return -1;
+    buf[0] = '\0';
+    size_t off = 0;
+    /* Entries stop short of the room the longer closing needs. */
+    if (cap <= sizeof trunc_tail) return -1;
+    const size_t item_limit = cap - (sizeof trunc_tail - 1);
+    if (ps_appendf(buf, item_limit, &off, "{\"modules\":[") != 0) return -1;
+    int first = 1, truncated = 0;
+    for (int i = 0; i < reg->count; i++) {
+        const struct ps_module_instance *inst = &reg->instances[i];
+        if (!(inst->module->flags & PS_MOD_PASSIVE)) continue;
+        if (ps_appendf(buf, item_limit, &off, "%s{\"name\":\"%s\",\"enabled\":%s}",
+                       first ? "" : ",", inst->module->name,
+                       inst->enabled ? "true" : "false") != 0) {
+            truncated = 1;
+            continue;
+        }
+        first = 0;
+    }
+    if (ps_appendf(buf, cap, &off, "%s", truncated ? trunc_tail : tail) != 0)
+        return -1;   /* cannot happen: reserved above */
+    return (int)off;
 }

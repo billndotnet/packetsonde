@@ -37,6 +37,7 @@ add_library(packetsonde_lib STATIC
     dest_match.c
     tls_probe.c
     ptr_cache.c
+    strbuf.c
 )
 target_include_directories(packetsonde_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Keep position-independent so a future shared-lib build is painless.
@@ -57,6 +58,10 @@ if(BUILD_TESTING)
     add_executable(test_json tests/test_json.c)
     target_link_libraries(test_json PRIVATE packetsonde_lib)
     add_test(NAME test_json COMMAND test_json)
+
+    add_executable(test_strbuf tests/test_strbuf.c)
+    target_link_libraries(test_strbuf PRIVATE packetsonde_lib)
+    add_test(NAME test_strbuf COMMAND test_strbuf)
 
     add_executable(test_json_extract tests/test_json_extract.c)
     target_link_libraries(test_json_extract PRIVATE packetsonde_lib)

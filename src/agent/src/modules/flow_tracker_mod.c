@@ -30,6 +30,7 @@
 #include "module.h"
 #include "json.h"
 #include "log.h"
+#include "strbuf.h"
 #include "platform/platform.h"
 
 /* ------------------------------------------------------------------ */
@@ -117,22 +118,41 @@ static void release_slot(ps_module_ctx_t *ctx, struct flow_mod_state *st,
     if (st->active_count > 0) st->active_count--;
 }
 
+/* The flow.status payload: {"interfaces":["en0",...],"active_count":N}.
+ * Bounded: interfaces that do not fit are left out whole (and the payload then
+ * carries "truncated":true), so it is always complete JSON. Returns the length
+ * written, or -1 if cap cannot hold even the empty payload. */
+static int ft_status_json(const struct flow_mod_state *st, char *buf, size_t cap)
+{
+    /* Worst-case closing: "],\"truncated\":true,\"active_count\":-2147483648}" */
+    enum { FT_STATUS_TAIL_MAX = 64 };
+    if (!buf || cap <= FT_STATUS_TAIL_MAX) return -1;
+    buf[0] = '\0';
+    size_t off = 0;
+    const size_t item_limit = cap - FT_STATUS_TAIL_MAX;
+    if (ps_appendf(buf, item_limit, &off, "{\"interfaces\":[") != 0) return -1;
+    int first = 1, truncated = 0;
+    for (int i = 0; i < FT_MOD_MAX_INTERFACES; i++) {
+        if (st->slots[i].pcap_handle < 0) continue;
+        if (ps_appendf(buf, item_limit, &off, "%s\"%s\"", first ? "" : ",",
+                       st->slots[i].interface) != 0) {
+            truncated = 1;
+            continue;
+        }
+        first = 0;
+    }
+    if (ps_appendf(buf, cap, &off, "]%s,\"active_count\":%d}",
+                   truncated ? ",\"truncated\":true" : "", st->active_count) != 0)
+        return -1;   /* cannot happen: reserved above */
+    return (int)off;
+}
+
 static void publish_status(ps_module_ctx_t *ctx, struct flow_mod_state *st)
 {
     char buf[1024];
-    int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "{\"interfaces\":[");
-    int first = 1;
-    for (int i = 0; i < FT_MOD_MAX_INTERFACES; i++) {
-        if (st->slots[i].pcap_handle < 0) continue;
-        if (!first) pos += snprintf(buf + pos, sizeof(buf) - pos, ",");
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
-                        "\"%s\"", st->slots[i].interface);
-        first = 0;
-    }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "],\"active_count\":%d}",
-                    st->active_count);
-    ctx->publish(ctx, "flow.status", buf, (uint32_t)pos);
+    int len = ft_status_json(st, buf, sizeof(buf));
+    if (len > 0)
+        ctx->publish(ctx, "flow.status", buf, (uint32_t)len);
 }
 
 /* ------------------------------------------------------------------ */
