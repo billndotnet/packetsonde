@@ -241,6 +241,14 @@ target_include_directories(test_module_registry PRIVATE
 target_link_libraries(test_module_registry PRIVATE packetsonde_lib)
 add_test(NAME test_module_registry COMMAND test_module_registry)
 
+# Test: flow tracker module status payload stays bounded
+add_executable(test_flow_tracker_status tests/test_flow_tracker_status.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
+target_include_directories(test_flow_tracker_status PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/compat ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_flow_tracker_status PRIVATE packetsonde_lib)
+add_test(NAME test_flow_tracker_status COMMAND test_flow_tracker_status)
+
 # Test: ICMP traceroute module (includes .c directly — no root or network needed)
 add_executable(test_icmp_traceroute tests/test_icmp_traceroute.c src/platform/unix.c)
 target_include_directories(test_icmp_traceroute PRIVATE

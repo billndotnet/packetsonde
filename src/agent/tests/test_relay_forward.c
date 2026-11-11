@@ -404,6 +404,55 @@ static void test_handle_ingest_oversized_frame(void) {
     unsetenv("PS_CENTRAL_URL");
 }
 
+/* ---- the relay's source allow list ------------------------------- */
+
+/* PS_RELAY_ALLOW_SOURCES used to be matched with strstr, so any peer whose
+ * fingerprint occurred anywhere in the list text (a fragment of an allowed
+ * fingerprint, or of two adjacent entries) was allowed. Entries are now
+ * compared whole. */
+static void test_allow_list_whole_tokens(void) {
+    const char *fp  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const char *fp2 = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    char list[512];
+    snprintf(list, sizeof list, "%s, sha256:%s", fp, fp2);
+
+    CHECK(nl_source_allowed(list, fp));
+    CHECK(nl_source_allowed(list, fp2));                   /* "sha256:" form */
+    CHECK(nl_source_allowed(" sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n", fp));
+    CHECK(!nl_source_allowed(list, "0123456789abcdef"));   /* prefix of an entry */
+    CHECK(!nl_source_allowed(list, "89abcdef01234567"));   /* inside an entry */
+    CHECK(!nl_source_allowed(list, "cdef, sha256:fedc"));  /* across entries */
+    CHECK(!nl_source_allowed(list, "sha256"));
+    CHECK(!nl_source_allowed(list, ""));
+    CHECK(!nl_source_allowed("", fp));
+    CHECK(!nl_source_allowed(NULL, fp));
+    char longer[80];
+    snprintf(longer, sizeof longer, "%s0", fp);
+    CHECK(!nl_source_allowed(list, longer));
+
+    /* End to end: a fragment of an allowed fingerprint is refused before
+     * anything is forwarded (no central is listening here). */
+    static struct nl_state st;
+    memset(&st, 0, sizeof st);
+    CHECK(ps_keystore_generate(&st.agent_kp) == 0);
+    setenv("PS_RELAY_ALLOW_SOURCES", list, 1);
+    setenv("PS_CENTRAL_URL", "http://127.0.0.1:9", 1);
+    const char *fr = "{\"type\":\"ingest\",\"envelopes\":[{\"ed25519_sig\":\"a\"}]}";
+    char ack[1024];
+    CHECK(handle_ingest(&st, "0123456789abcdef", (const uint8_t *)fr, strlen(fr), ack, sizeof ack) == 0);
+    CHECK(strstr(ack, "source not allowed") != NULL);
+
+    /* ... while the whole fingerprint, listed with its prefix, is forwarded. */
+    struct sink s;
+    sink_start(&s);
+    CHECK(handle_ingest(&st, fp2, (const uint8_t *)fr, strlen(fr), ack, sizeof ack) == 1);
+    pthread_join(s.th, NULL);
+    close(s.lfd);
+    CHECK(s.body != NULL && count(s.body, "\"relay_path\"") == 1);
+    free(s.body);
+    unsetenv("PS_CENTRAL_URL");
+}
+
 /* ---- whole sessions: the CLI's ingest exchange against nl_serve -------- */
 
 static const char *k_peer = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -673,6 +722,7 @@ int main(void) {
     test_reads_only_len_bytes();
     test_concurrent_sessions_isolated();
     test_handle_ingest_oversized_frame();
+    test_allow_list_whole_tokens();
     test_session_frame_sizes();
     test_session_over_max_answered();
     test_cli_reports_relay_answers();

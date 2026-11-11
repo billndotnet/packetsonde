@@ -48,6 +48,7 @@
 #include "recipe.h"
 #include "relay_attest.h"
 #include "http_client.h"
+#include "strbuf.h"
 #include "log.h"
 
 #define MAX_AUTHORIZED 64
@@ -390,22 +391,6 @@ struct nl_fwd_result {
     int    dropped;    /* envelopes seen but not forwarded */
 };
 
-/* Append a formatted string at *off, keeping the content within limit - 1
- * bytes (limit counts the terminating NUL). An encoding error or a result
- * that would not fit leaves the buffer as it was before the call and returns
- * -1; nothing partial is ever kept. */
-static int nl_appendf(char *buf, size_t limit, size_t *off, const char *fmt, ...) {
-    if (*off >= limit) return -1;
-    size_t room = limit - *off;
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf + *off, room, fmt, ap);
-    va_end(ap);
-    if (n < 0 || (size_t)n >= room) { buf[*off] = '\0'; return -1; }
-    *off += (size_t)n;
-    return 0;
-}
-
 /* Bounded substring search over [p, end). */
 static const char *nl_find(const char *p, const char *end, const char *needle) {
     size_t nl = strlen(needle);
@@ -435,7 +420,7 @@ static int nl_build_relay_forward(const uint8_t *frame, size_t len, size_t cap,
     char *body = malloc(cap);
     if (!body) return -1;
     size_t fo = 0;
-    nl_appendf(body, cap, &fo, "%s", head);
+    ps_appendf(body, cap, &fo, "%s", head);
     /* Items must leave room for the closing "]}" so the body always closes. */
     const size_t item_limit = cap - (sizeof tail - 1);
 
@@ -469,14 +454,14 @@ static int nl_build_relay_forward(const uint8_t *frame, size_t len, size_t cap,
         char entry[1024];
         if (objlen > PS_NL_RELAY_ITEM_MAX ||
             attest(ud, sig, entry, sizeof entry) <= 0 ||
-            nl_appendf(body, item_limit, &fo, "%s%.*s,\"relay_path\":[%s]}",
+            ps_appendf(body, item_limit, &fo, "%s%.*s,\"relay_path\":[%s]}",
                        out->forwarded ? "," : "", (int)(objlen - 1), obj, entry) != 0) {
             out->dropped++;
             continue;
         }
         out->forwarded++;
     }
-    nl_appendf(body, cap, &fo, "%s", tail);  /* fits: reserved above */
+    ps_appendf(body, cap, &fo, "%s", tail);  /* fits: reserved above */
     out->body = body;
     out->len = fo;
     return 0;
@@ -500,10 +485,23 @@ static int nl_relay_attest(void *ud, const char *sig, char *out, size_t cap) {
  * the ack's "rejected" count.
  * NOTE: appends a fresh relay_path per envelope — correct for single-hop; merging
  * into a pre-existing relay_path (multi-hop) is a follow-up. */
+/* Is `peer_id` (the connecting peer's key fingerprint, hex) on the relay's
+ * allow list? The list is comma/whitespace separated; an entry must be the
+ * whole fingerprint, bare or with the "sha256:" prefix that `packetsonde key
+ * fingerprint` prints. A partial fingerprint, or any other substring of the
+ * list, does not match. */
+static int nl_source_allowed(const char *allow, const char *peer_id) {
+    static const char seps[] = ", \t\r\n";
+    if (!allow || !peer_id || !peer_id[0]) return 0;
+    if (ps_list_has_token(allow, seps, peer_id)) return 1;
+    char pref[160];
+    int n = snprintf(pref, sizeof pref, "sha256:%s", peer_id);
+    return n > 0 && (size_t)n < sizeof pref && ps_list_has_token(allow, seps, pref);
+}
+
 static int handle_ingest(struct nl_state *st, const char *peer_id,
                          const uint8_t *frame, size_t len, char *ack, size_t ack_cap) {
-    const char *allow = getenv("PS_RELAY_ALLOW_SOURCES");
-    if (!allow || !peer_id[0] || !strstr(allow, peer_id)) {
+    if (!nl_source_allowed(getenv("PS_RELAY_ALLOW_SOURCES"), peer_id)) {
         snprintf(ack, ack_cap,
                  "{\"type\":\"ack\",\"accepted\":0,\"rejected\":0,\"detail\":\"source not allowed\"}");
         return 0;

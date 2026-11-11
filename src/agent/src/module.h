@@ -25,6 +25,14 @@ void ps_module_registry_init_all(struct ps_module_registry *reg);
 void ps_module_registry_shutdown_all(struct ps_module_registry *reg);
 void ps_module_registry_tick_all(struct ps_module_registry *reg, uint64_t now_usec);
 
+/* The discovery.control "list" reply: {"modules":[{"name":..,"enabled":..},..]}
+ * for every passive module, written into buf (cap bytes, NUL-terminated).
+ * Bounded: entries that do not fit are left out whole and the reply then
+ * carries "truncated":true, so it is always complete JSON. Returns the length
+ * written, or -1 if cap cannot hold even the empty reply. */
+int ps_module_registry_passive_list_json(const struct ps_module_registry *reg,
+                                         char *buf, size_t cap);
+
 void ps_module_registry_dispatch_packet(struct ps_module_registry *reg,
                                          const uint8_t *pkt, uint32_t len,
                                          uint64_t ts_usec, int handle_id);
