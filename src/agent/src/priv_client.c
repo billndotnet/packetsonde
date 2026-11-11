@@ -48,6 +48,10 @@ static int send_and_recv(struct ps_priv_client *pc,
                          const uint8_t *msg, size_t msg_len,
                          struct ps_priv_msg *resp)
 {
+    /* A broken stream has lost frame alignment (or its peer): never write a
+     * command into it or wait for a reply that cannot be framed. */
+    if (pc->broken) return -1;
+
     if (write_all(pc->fd, msg, msg_len) < 0) {
         ps_error("priv_client: write failed: %s", strerror(errno));
         pc->broken = 1;

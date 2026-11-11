@@ -324,6 +324,13 @@ target_include_directories(test_flow_tracker PRIVATE
 target_link_libraries(test_flow_tracker PRIVATE packetsonde_lib)
 add_test(NAME test_flow_tracker COMMAND test_flow_tracker)
 
+add_executable(test_flow_tracker_mod tests/test_flow_tracker_mod.c src/flow_tracker.c src/netflow_export.c src/platform/unix.c)
+target_include_directories(test_flow_tracker_mod PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/compat ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(test_flow_tracker_mod PRIVATE packetsonde_lib)
+add_test(NAME test_flow_tracker_mod COMMAND test_flow_tracker_mod)
+
 # Test: neighbor listener (synthetic Ethernet frames — no pcap or network needed)
 add_executable(test_neighbor_listener tests/test_neighbor_listener.c src/platform/unix.c)
 target_include_directories(test_neighbor_listener PRIVATE

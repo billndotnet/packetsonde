@@ -101,6 +101,22 @@ static struct ft_capture_slot *find_free_slot(struct flow_mod_state *st)
     return NULL;
 }
 
+/* Give a slot's pcap handle back to the priv worker and mark the slot free.
+ * The priv worker's handle table is shared by the whole daemon (16 slots), so
+ * a handle that is only forgotten here stays allocated there until restart
+ * and eventually makes open_pcap fail for every module. */
+static void release_slot(ps_module_ctx_t *ctx, struct flow_mod_state *st,
+                         struct ft_capture_slot *slot)
+{
+    if (slot->pcap_handle < 0) return;
+    if (ctx->close_pcap && ctx->close_pcap(ctx, slot->pcap_handle) != 0)
+        ps_warn("flow_tracker: close_pcap(%d) on '%s' failed",
+                slot->pcap_handle, slot->interface);
+    slot->pcap_handle = -1;
+    slot->interface[0] = '\0';
+    if (st->active_count > 0) st->active_count--;
+}
+
 static void publish_status(ps_module_ctx_t *ctx, struct flow_mod_state *st)
 {
     char buf[1024];
@@ -233,12 +249,7 @@ static int ft_mod_on_job(ps_module_ctx_t *ctx, const struct ps_job *job)
             return 0;
         }
 
-        /* Close pcap via priv worker — TODO: need close_pcap in module API.
-         * For now, mark the slot inactive; the priv worker will clean up
-         * when the agent shuts down. */
-        slot->pcap_handle = -1;
-        slot->interface[0] = '\0';
-        st->active_count--;
+        release_slot(ctx, st, slot);
 
         ps_info("flow_tracker: capture stopped on '%s' (%d active)",
                 iface, st->active_count);
@@ -250,8 +261,7 @@ static int ft_mod_on_job(ps_module_ctx_t *ctx, const struct ps_job *job)
         for (int i = 0; i < FT_MOD_MAX_INTERFACES; i++) {
             if (st->slots[i].pcap_handle >= 0) {
                 ps_info("flow_tracker: stopping capture on '%s'", st->slots[i].interface);
-                st->slots[i].pcap_handle = -1;
-                st->slots[i].interface[0] = '\0';
+                release_slot(ctx, st, &st->slots[i]);
             }
         }
         st->active_count = 0;
@@ -342,6 +352,10 @@ static void ft_mod_shutdown(ps_module_ctx_t *ctx)
 {
     struct flow_mod_state *st = (struct flow_mod_state *)ctx->userdata;
     if (!st) return;
+
+    /* Release any captures still running (agent stop or module reload). */
+    for (int i = 0; i < FT_MOD_MAX_INTERFACES; i++)
+        release_slot(ctx, st, &st->slots[i]);
 
     /* Flush remaining flows */
     if (st->table && st->exporter) {
