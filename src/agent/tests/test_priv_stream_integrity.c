@@ -79,8 +79,34 @@ static void set_nonblock(int fd, int on)
 #define N_FRAMES 6000
 #define SENTINEL_HANDLE 0xBEEF
 
+/* What the priv worker does per data frame: finish a started frame when the
+ * socket has room (its poll loop asks for POLLOUT while one is pending),
+ * then offer the new frame. */
+static uint8_t g_tail[sizeof(struct ps_priv_msg) + PS_MAX_FRAME_PAYLOAD];
+
+static int worker_send(struct ps_frame_writer *w, const uint8_t *frame, size_t n)
+{
+    if (ps_frame_writer_pending(w)) {
+        struct pollfd pfd = { .fd = w->fd, .events = POLLOUT, .revents = 0 };
+        if (poll(&pfd, 1, 0) > 0 && ps_frame_writer_flush(w) < 0) return PS_FRAME_BROKEN;
+    }
+    return ps_frame_writer_send_lossy(w, frame, n);
+}
+
+/* The final command-style frame, written as the worker writes a response. */
+static int send_sentinel(struct ps_frame_writer *w)
+{
+    uint8_t b[sizeof(struct ps_priv_msg)];
+    size_t sn = ps_priv_encode_response(b, sizeof(b), PS_OP_ERROR,
+                                        PS_STATUS_OK, SENTINEL_HANDLE, NULL, 0);
+    return ps_frame_writer_send_all(w, b, sn, 10000);
+}
+
+
 struct reader_ctx {
     int      fd;
+    unsigned long stall_after;    /* frames received before one long pause (0 = none) */
+    int      stall_ms;
     uint8_t  outcome[N_FRAMES];   /* 1 = received intact */
     unsigned long received;
     int      recv_error;          /* ps_priv_client_recv returned -1 */
@@ -135,6 +161,8 @@ static void *reader_main(void *arg)
 
         /* Drain slowly so the writer keeps hitting a full buffer. */
         if ((++n_frames % 8) == 0) usleep(200);
+        /* One long stall, as when the agent's main thread is busy. */
+        if (rc->stall_after && n_frames == rc->stall_after) usleep((useconds_t)rc->stall_ms * 1000);
     }
     /* Once framing is lost (or the sentinel arrived) keep draining raw bytes
      * until EOF so the writer never blocks on a reader that has given up. */
@@ -165,7 +193,8 @@ static void test_lossy_frames_stay_aligned(void)
     static uint8_t pkt[PS_MAX_MSG_PAYLOAD];
     static uint8_t frame[sizeof(struct ps_priv_msg) + PS_MAX_FRAME_PAYLOAD];
     static uint8_t result[N_FRAMES];
-    struct ps_frame_stats st = {0};
+    struct ps_frame_writer w;
+    ps_frame_writer_init(&w, wfd, g_tail, sizeof(g_tail));
     int broken = 0;
 
     for (uint32_t seq = 0; seq < N_FRAMES; seq++) {
@@ -175,22 +204,14 @@ static void test_lossy_frames_stay_aligned(void)
                                               (uint16_t)(seq & 0x0fff),
                                               (uint64_t)seq, pkt, len);
         if (n == 0) { fprintf(stderr, "encode failed\n"); exit(2); }
-        int r = ps_priv_write_frame_lossy(wfd, frame, n, 2000, &st);
-        result[seq] = (uint8_t)(r == PS_FRAME_SENT);
+        int r = worker_send(&w, frame, n);
+        result[seq] = (uint8_t)(r == PS_FRAME_SENT || r == PS_FRAME_QUEUED);
         if (r == PS_FRAME_BROKEN) { broken = 1; break; }
     }
 
-    /* Sentinel: a command-style response, written to completion. */
-    uint8_t sent_buf[sizeof(struct ps_priv_msg)];
-    size_t sn = ps_priv_encode_response(sent_buf, sizeof(sent_buf), PS_OP_ERROR,
-                                        PS_STATUS_OK, SENTINEL_HANDLE, NULL, 0);
-    set_nonblock(wfd, 0);
-    size_t off = 0;
-    while (off < sn) {
-        ssize_t w = write(wfd, sent_buf + off, sn - off);
-        if (w < 0) { if (errno == EINTR) continue; break; }
-        off += (size_t)w;
-    }
+    /* Sentinel: a command-style response; it finishes any started frame. */
+    CHECK(broken || send_sentinel(&w) == PS_FRAME_SENT, "sentinel response not sent");
+    struct ps_frame_stats st = w.stats;
     close(wfd);
     pthread_join(th, NULL);
     close(rfd);
@@ -226,7 +247,7 @@ static void test_lossy_frames_stay_aligned(void)
 
 static void test_unfinishable_frame_is_broken(void)
 {
-    printf("test: a frame that cannot be finished reports a broken stream\n");
+    printf("test: a reader that never drains costs frames, not the stream; a gone reader breaks it\n");
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); exit(2); }
     int wfd = sv[0], rfd = sv[1];
@@ -238,22 +259,109 @@ static void test_unfinishable_frame_is_broken(void)
     memset(pkt, 0xAB, sizeof(pkt));
     size_t n = ps_priv_encode_packet_data(frame, sizeof(frame), 1, 1, pkt, 30000);
 
-    /* Nobody reads rfd. Keep writing until a frame starts but cannot end. */
-    struct ps_frame_stats st = {0};
-    int r = PS_FRAME_SENT;
+    /* Nobody reads rfd. A frame starts and cannot end: its remainder is kept,
+     * every later frame is dropped whole, and no call waits. */
+    struct ps_frame_writer w;
+    ps_frame_writer_init(&w, wfd, g_tail, sizeof(g_tail));
+    int r = PS_FRAME_SENT, queued = 0, broken = 0;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    for (int i = 0; i < 1000 && r != PS_FRAME_BROKEN; i++) {
-        r = ps_priv_write_frame_lossy(wfd, frame, n, 100, &st);
-        if (st.partial > 0) break;
+    for (int i = 0; i < 1000; i++) {
+        r = worker_send(&w, frame, n);
+        if (r == PS_FRAME_QUEUED) queued++;
+        if (r == PS_FRAME_BROKEN) broken = 1;
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
 
-    CHECK(st.partial > 0, "never produced a short write");
-    CHECK(r == PS_FRAME_BROKEN,
-          "short write with a stalled reader returned %d, want PS_FRAME_BROKEN", r);
-    CHECK(ms >= 90 && ms < 1500, "bounded wait took %ld ms (bound 100 ms)", ms);
+    CHECK(queued == 1, "want exactly one started frame, got %d", queued);
+    CHECK(w.stats.partial == 1, "never produced a short write");
+    CHECK(ps_frame_writer_pending(&w), "the started frame's remainder was not kept");
+    CHECK(w.stats.dropped_pending > 900, "frames behind the started one were not dropped (%lu)",
+          w.stats.dropped_pending);
+    CHECK(!broken, "a stalled reader broke the stream");
+    CHECK(ms < 500, "1000 sends against a stalled reader took %ld ms", ms);
+
+    /* A response gives up at its deadline and marks the writer broken (part
+     * of a frame may be in the stream). */
+    uint8_t b[sizeof(struct ps_priv_msg)];
+    size_t sn = ps_priv_encode_response(b, sizeof(b), PS_OP_ERROR, PS_STATUS_OK, 1, NULL, 0);
+    CHECK(ps_frame_writer_send_all(&w, b, sn, 100) == PS_FRAME_BROKEN, "send_all ignored its deadline");
+    CHECK(worker_send(&w, frame, n) == PS_FRAME_BROKEN, "broken writer accepted a frame");
+
+    /* The peer going away is a hard error for a fresh writer too. */
+    close(rfd);
+    struct ps_frame_writer w2;
+    ps_frame_writer_init(&w2, wfd, g_tail, sizeof(g_tail));
+    CHECK(worker_send(&w2, frame, n) == PS_FRAME_BROKEN, "send to a closed peer did not report broken");
+    close(wfd);
+}
+
+/* ------------------------------------------------------------------ */
+/* Writer unit checks: the remainder is the frame's own bytes, in order */
+/* ------------------------------------------------------------------ */
+
+static void test_writer_tail_exact(void)
+{
+    printf("test: a buffered remainder is finished byte-exact, before any later frame\n");
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); exit(2); }
+    int wfd = sv[0], rfd = sv[1];
+    set_small_buffers(wfd, rfd);
+    set_nonblock(wfd, 1);
+    set_nonblock(rfd, 1);
+
+    static uint8_t a[40000], bb[40000], got[200000];
+    for (size_t i = 0; i < sizeof a; i++) { a[i] = (uint8_t)(i * 3 + 1); bb[i] = (uint8_t)(i * 5 + 2); }
+    struct ps_frame_writer w;
+    ps_frame_writer_init(&w, wfd, g_tail, sizeof(g_tail));
+
+    CHECK(ps_frame_writer_send_lossy(&w, a, sizeof a) == PS_FRAME_QUEUED, "frame A not queued");
+    /* The caller reuses its buffer at once: the remainder must be a copy. */
+    static uint8_t a_copy[40000];
+    memcpy(a_copy, a, sizeof a);
+    memset(a, 0xEE, sizeof a);
+    CHECK(ps_frame_writer_send_lossy(&w, bb, sizeof bb) == PS_FRAME_DROPPED, "B not dropped behind A");
+
+    /* A frame larger than the tail buffer is refused whole, even when the
+     * socket has room: its remainder could not be kept if the write fell
+     * short. (Own socketpair, so nothing lands in the stream under test.) */
+    int sp[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) != 0) { perror("socketpair"); exit(2); }
+    set_nonblock(sp[0], 1);
+    set_nonblock(sp[1], 1);
+    struct ps_frame_writer small;
+    uint8_t tiny[16];
+    ps_frame_writer_init(&small, sp[0], tiny, sizeof tiny);
+    CHECK(ps_frame_writer_send_lossy(&small, bb, 17) == PS_FRAME_DROPPED, "oversize frame not refused");
+    CHECK(ps_frame_writer_send_lossy(&small, bb, 16) == PS_FRAME_SENT, "frame of tail size refused");
+    uint8_t chk[64];
+    CHECK(read(sp[1], chk, sizeof chk) == 16, "refused frame reached the stream");
+    close(sp[0]); close(sp[1]);
+
+    /* Drain while finishing A, then send B whole. */
+    size_t g = 0;
+    for (int spins = 0; spins < 100000 && ps_frame_writer_pending(&w); spins++) {
+        ssize_t r = read(rfd, got + g, sizeof got - g);
+        if (r > 0) g += (size_t)r;
+        CHECK(ps_frame_writer_flush(&w) >= 0, "flush failed");
+    }
+    CHECK(!ps_frame_writer_pending(&w), "A never finished");
+    int rb;
+    do {
+        ssize_t r = read(rfd, got + g, sizeof got - g);
+        if (r > 0) g += (size_t)r;
+        rb = ps_frame_writer_send_lossy(&w, bb, sizeof bb);
+    } while (rb == PS_FRAME_DROPPED);
+    while (ps_frame_writer_pending(&w) || g < sizeof a_copy + sizeof bb) {
+        ssize_t r = read(rfd, got + g, sizeof got - g);
+        if (r > 0) g += (size_t)r;
+        if (ps_frame_writer_flush(&w) < 0) break;
+        if (r <= 0) usleep(100);
+    }
+    CHECK(g == sizeof a_copy + sizeof bb, "stream carried %zu bytes", g);
+    CHECK(memcmp(got, a_copy, sizeof a_copy) == 0, "frame A arrived altered");
+    CHECK(memcmp(got + sizeof a_copy, bb, sizeof bb) == 0, "frame B arrived altered");
     close(wfd);
     close(rfd);
 }
@@ -412,14 +520,97 @@ static void test_broken_stream_refuses_commands(void)
     close(sv[1]);
 }
 
+/* ------------------------------------------------------------------ */
+/* Test: a reader stall longer than any finish deadline                */
+/* ------------------------------------------------------------------ */
+
+/* The agent's main thread can stall for seconds (a TLS handshake, a DNS
+ * lookup, module init). A frame half-written when that happens must not cost
+ * the stream: the writer may drop new frames whole, but it must neither
+ * report the stream broken nor corrupt it, and every frame it accepted must
+ * arrive once the reader resumes. */
+static void test_reader_stall_keeps_stream(void)
+{
+    printf("test: a 3 s reader stall neither breaks nor corrupts the stream\n");
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); exit(2); }
+    int wfd = sv[0], rfd = sv[1];
+    set_small_buffers(wfd, rfd);
+    set_nonblock(wfd, 1);
+
+    static struct reader_ctx rc;
+    memset(&rc, 0, sizeof(rc));
+    rc.fd = rfd;
+    rc.stall_after = 50;
+    rc.stall_ms = 3000;
+    pthread_t th;
+    pthread_create(&th, NULL, reader_main, &rc);
+
+    static uint8_t pkt[PS_MAX_MSG_PAYLOAD];
+    static uint8_t frame[sizeof(struct ps_priv_msg) + PS_MAX_FRAME_PAYLOAD];
+    static uint8_t result[N_FRAMES];
+    struct ps_frame_writer w;
+    ps_frame_writer_init(&w, wfd, g_tail, sizeof(g_tail));
+    int broken = 0;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    long worst_ms = 0;
+
+    /* Emulates the worker: frames keep coming (a capture) for 4 s. */
+    uint32_t seq = 0;
+    for (;; seq++) {
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long el = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        if (el > 4000 || seq >= N_FRAMES) break;
+        uint32_t len = pkt_len_for(seq);
+        for (uint32_t i = 0; i < len; i++) pkt[i] = pkt_byte(seq, i);
+        size_t n = ps_priv_encode_packet_data(frame, sizeof(frame),
+                                              (uint16_t)(seq & 0x0fff),
+                                              (uint64_t)seq, pkt, len);
+        struct timespec a, b;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        int r = worker_send(&w, frame, n);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        long ms = (b.tv_sec - a.tv_sec) * 1000 + (b.tv_nsec - a.tv_nsec) / 1000000;
+        if (ms > worst_ms) worst_ms = ms;
+        result[seq] = (uint8_t)(r == PS_FRAME_SENT || r == PS_FRAME_QUEUED);
+        if (r == PS_FRAME_BROKEN) { broken = 1; break; }
+        usleep(500);
+    }
+
+    CHECK(broken || send_sentinel(&w) == PS_FRAME_SENT, "sentinel response not sent");
+    struct ps_frame_stats st = w.stats;
+    close(wfd);
+    pthread_join(th, NULL);
+    close(rfd);
+
+    unsigned long lost = 0, ghosts = 0;
+    for (uint32_t s2 = 0; s2 < seq && s2 < N_FRAMES; s2++) {
+        if (result[s2] && !rc.outcome[s2]) lost++;
+        if (!result[s2] && rc.outcome[s2]) ghosts++;
+    }
+    printf("  writer: frames=%u sent=%lu dropped=%lu partial=%lu broken=%d worst=%ldms; "
+           "reader: received=%lu\n", seq, st.sent, st.dropped, st.partial, broken,
+           worst_ms, rc.received);
+    CHECK(!broken, "a reader stall broke the stream (the worker would exit)");
+    CHECK(st.dropped > 0, "nothing was dropped during the stall; the test exercised nothing");
+    CHECK(worst_ms < 200, "a send blocked the writer for %ld ms", worst_ms);
+    CHECK(!rc.recv_error && rc.bad_frames == 0, "reader lost framing");
+    CHECK(rc.got_sentinel, "reader never reached the final command frame");
+    CHECK(lost == 0, "%lu frame(s) reported sent never arrived", lost);
+    CHECK(ghosts == 0, "%lu frame(s) reported dropped arrived anyway", ghosts);
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
     test_lossy_frames_stay_aligned();
     test_unfinishable_frame_is_broken();
+    test_writer_tail_exact();
     test_max_packet_frame_fits();
     test_oversize_async_frame_not_truncated();
     test_broken_stream_refuses_commands();
+    test_reader_stall_keeps_stream();
     if (g_failures) {
         printf("FAILED: %d check(s)\n", g_failures);
         return 1;

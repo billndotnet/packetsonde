@@ -54,29 +54,15 @@ static int g_brain_fd = -1;
  * (send_response and pcap/raw data) share one writer fd. */
 static pthread_mutex_t g_write_mu = PTHREAD_MUTEX_INITIALIZER;
 
+/* Every frame to the brain goes through this writer (see priv_frame_io.h).
+ * g_tail holds the unsent remainder of at most one started frame, finished
+ * from the poll loop when the brain fd becomes writable again. */
+static struct ps_frame_writer g_out;
+static uint8_t g_tail[sizeof(struct ps_priv_msg) + PS_MAX_FRAME_PAYLOAD];
+
 /* ------------------------------------------------------------------ */
 /* Write helpers                                                        */
 /* ------------------------------------------------------------------ */
-
-static int write_all(int fd, const uint8_t *buf, size_t n)
-{
-    while (n > 0) {
-        ssize_t r = write(fd, buf, n);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* Non-blocking fd — poll until writable for command responses */
-                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                poll(&pfd, 1, 100);
-                continue;
-            }
-            return -1;
-        }
-        buf += r;
-        n   -= (size_t)r;
-    }
-    return 0;
-}
 
 static int read_all(int fd, uint8_t *buf, size_t n)
 {
@@ -108,55 +94,74 @@ static void send_response(uint8_t opcode, uint8_t status, uint16_t handle_id,
         ps_error("priv_worker: response encode overflow");
         return;
     }
+    /* A response is never dropped: it waits for any started data frame to
+     * finish, then for the brain to take it. The brain is reading at this
+     * point, since it sent the command and waits for this reply. */
     pthread_mutex_lock(&g_write_mu);
-    int wr = write_all(g_brain_fd, buf, n);
+    int wr = ps_frame_writer_send_all(&g_out, buf, n, -1);
+    int saved_errno = errno;
     pthread_mutex_unlock(&g_write_mu);
-    if (wr < 0) {
-        ps_error("priv_worker: write response failed: %s", strerror(errno));
+    if (wr != PS_FRAME_SENT) {
+        ps_error("priv_worker: write response failed: %s", strerror(saved_errno));
     }
 }
 
 /* Async data frames (PACKET_DATA, RAW_RESPONSE) are lossy: when the brain
- * is backed up a frame is dropped whole. A frame that has started is always
- * finished (see priv_frame_io.h); if that cannot happen the stream has lost
- * framing and the worker exits non-zero so the brain sees EOF instead of
- * reading packet bytes as headers. */
-static struct ps_frame_stats g_data_stats;
+ * is backed up a frame is dropped whole. A frame the socket took only part of
+ * keeps its remainder in g_out and is finished from the poll loop; new data
+ * frames are dropped until it is. Nothing here waits for the brain, so a
+ * stalled brain costs frames, never the stream or the worker. */
 static unsigned long g_drops_logged;
 static time_t g_drop_log_at;
 
 #define PS_DROP_LOG_INTERVAL_S 10
 
-static void log_drops_rate_limited(void)
+static void log_drops(int force)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    if (g_drop_log_at != 0 && ts.tv_sec - g_drop_log_at < PS_DROP_LOG_INTERVAL_S) return;
-    unsigned long fresh = g_data_stats.dropped - g_drops_logged;
+    if (!force && g_drop_log_at != 0 && ts.tv_sec - g_drop_log_at < PS_DROP_LOG_INTERVAL_S)
+        return;
+    const struct ps_frame_stats *st = &g_out.stats;
+    unsigned long fresh = st->dropped - g_drops_logged;
     if (fresh == 0) return;
     ps_warn("priv_worker: brain pipe backed up, dropped %lu data frame(s) "
-            "(%lu dropped, %lu sent, %lu finished after a short write in total)",
-            fresh, g_data_stats.dropped, g_data_stats.sent, g_data_stats.partial);
-    g_drops_logged = g_data_stats.dropped;
+            "(%lu dropped, %lu of them behind an unfinished frame, %lu sent, "
+            "%lu finished after a short write in total)",
+            fresh, st->dropped, st->dropped_pending, st->sent, st->partial);
+    g_drops_logged = st->dropped;
     g_drop_log_at  = ts.tv_sec;
 }
 
-/* Returns 0 if the frame was sent or dropped whole, -1 if the stream broke. */
+/* Returns 0 if the frame was sent, queued or dropped whole, -1 if the brain
+ * stream is unusable (the brain has gone away). */
 static int send_data_frame(const uint8_t *buf, size_t n)
 {
     pthread_mutex_lock(&g_write_mu);
-    int rc = ps_priv_write_frame_lossy(g_brain_fd, buf, n,
-                                       PS_PRIV_FRAME_FINISH_TIMEOUT_MS,
-                                       &g_data_stats);
+    int rc = ps_frame_writer_send_lossy(&g_out, buf, n);
     int saved_errno = errno;
     pthread_mutex_unlock(&g_write_mu);
     if (rc == PS_FRAME_BROKEN) {
-        ps_error("priv_worker: brain stream broken mid-frame (%zu-byte frame: %s); "
-                 "exiting so the brain sees the disconnect",
+        ps_error("priv_worker: brain stream broken (%zu-byte frame: %s); exiting",
                  n, strerror(saved_errno));
         return -1;
     }
-    if (rc == PS_FRAME_DROPPED) log_drops_rate_limited();
+    if (rc == PS_FRAME_DROPPED) log_drops(0);
+    return 0;
+}
+
+/* Finish a started frame if the brain fd has room. -1 if the stream broke. */
+static int flush_pending(void)
+{
+    pthread_mutex_lock(&g_write_mu);
+    int rc = ps_frame_writer_flush(&g_out);
+    int saved_errno = errno;
+    pthread_mutex_unlock(&g_write_mu);
+    if (rc == PS_FRAME_BROKEN) {
+        ps_error("priv_worker: brain stream broken while finishing a frame (%s); exiting",
+                 strerror(saved_errno));
+        return -1;
+    }
     return 0;
 }
 
@@ -442,9 +447,15 @@ static int run_loop(void)
         struct pollfd fds[1 + PS_MAX_PCAP_HANDLES + PS_MAX_RAW_HANDLES];
         int nfds = 0;
 
-        /* Brain fd always first */
+        if (g_out.broken) {
+            ps_error("priv_worker: brain stream unusable; exiting");
+            return -1;
+        }
+
+        /* Brain fd always first; also wait for room while a started frame
+         * is unfinished. */
         fds[nfds].fd      = g_brain_fd;
-        fds[nfds].events  = POLLIN;
+        fds[nfds].events  = POLLIN | (ps_frame_writer_pending(&g_out) ? POLLOUT : 0);
         fds[nfds].revents = 0;
         nfds++;
 
@@ -486,6 +497,8 @@ static int run_loop(void)
             ps_info("priv_worker: brain disconnected, exiting");
             break;
         }
+        if ((fds[0].revents & (POLLOUT | POLLERR)) && flush_pending() < 0)
+            return -1;
         if (fds[0].revents & POLLIN) {
             /* Read header */
             struct ps_priv_msg hdr;
@@ -617,11 +630,11 @@ int main(int argc, char **argv)
     }
 
     g_brain_fd = fd;
+    ps_frame_writer_init(&g_out, fd, g_tail, sizeof(g_tail));
 
-    /* Set non-blocking on brain fd so pcap/raw data writes don't deadlock
-     * during synchronous module init.  Command responses (send_response)
-     * still use write_all which retries on EAGAIN, but data writes just
-     * drop packets if the buffer is full. */
+    /* Non-blocking brain fd: data frames are never waited for (dropped whole
+     * or finished from the poll loop), so a busy brain cannot stall capture.
+     * Command responses wait for room (ps_frame_writer_send_all). */
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
@@ -635,6 +648,7 @@ int main(int argc, char **argv)
     ps_info("priv_worker: started (fd=%d)", fd);
 
     int rc = run_loop();
+    log_drops(1);   /* drops since the last rate-limited line */
 
     ps_info("priv_worker: exiting%s", rc < 0 ? " on error" : "");
     close(fd);
