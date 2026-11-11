@@ -1,11 +1,12 @@
 /*
  * test_relay_forward -- the relay forwarder's body builder and handle_ingest.
  *
- * The body a relay POSTs to central must stay inside its cap however many or
+ * Each body a relay POSTs to central must stay inside its cap however many or
  * however large the envelopes it is handed, must always be valid JSON (an
  * envelope is forwarded whole or dropped and counted, never cut), must read
  * only the frame bytes it was given, and must not be shared between sessions
- * that forward at the same time.
+ * that forward at the same time. A frame whose envelopes do not fit one body
+ * is forwarded in several, every envelope exactly once and in order.
  *
  * Pulls the module source in directly, as test_network_listener_driver does.
  */
@@ -111,8 +112,46 @@ static int fake_attest(void *ud, const char *sig, char *out, size_t cap) {
     return (n < 0 || (size_t)n >= cap) ? -1 : n;
 }
 
+/* One body from the start of the frame. */
 static int build(const char *frame, size_t cap, struct fake *f, struct nl_fwd_result *r) {
-    return nl_build_relay_forward((const uint8_t *)frame, strlen(frame), cap, fake_attest, f, r);
+    struct nl_fwd_cursor cur = { 0, 0, 0 };
+    return nl_build_relay_forward((const uint8_t *)frame, strlen(frame), cap, fake_attest, f, &cur, r);
+}
+
+/* Every body of a frame, in order (at most 64). */
+struct batches { int n, forwarded, dropped; char *body[64]; size_t len[64]; int fwd[64]; };
+static int build_all(const char *frame, size_t len, size_t cap, struct fake *f, struct batches *b) {
+    memset(b, 0, sizeof *b);
+    struct nl_fwd_cursor cur = { 0, 0, 0 };
+    while (!cur.done && b->n < 64) {
+        struct nl_fwd_result r;
+        if (nl_build_relay_forward((const uint8_t *)frame, len, cap, fake_attest, f, &cur, &r) != 0)
+            return -1;
+        b->body[b->n] = r.body; b->len[b->n] = r.len; b->fwd[b->n] = r.forwarded;
+        b->forwarded += r.forwarded; b->dropped += r.dropped;
+        b->n++;
+    }
+    return cur.done ? 0 : -1;
+}
+static void batches_free(struct batches *b) { for (int i = 0; i < b->n; i++) free(b->body[i]); }
+
+/* The ed25519_sig values in a body, in order, appended to seq ("|"-joined). */
+static void collect_sigs(const char *body, char *seq, size_t cap) {
+    for (const char *p = strstr(body, "{\"ed25519_sig\":\""); p; p = strstr(p + 1, "{\"ed25519_sig\":\"")) {
+        p += 16;
+        const char *e = strchr(p, '"');
+        size_t L = strlen(seq);
+        if (!e || L + (size_t)(e - p) + 2 > cap) return;
+        memcpy(seq + L, p, (size_t)(e - p)); seq[L + (size_t)(e - p)] = '|'; seq[L + (size_t)(e - p) + 1] = 0;
+    }
+}
+
+/* "<tag>0|<tag>1|...|<tag>(n-1)|" */
+static char *expected_seq(const char *tag, int n) {
+    size_t cap = (size_t)n * (strlen(tag) + 12) + 1;
+    char *s = malloc(cap); size_t o = 0; s[0] = 0;
+    for (int i = 0; i < n; i++) o += (size_t)snprintf(s + o, cap - o, "%s%d|", tag, i);
+    return s;
 }
 
 /* Frame of n envelopes {"ed25519_sig":"<tag><i>","pad":"<pad x padlen>"}. */
@@ -168,13 +207,18 @@ static void test_oversized_item_dropped_whole(void) {
              "{\"ed25519_sig\":\"c\"}]}", pad);
     struct fake f = { .tag = "R" };
     struct nl_fwd_result r;
-    CHECK(build(frame, 512, &f, &r) == 0);
-    CHECK(r.forwarded == 2 && r.dropped == 1);
-    CHECK(r.len < 512);
-    CHECK(json_ok(r.body));
-    CHECK(strstr(r.body, "zzz") == NULL);
-    CHECK(count(r.body, "relay_path") == 2);
-    free(r.body);
+    struct batches b;
+    CHECK(build_all(frame, strlen(frame), 512, &f, &b) == 0);
+    CHECK(b.forwarded == 2 && b.dropped == 1);
+    CHECK(b.n == 2);                         /* "a" | "b" dropped, "c" */
+    for (int i = 0; i < b.n; i++) {
+        CHECK(b.len[i] < 512);
+        CHECK(json_ok(b.body[i]));
+        CHECK(strstr(b.body[i], "zzz") == NULL);
+        CHECK(count(b.body[i], "relay_path") == 1);
+    }
+    CHECK(b.n == 2 && strstr(b.body[0], "\"a\"") && strstr(b.body[1], "\"c\""));
+    batches_free(&b);
 
     /* Over the per-envelope cap, even with room in the body. */
     char *big = make_frame(1, "s", PS_NL_RELAY_ITEM_MAX);
@@ -186,22 +230,35 @@ static void test_oversized_item_dropped_whole(void) {
 }
 
 /* A full 64 KiB frame of small envelopes expands well past the production
- * cap once each gets a relay_path entry. */
+ * cap once each gets a relay_path entry: it goes out as several bodies, each
+ * under the cap, every envelope once and in order (none dropped). */
 static void test_many_items_over_production_cap(void) {
     char *frame = make_frame(1500, "sig", 4);
     CHECK(strlen(frame) < 64 * 1024);
     struct fake f = { .tag = "relay-attestation-padding-padding-padding-padding-padding-"
                              "padding-padding-padding-padding-padding-padding-padding-" };
     struct nl_fwd_result r;
-    CHECK(build(frame, PS_NL_RELAY_FWD_MAX, &f, &r) == 0);
-    CHECK(r.dropped > 0);
-    CHECK(r.forwarded > 0);
-    CHECK(r.forwarded + r.dropped == 1500);
-    CHECK(r.len < PS_NL_RELAY_FWD_MAX);
-    CHECK(r.len == strlen(r.body));
-    CHECK(json_ok(r.body));
-    CHECK(count(r.body, "relay_path") == r.forwarded);
-    free(r.body); free(frame);
+    CHECK(build(frame, PS_NL_RELAY_FWD_MAX, &f, &r) == 0);   /* one body: partial */
+    CHECK(r.forwarded > 0 && r.forwarded < 1500 && r.dropped == 0);
+    free(r.body);
+
+    struct fake g = f; g.calls = 0;
+    struct batches b;
+    CHECK(build_all(frame, strlen(frame), PS_NL_RELAY_FWD_MAX, &g, &b) == 0);
+    CHECK(b.n >= 2);
+    CHECK(b.forwarded == 1500 && b.dropped == 0);
+    char *seq = calloc(1, 1500 * 16), *want = expected_seq("sig", 1500);
+    for (int i = 0; i < b.n; i++) {
+        CHECK(b.fwd[i] > 0);
+        CHECK(b.len[i] < PS_NL_RELAY_FWD_MAX);
+        CHECK(b.len[i] == strlen(b.body[i]));
+        CHECK(json_ok(b.body[i]));
+        CHECK(count(b.body[i], "relay_path") == b.fwd[i]);
+        collect_sigs(b.body[i], seq, 1500 * 16);
+    }
+    CHECK(strcmp(seq, want) == 0);
+    free(seq); free(want);
+    batches_free(&b); free(frame);
 }
 
 /* Body exactly cap - 1 bytes fits; one byte less cap drops the item. */
@@ -221,11 +278,18 @@ static void test_exact_boundary(void) {
 
     struct fake h = { .tag = "R" };
     CHECK(build(frame, L, &h, &r) == 0);              /* one byte short */
-    CHECK(r.forwarded == 1 && r.dropped == 1);
+    CHECK(r.forwarded == 1 && r.dropped == 0);        /* B waits for the next body */
     CHECK(json_ok(r.body));
     CHECK(strstr(r.body, "\"B\"") == NULL);
     CHECK(r.len < L);
     free(r.body);
+
+    struct batches b;
+    struct fake k = { .tag = "R" };
+    CHECK(build_all(frame, strlen(frame), L, &k, &b) == 0);
+    CHECK(b.n == 2 && b.forwarded == 2 && b.dropped == 0);
+    CHECK(b.n == 2 && strstr(b.body[0], "\"A\"") && strstr(b.body[1], "\"B\""));
+    batches_free(&b);
     free(full);
 }
 
@@ -238,16 +302,30 @@ static void test_reads_only_len_bytes(void) {
     memcpy(buf, keep, kl); memcpy(buf + kl, rest, rl);
     struct fake f = { .tag = "R" };
     struct nl_fwd_result r;
+    struct nl_fwd_cursor cur = { 0, 0, 0 };
     CHECK(nl_build_relay_forward((const uint8_t *)buf, kl, PS_NL_RELAY_FWD_MAX,
-                                 fake_attest, &f, &r) == 0);
-    CHECK(r.forwarded == 1);
+                                 fake_attest, &f, &cur, &r) == 0);
+    CHECK(r.forwarded == 1 && cur.done);
     CHECK(strstr(r.body, "past-len") == NULL);
     CHECK(json_ok(r.body));
     free(r.body);
+    memset(&cur, 0, sizeof cur);
     CHECK(nl_build_relay_forward((const uint8_t *)buf, kl + rl, PS_NL_RELAY_FWD_MAX,
-                                 fake_attest, &f, &r) == 0);
+                                 fake_attest, &f, &cur, &r) == 0);
     CHECK(r.forwarded == 2);
     free(r.body);
+
+    /* Batched: a cap that holds one envelope per body still never reads past
+     * len, and the count of what is left stops there too. */
+    struct batches b;
+    CHECK(build_all(buf, kl, 80, &f, &b) == 0);
+    CHECK(b.forwarded == 1);
+    for (int i = 0; i < b.n; i++) CHECK(strstr(b.body[i], "past-len") == NULL);
+    batches_free(&b);
+    memset(&cur, 0, sizeof cur);
+    CHECK(nl_fwd_count_rest((const uint8_t *)buf, kl, &cur) == 1);
+    memset(&cur, 0, sizeof cur);
+    CHECK(nl_fwd_count_rest((const uint8_t *)buf, kl + rl, &cur) == 2);
     free(buf);
 }
 
@@ -303,15 +381,26 @@ static void test_concurrent_sessions_isolated(void) {
 
 /* ---- handle_ingest end to end against a loopback central ---------- */
 
-/* Loopback central: serves `want` POSTs one after another, keeping each body,
- * and answers each with accepted = the number of relay_path entries in it. */
-struct sink { int lfd, port, want, got; pthread_t th; char *body; char *bodies[4]; };
+/* Loopback central: serves POSTs one after another, keeping each body, and
+ * answers each with accepted = the number of relay_path entries in it, or
+ * with 503 for the POST numbered fail_on (1-based). Serves `want` POSTs, or
+ * with want == 0 until sink_stop. */
+#define SINK_MAX 64
+struct sink {
+    int lfd, port, want, got, fail_on; atomic_int stop; pthread_t th;
+    char *body; char *bodies[SINK_MAX];
+};
 
 static void *sink_main(void *arg) {
     struct sink *s = arg;
-    for (s->got = 0; s->got < s->want; s->got++) {
+    int idle = 0;
+    for (s->got = 0; s->got < SINK_MAX && (s->want == 0 || s->got < s->want); ) {
         struct pollfd p = { s->lfd, POLLIN, 0 };
-        if (poll(&p, 1, 10000) <= 0) break;
+        if (poll(&p, 1, 100) <= 0) {
+            if (atomic_load(&s->stop) || ++idle > 100) break;
+            continue;
+        }
+        idle = 0;
         int fd = accept(s->lfd, NULL, NULL);
         if (fd < 0) break;
         size_t cap = 2u << 20, got = 0;
@@ -331,21 +420,27 @@ static void *sink_main(void *arg) {
             b[clen] = 0;
             s->bodies[s->got] = strdup(b);
             char resp[256];
-            int rl = snprintf(resp, sizeof resp,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-                "{\"accepted\":%d,\"rejected\":0}", count(b, "\"relay_path\""));
+            int rl = (s->got + 1 == s->fail_on)
+                ? snprintf(resp, sizeof resp,
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n"
+                    "Connection: close\r\n\r\n{}")
+                : snprintf(resp, sizeof resp,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+                    "{\"accepted\":%d,\"rejected\":0}", count(b, "\"relay_path\""));
             if (write(fd, resp, (size_t)rl) < 0) { /* ignore */ }
         }
         free(buf);
         close(fd);
+        s->got++;
     }
     s->body = s->bodies[0];
     return NULL;
 }
 
-static void sink_start_n(struct sink *s, int want) {
+static void sink_start_n(struct sink *s, int want, int fail_on) {
     memset(s, 0, sizeof *s);
     s->want = want;
+    s->fail_on = fail_on;
     s->lfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in a; memset(&a, 0, sizeof a);
     a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -359,7 +454,22 @@ static void sink_start_n(struct sink *s, int want) {
     setenv("PS_CENTRAL_URL", url, 1);
 }
 
-static void sink_start(struct sink *s) { sink_start_n(s, 1); }
+/* Serve until stopped: for forwards whose POST count the test does not fix. */
+static void sink_start(struct sink *s) { sink_start_n(s, 0, 0); }
+
+/* Stop (after the relay has finished: its POSTs are synchronous), join, close. */
+static void sink_stop(struct sink *s) {
+    atomic_store(&s->stop, 1);
+    pthread_join(s->th, NULL);
+    close(s->lfd);
+}
+static void sink_free(struct sink *s) { for (int i = 0; i < s->got; i++) free(s->bodies[i]); }
+
+static int ack_int(const char *ack, const char *key) {
+    char k[32]; snprintf(k, sizeof k, "\"%s\":", key);
+    const char *p = strstr(ack, k);
+    return p ? atoi(p + strlen(k)) : -1;
+}
 
 static void test_handle_ingest_oversized_frame(void) {
     static struct nl_state st;
@@ -370,11 +480,13 @@ static void test_handle_ingest_oversized_frame(void) {
     setenv("PS_CENTRAL_AGENT_ID", "relay-under-test", 1);
     setenv("PS_CENTRAL_VERIFY", "0", 1);
 
-    /* A frame under 64 KiB, far below the frame limit, yet
-     * each tiny envelope gains a ~250-byte relay_path entry, so the body
-     * runs past the cap. Where the last envelope lands against the cap
-     * depends on the exact sizes, so sweep several envelope sizes. */
+    /* A frame under 64 KiB, far below the frame limit, yet each tiny
+     * envelope gains a ~250-byte relay_path entry, so the forward runs past
+     * one body's cap. It used to be cut at the cap with the surplus rejected;
+     * now it is forwarded in several POSTs, every envelope once, in order.
+     * Where the cut lands depends on the exact sizes, so sweep several. */
     const int n = 1200;
+    char *want = expected_seq("s", n);
     for (size_t pad = 0; pad < 8; pad++) {
         char *frame = make_frame(n, "s", pad);
         CHECK(strlen(frame) < 64 * 1024);
@@ -383,24 +495,106 @@ static void test_handle_ingest_oversized_frame(void) {
         sink_start(&s);
         char ack[1024];
         int accepted = handle_ingest(&st, peer, (const uint8_t *)frame, strlen(frame), ack, sizeof ack);
-        pthread_join(s.th, NULL);
-        close(s.lfd);
+        sink_stop(&s);
 
-        CHECK(s.body != NULL);
-        if (s.body) {
-            CHECK(strlen(s.body) < PS_NL_RELAY_FWD_MAX);
-            CHECK(json_ok(s.body));
-            CHECK(count(s.body, "\"relay_path\"") == accepted);
+        CHECK(s.got >= 2);
+        int paths = 0;
+        char *seq = calloc(1, (size_t)n * 16);
+        for (int i = 0; i < s.got; i++) {
+            CHECK(s.bodies[i] != NULL);
+            if (!s.bodies[i]) continue;
+            CHECK(strlen(s.bodies[i]) < PS_NL_RELAY_FWD_MAX);
+            CHECK(json_ok(s.bodies[i]));
+            paths += count(s.bodies[i], "\"relay_path\"");
+            collect_sigs(s.bodies[i], seq, (size_t)n * 16);
         }
-        const char *rj = strstr(ack, "\"rejected\":");
-        int rejected = rj ? atoi(rj + 11) : -1;
-        CHECK(accepted > 0);
-        CHECK(rejected > 0);
-        CHECK(accepted + rejected == n);
+        CHECK(strcmp(seq, want) == 0);
+        CHECK(accepted == n && paths == n);
+        CHECK(ack_int(ack, "accepted") == n);
+        CHECK(ack_int(ack, "rejected") == 0);
+        CHECK(ack_int(ack, "posts") == s.got);
+        CHECK(strstr(ack, "\"detail\":\"\"") != NULL);
         CHECK(json_ok(ack));
-        free(s.body);
+        free(seq);
+        sink_free(&s);
         free(frame);
     }
+    free(want);
+    unsetenv("PS_CENTRAL_URL");
+}
+
+/* Pathological frame: 1 MiB of near-empty envelopes would need far more than
+ * PS_NL_RELAY_MAX_POSTS bodies. The relay stops there, counts the rest as
+ * rejected and says why; every body is still bounded and valid. */
+static void test_handle_ingest_post_cap(void) {
+    static struct nl_state st;
+    memset(&st, 0, sizeof st);
+    CHECK(ps_keystore_generate(&st.agent_kp) == 0);
+    const char *peer = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    setenv("PS_RELAY_ALLOW_SOURCES", peer, 1);
+    setenv("PS_CENTRAL_AGENT_ID", "relay-under-test", 1);
+    setenv("PS_CENTRAL_VERIFY", "0", 1);
+
+    size_t cap = PS_AGENT_FRAME_MAX, o = 0;
+    char *frame = malloc(cap + 1);
+    o += (size_t)sprintf(frame, "{\"type\":\"ingest\",\"envelopes\":[");
+    int n = 0;
+    while (o + 64 < cap) o += (size_t)sprintf(frame + o, "%s{\"ed25519_sig\":\"t%d\"}", n ? "," : "", n), n++;
+    o += (size_t)sprintf(frame + o, "]}");
+
+    struct sink s;
+    sink_start(&s);
+    char ack[1024];
+    int accepted = handle_ingest(&st, peer, (const uint8_t *)frame, o, ack, sizeof ack);
+    sink_stop(&s);
+
+    CHECK(s.got == PS_NL_RELAY_MAX_POSTS);
+    int paths = 0;
+    for (int i = 0; i < s.got; i++) {
+        CHECK(s.bodies[i] && strlen(s.bodies[i]) < PS_NL_RELAY_FWD_MAX && json_ok(s.bodies[i]));
+        if (s.bodies[i]) paths += count(s.bodies[i], "\"relay_path\"");
+    }
+    CHECK(accepted == paths && accepted > 0);
+    CHECK(ack_int(ack, "accepted") == accepted);
+    CHECK(ack_int(ack, "rejected") == n - accepted);
+    CHECK(ack_int(ack, "posts") == PS_NL_RELAY_MAX_POSTS);
+    CHECK(strstr(ack, "over relay size cap") != NULL);
+    CHECK(json_ok(ack));
+    sink_free(&s);
+    free(frame);
+    unsetenv("PS_CENTRAL_URL");
+}
+
+/* Central fails the second POST: the relay stops there (it does not keep
+ * POSTing into an outage), reports what central accepted and counts every
+ * other envelope as not accepted, saying why. */
+static void test_handle_ingest_post_fails_midway(void) {
+    static struct nl_state st;
+    memset(&st, 0, sizeof st);
+    CHECK(ps_keystore_generate(&st.agent_kp) == 0);
+    const char *peer = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    setenv("PS_RELAY_ALLOW_SOURCES", peer, 1);
+    setenv("PS_CENTRAL_AGENT_ID", "relay-under-test", 1);
+    setenv("PS_CENTRAL_VERIFY", "0", 1);
+
+    const int n = 3000;                         /* needs at least three bodies */
+    char *frame = make_frame(n, "s", 4);
+    struct sink s;
+    sink_start_n(&s, 0, 2);
+    char ack[1024];
+    int accepted = handle_ingest(&st, peer, (const uint8_t *)frame, strlen(frame), ack, sizeof ack);
+    sink_stop(&s);
+
+    CHECK(s.got == 2);
+    int first = s.bodies[0] ? count(s.bodies[0], "\"relay_path\"") : -1;
+    CHECK(first > 0 && accepted == first);
+    CHECK(ack_int(ack, "accepted") == first);
+    CHECK(ack_int(ack, "rejected") == n - first);
+    CHECK(ack_int(ack, "posts") == 2);
+    CHECK(strstr(ack, "central forward failed (HTTP 503)") != NULL);
+    CHECK(json_ok(ack));
+    sink_free(&s);
+    free(frame);
     unsetenv("PS_CENTRAL_URL");
 }
 
@@ -446,10 +640,9 @@ static void test_allow_list_whole_tokens(void) {
     struct sink s;
     sink_start(&s);
     CHECK(handle_ingest(&st, fp2, (const uint8_t *)fr, strlen(fr), ack, sizeof ack) == 1);
-    pthread_join(s.th, NULL);
-    close(s.lfd);
-    CHECK(s.body != NULL && count(s.body, "\"relay_path\"") == 1);
-    free(s.body);
+    sink_stop(&s);
+    CHECK(s.got == 1 && s.body != NULL && count(s.body, "\"relay_path\"") == 1);
+    sink_free(&s);
     unsetenv("PS_CENTRAL_URL");
 }
 
@@ -549,19 +742,26 @@ static void test_session_frame_sizes(void) {
         int rc = ps_ingest_exchange(&cio, frame, flen, &r, why, sizeof why);
         close(cfd);
         pthread_join(j.th, NULL);
-        pthread_join(s.th, NULL);
-        close(s.lfd);
+        sink_stop(&s);
 
         if (rc != 0) fprintf(stderr, "  frame %zu bytes: %s\n", sizes[k], why);
         CHECK(rc == 0);
-        CHECK(r.accepted > 0);
-        CHECK(r.accepted + r.rejected == n);
-        CHECK(s.body != NULL);
-        if (s.body) {
-            CHECK(json_ok(s.body));
-            CHECK(count(s.body, "\"relay_path\"") == r.accepted);
+        /* The whole frame reaches central, a 1 MiB one in several POSTs. */
+        CHECK(r.accepted == n && r.rejected == 0);
+        CHECK(why[0] == 0);
+        if (sizes[k] >= PS_NL_RELAY_FWD_MAX) CHECK(s.got >= 2);
+        int paths = 0;
+        char *seq = calloc(1, (size_t)n * 16), *want = expected_seq("s", n);
+        for (int i = 0; i < s.got; i++) {
+            CHECK(s.bodies[i] && json_ok(s.bodies[i]) && strlen(s.bodies[i]) < PS_NL_RELAY_FWD_MAX);
+            if (!s.bodies[i]) continue;
+            paths += count(s.bodies[i], "\"relay_path\"");
+            collect_sigs(s.bodies[i], seq, (size_t)n * 16);
         }
-        free(s.body); free(frame); free(arr);
+        CHECK(paths == n);
+        CHECK(strcmp(seq, want) == 0);
+        free(seq); free(want);
+        sink_free(&s); free(frame); free(arr);
     }
 
     int n;
@@ -654,7 +854,7 @@ static void test_cli_reports_relay_answers(void) {
 }
 
 /* Two sessions read and forward large frames at the same time; each one's
- * envelopes reach central in its own POST only. */
+ * envelopes reach central in its own POSTs only, all of them, in order. */
 struct client_job {
     const char *frame; size_t flen; pthread_barrier_t *go;
     struct relay_job relay; int cfd; int rc; struct ps_report_result r; char why[256];
@@ -674,7 +874,7 @@ static void test_concurrent_large_sessions(void) {
     char *arrs[2]; int ns[2];
     pthread_barrier_t go;
     pthread_barrier_init(&go, NULL, 2);
-    struct sink s; sink_start_n(&s, 2);
+    struct sink s; sink_start(&s);
     pthread_t ct[2];
     for (int i = 0; i < 2; i++) {
         memset(&c[i], 0, sizeof c[i]);
@@ -689,27 +889,31 @@ static void test_concurrent_large_sessions(void) {
         close(c[i].cfd);
         pthread_join(c[i].relay.th, NULL);
     }
-    pthread_join(s.th, NULL);
-    close(s.lfd);
+    sink_stop(&s);
 
-    CHECK(s.got == 2);
+    CHECK(s.got >= 4);                          /* each frame needs several POSTs */
     for (int i = 0; i < 2; i++) {
         CHECK(c[i].rc == 0);
-        CHECK(c[i].r.accepted > 0);
-        CHECK(c[i].r.accepted + c[i].r.rejected == ns[i]);
+        CHECK(c[i].r.accepted == ns[i] && c[i].r.rejected == 0);
         const char *mine = tags[i], *other = tags[1 - i];
-        int found = 0;
+        int found = 0, paths = 0;
+        char *seq = calloc(1, (size_t)ns[i] * 16), *want = expected_seq(mine, ns[i]);
         for (int b = 0; b < s.got; b++) {
             if (!s.bodies[b] || !strstr(s.bodies[b], mine)) continue;
             found++;
             CHECK(strstr(s.bodies[b], other) == NULL);
             CHECK(json_ok(s.bodies[b]));
-            CHECK(count(s.bodies[b], "\"relay_path\"") == c[i].r.accepted);
+            CHECK(strlen(s.bodies[b]) < PS_NL_RELAY_FWD_MAX);
+            paths += count(s.bodies[b], "\"relay_path\"");
+            collect_sigs(s.bodies[b], seq, (size_t)ns[i] * 16);
         }
-        CHECK(found == 1);
+        CHECK(found >= 2);
+        CHECK(paths == ns[i]);
+        CHECK(strcmp(seq, want) == 0);          /* own envelopes, once, in order */
+        free(seq); free(want);
         free((char *)c[i].frame); free(arrs[i]);
     }
-    for (int b = 0; b < s.got; b++) free(s.bodies[b]);
+    sink_free(&s);
     pthread_barrier_destroy(&go);
 }
 
@@ -723,6 +927,8 @@ int main(void) {
     test_concurrent_sessions_isolated();
     test_handle_ingest_oversized_frame();
     test_allow_list_whole_tokens();
+    test_handle_ingest_post_cap();
+    test_handle_ingest_post_fails_midway();
     test_session_frame_sizes();
     test_session_over_max_answered();
     test_cli_reports_relay_answers();
