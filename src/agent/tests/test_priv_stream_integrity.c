@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -384,6 +385,33 @@ static void test_oversize_async_frame_not_truncated(void)
     close(sv[1]);
 }
 
+/* Once the stream is marked broken it must never be written to or read again:
+ * module shutdown (flow_tracker releasing its pcap handles) still issues
+ * close_pcap after the main loop stopped on a broken stream, and a command
+ * sent into a desynced stream would block reading a reply that cannot be
+ * framed. The command must fail at once, without a byte on the wire. */
+static void test_broken_stream_refuses_commands(void)
+{
+    printf("test: a command on a broken stream fails without touching the socket\n");
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { perror("socketpair"); exit(2); }
+    struct timeval tv = { 0, 200 * 1000 };       /* no hang if it does read */
+    setsockopt(sv[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    ps_priv_client_init(&g_pc, sv[0]);
+    g_pc.broken = 1;
+    int rc = ps_priv_client_close_pcap(&g_pc, 3);
+    CHECK(rc == -1, "close_pcap on a broken stream returned %d", rc);
+
+    set_nonblock(sv[1], 1);
+    uint8_t b[64];
+    ssize_t n = read(sv[1], b, sizeof(b));
+    CHECK(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK),
+          "close_pcap on a broken stream wrote %zd byte(s) to the worker", n);
+    close(sv[0]);
+    close(sv[1]);
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -391,6 +419,7 @@ int main(void)
     test_unfinishable_frame_is_broken();
     test_max_packet_frame_fits();
     test_oversize_async_frame_not_truncated();
+    test_broken_stream_refuses_commands();
     if (g_failures) {
         printf("FAILED: %d check(s)\n", g_failures);
         return 1;
