@@ -1,4 +1,4 @@
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 #include "ipc_server.h"

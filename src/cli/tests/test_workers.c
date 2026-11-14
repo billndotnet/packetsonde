@@ -1,5 +1,5 @@
 #include "../workers/workers.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>

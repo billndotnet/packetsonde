@@ -28,6 +28,8 @@ if(BUILD_STATIC)
 endif()
 
 # Order matters: lib first (others depend on it), then agent and cli.
+include_directories(${CMAKE_SOURCE_DIR}/tests/include)
+
 add_subdirectory(src/lib)
 add_subdirectory(src/agent)
 add_subdirectory(src/kernel)

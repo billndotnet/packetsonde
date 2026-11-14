@@ -18,10 +18,15 @@ static void stamp_now(char *buf, size_t sz) {
     gettimeofday(&tv, NULL);
     struct tm tm;
     gmtime_r(&tv.tv_sec, &tm);
-    snprintf(buf, sz, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+    /* Format into a buffer sized for the widest int output, then copy: the
+     * result is always 24 bytes for a valid gmtime, but the compiler cannot
+     * prove that from int ranges (-Wformat-truncation). */
+    char tmp[96];
+    snprintf(tmp, sizeof tmp, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec,
              (int)(tv.tv_usec / 1000));
+    copy_str(buf, sz, tmp);
 }
 
 void ps_finding_init(struct ps_finding *f,

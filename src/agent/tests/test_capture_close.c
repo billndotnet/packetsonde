@@ -1,5 +1,5 @@
 #include "capture/capture_handle.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 

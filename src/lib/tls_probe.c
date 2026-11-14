@@ -347,7 +347,14 @@ static void ja4_from_client_hello(const uint8_t *hs, size_t hs_len, char *out, s
     char c_input[sizeof(exts_csv) + sizeof(sigs_csv) + 2];
     snprintf(c_input, sizeof(c_input), "%s_%s", exts_csv, sigs_csv);
     char hc[13]; sha256_hex12(c_input, hc);
-    snprintf(out, outsz, "%s_%s_%s", ja4_a, hb, hc);
+    /* a(<=15) _ b(12) _ c(12) always fits full[]; copy bounds it to out */
+    char full[64];
+    snprintf(full, sizeof full, "%s_%s_%s", ja4_a, hb, hc);
+    size_t fl = strlen(full);
+    if (outsz == 0) return;
+    if (fl >= outsz) fl = outsz - 1;
+    memcpy(out, full, fl);
+    out[fl] = '\0';
 }
 
 static void ja4s_from_server_hello(const uint8_t *hs, size_t hs_len, char *out, size_t outsz) {

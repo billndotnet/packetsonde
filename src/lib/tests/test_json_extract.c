@@ -1,7 +1,7 @@
 /* src/lib/tests/test_json_extract.c */
 #include "json_extract.h"
 #include "json.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 

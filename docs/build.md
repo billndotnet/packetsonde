@@ -317,7 +317,32 @@ Pass any of these to `cmake` (or to `build.sh` via `PS_CMAKE_ARGS`):
 cd build && ctest --output-on-failure
 ```
 
-Should report 40/40 passing (as of v1.6). Integration tests requiring a
+Should report every test passing (the count grows; none may fail). Integration tests requiring a
 real network are marked SKIP on systems missing `python3`, and tests
 needing root (raw sockets, pcap) are written to also work unprivileged
 on most platforms.
+
+### Release checklist: run the suite in Release too
+
+Production binaries are Release builds (`-O2 -DNDEBUG -D_FORTIFY_SOURCE`), so
+a green Debug run is not enough. Before tagging or deploying, run the whole
+suite in each configuration:
+
+```bash
+# Debug (default)
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug   && cmake --build build-debug -j && ctest --test-dir build-debug --output-on-failure
+# Release (add -g to keep symbols for a backtrace if something fails)
+cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-g && cmake --build build-rel -j && ctest --test-dir build-rel --output-on-failure
+# ASAN + UBSan
+cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" && cmake --build build-asan -j && ctest --test-dir build-asan --output-on-failure
+```
+
+CI runs the Release leg on every push (`.github/workflows/ci.yml`).
+
+Rules that keep Release honest:
+
+- Test code includes `"ps_test_assert.h"` (in `tests/include/`), never
+  `<assert.h>`. Release defines `NDEBUG`, which deletes `assert()` and any
+  setup work inside it; `test_assert_active` guards this.
+- Pass real buffer sizes to `snprintf`/`memcpy`. `_FORTIFY_SOURCE` aborts at
+  run time on a bound larger than the destination, and only in optimized builds.

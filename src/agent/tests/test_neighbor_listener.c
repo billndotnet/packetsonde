@@ -9,7 +9,7 @@
  * real priv worker would deliver them.
  */
 
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <string.h>

@@ -1,5 +1,5 @@
 #include "obs_queue.h"
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>

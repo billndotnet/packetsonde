@@ -67,6 +67,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_json_extract PRIVATE packetsonde_lib)
     add_test(NAME test_json_extract COMMAND test_json_extract)
 
+    add_executable(test_assert_active ${CMAKE_SOURCE_DIR}/tests/test_assert_active.c)
+    add_test(NAME test_assert_active COMMAND test_assert_active)
+
     add_executable(test_collect tests/test_collect.c)
     target_link_libraries(test_collect PRIVATE packetsonde_lib)
     add_test(NAME test_collect COMMAND test_collect)

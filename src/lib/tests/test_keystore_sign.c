@@ -1,7 +1,7 @@
 /* src/lib/tests/test_keystore_sign.c */
 #include "keystore.h"
 #include <openssl/evp.h>
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <string.h>
 #include <stdio.h>
 

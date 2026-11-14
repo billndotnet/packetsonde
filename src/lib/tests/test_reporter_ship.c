@@ -16,7 +16,7 @@
 #include "keystore.h"
 #include "http_client.h"
 #include <arpa/inet.h>
-#include <assert.h>
+#include "ps_test_assert.h"
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -276,7 +276,7 @@ static void test_http_large_body(void) {
     assert(body);
     int o = snprintf(body, bl + 64, "{\"envelopes\":[{\"envelope_v\":1,\"pad\":\"");
     memset(body + o, 'z', bl); o += (int)bl;
-    o += snprintf(body + o, 64, "\"}]}");
+    o += snprintf(body + o, bl + 64 - (size_t)o, "\"}]}");
     struct ps_http_opts opts = { 0, NULL, 5 };
     int status = 0; char resp[1024];
     int rc = ps_http_request("POST", url, body, &opts, &status, resp, sizeof resp);
